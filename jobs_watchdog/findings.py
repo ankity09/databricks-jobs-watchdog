@@ -46,6 +46,7 @@ FINDINGS_SCHEMA = (
     ("triggered_by", "STRING"),
     ("job_tags", "MAP<STRING,STRING>"),
     ("code_version", "STRING"),
+    ("pipeline_url", "STRING"),
 )
 FINDINGS_COLUMNS = tuple(name for name, _ in FINDINGS_SCHEMA)
 NEW_FINDINGS_VIEW = "watchdog_new_findings"

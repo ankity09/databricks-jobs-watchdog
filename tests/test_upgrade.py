@@ -16,7 +16,7 @@ from jobs_watchdog.sqlfiles import parameters
 from tests.helpers import for_parsing
 
 NEW_FINDINGS_COLUMNS = ("environment", "schedule_type", "run_start_time", "run_end_time", "run_duration_seconds",
-                        "trigger_type", "triggered_by", "job_tags", "code_version")
+                        "trigger_type", "triggered_by", "job_tags", "code_version", "pipeline_url")
 
 
 def test_findings_ddl_matches_the_python_schema():

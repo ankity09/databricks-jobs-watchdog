@@ -93,3 +93,7 @@ def test_a_broken_accelerator_file_is_an_error_not_a_silent_fallback(tmp_path):
     write(tmp_path, "accelerator.local.yaml", "target:\n  catalog: main\n schema: broken-indent\n")
     with pytest.raises(ConfigError, match="accelerator.local.yaml"):
         widget_defaults(tmp_path)
+
+
+def test_pipeline_url_parameter_defaults_to_PIPELINE_URL(tmp_path):
+    assert widget_defaults(tmp_path)["pipeline_url_parameter"] == "PIPELINE_URL"

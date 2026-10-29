@@ -12,7 +12,7 @@
 # MAGIC | `long_runtime` | the newest finished run, or a run still going, over `max_runtime_minutes`, measured up to its newest system table record |
 # MAGIC | `not_found` | the job's regex matches no job in this region |
 # MAGIC
-# MAGIC **Inputs (widgets).** `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `code_version_tag` (the job tag that holds the deployed code version). With `scan_id` empty, a new one is made from the current UTC time. Re-running with the same `scan_id` adds nothing. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
+# MAGIC **Inputs (widgets).** `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `code_version_tag` (the job tag that holds the deployed code version), `pipeline_url_parameter` (the job parameter that holds the CI pipeline link). With `scan_id` empty, a new one is made from the current UTC time. Re-running with the same `scan_id` adds nothing. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
 # MAGIC **What to look for.** One row per check for each matched job. System tables run about an hour behind, so a brand-new job shows `not_found` here until it lands.
 
@@ -23,7 +23,7 @@
 # COMMAND ----------
 
 # Shows the input boxes (widgets) at the top of the notebook. Fill them in, then run the cells below.
-NAMES = ("catalog", "schema", "region", "lookback_hours", "scan_id", "code_version_tag")
+NAMES = ("catalog", "schema", "region", "lookback_hours", "scan_id", "code_version_tag", "pipeline_url_parameter")
 define_widgets(*NAMES)
 
 # COMMAND ----------
@@ -58,6 +58,7 @@ new_rows = run_sql(
     lookback_hours=s.lookback_hours,
     scan_id=scan_id,
     code_version_tag=s.code_version_tag,
+    pipeline_url_parameter=s.pipeline_url_parameter,
 )
 new_rows.createOrReplaceTempView(NEW_FINDINGS_VIEW)
 display(run_sql(spark, MERGE_SQL, catalog=s.catalog, schema=s.schema))

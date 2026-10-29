@@ -107,6 +107,7 @@ One row per check, for each job a monitored job matches, in each scan, from each
 | `triggered_by` | STRING | Who started a one-time run. Jobs API only. |
 | `job_tags` | MAP&lt;STRING,STRING&gt; | The job's tags, as set on the job. |
 | `code_version` | STRING | The version deployed now: the tag named by `code_version_tag` on the job's current definition. On an untagged Jobs API row, it is the git commit of the run the row judged. See [Code version and job tags](#code-version-and-job-tags). |
+| `pipeline_url` | STRING | Link to the CI pipeline that deployed the code: the value of the job parameter named by `pipeline_url_parameter` (default `PIPELINE_URL`) in the run the row is about, or its default. Empty when the job has no such parameter. |
 
 ### status
 
@@ -184,6 +185,8 @@ Who started a one-time run. Only the Jobs API has it, and it is filled only when
 `code_version` is the version the job is deployed with now: the value of the tag named by `code_version_tag` (default `code_version`) on the job's current definition. A CI pipeline that tags a deploy with `code_version: <branch>@<commit>` therefore shows that value on every row of that job, including rows about older runs. Those rows still show the version deployed now, because the tag is read from the current definition.
 
 An untagged job has no tag to read. Its Jobs API rows then show the git commit of the run each row judged, when that run came from a Git source. System table rows have no commit to fall back on, so their `code_version` stays empty unless the tag is set.
+
+`pipeline_url` comes from a job parameter instead of a tag: the parameter named by `pipeline_url_parameter` (default `PIPELINE_URL`), as the run the row is about saw it (its value, or the parameter default). A CI pipeline that sets that parameter at deploy time, alongside the `code_version` tag, gives every row a link back to the deploy. Only this one parameter is copied into findings, not every job parameter, because job parameters can hold values that should not reach a widely shared table.
 
 ## Scan IDs
 
@@ -301,6 +304,7 @@ Illustrative values, one row per source. Both rows describe the same run.
 | `triggered_by` | (empty) | (empty) |
 | `job_tags` | {"code_version": "main@3b1f0c2"} | {"code_version": "main@3b1f0c2"} |
 | `code_version` | main@3b1f0c2 | main@3b1f0c2 |
+| `pipeline_url` | https://ci.example.com/pipelines/1234 | https://ci.example.com/pipelines/1234 |
 
 The two rows describe the same failure from two sides. The Jobs API row is live and has the error text. The system table row has only the termination code, and it appears once the system tables catch up, about an hour after the run.
 

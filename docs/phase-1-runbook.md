@@ -97,6 +97,7 @@ After every pull, restart Python on any notebook you have open, so it loads the 
 1. **The job list.** Copy `config/monitored_jobs.example.yml` somewhere outside the Git folder: your workspace home folder, or a Unity Catalog volume such as `/Volumes/<catalog>/<schema>/<volume>/monitored_jobs.yml`. Edits there never conflict with pulls. Replace the examples with your jobs and dependencies. The file's comments explain every field, and [data-model.md](data-model.md) explains how each is used.
 2. **The settings.** In the repo root of your Git folder, create `accelerator.local.yaml` as a copy of `accelerator.yaml`, and fill in `target.catalog`, `target.schema`, `target.region`, the `auth` section, and `scan.monitored_jobs_path` (the path to your job list). The optional settings are:
    - `scan.code_version_tag`: the job tag that holds the deployed code version (`code_version` by default);
+   - `scan.pipeline_url_parameter`: the job parameter that holds the CI pipeline link (`PIPELINE_URL` by default);
    - `scan.schedule` and `scan.schedule_status`: the schedule of `watchdog_scan` and whether it runs (see [Schedule the scan](#schedule-the-scan));
    - `target.warehouse_id`: the SQL warehouse for the dashboard (see [Build the dashboard](#build-the-dashboard-notebook-08)).
 

@@ -30,6 +30,8 @@ scan:
                                 # own copy outside the Git folder, for example a /Volumes path
   code_version_tag: code_version
                                 # name of the job tag whose value is the deployed code version
+  pipeline_url_parameter: PIPELINE_URL
+                                # name of the job parameter that holds the CI pipeline link
   schedule: "0 0/20 * * * ?"    # when watchdog_scan runs: a Quartz cron, every 20 minutes, in UTC
   schedule_status: PAUSED       # PAUSED (the default): no timed runs; UNPAUSED: run on the schedule
 

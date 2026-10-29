@@ -21,8 +21,9 @@
 -- Job names matching a job's job_name_exclude_regex (for example test copies)
 -- are skipped. Each row also carries the environment label of its workspace
 -- (monitored_workspaces), when and how the run it is about started, the job
--- tags, and the code version: the value of the job tag named :code_version_tag.
--- Parameters: :catalog, :schema, :region, :lookback_hours, :scan_id, :code_version_tag
+-- tags, the code version (the value of the job tag named :code_version_tag),
+-- and the CI pipeline link (the run's job parameter named :pipeline_url_parameter).
+-- Parameters: :catalog, :schema, :region, :lookback_hours, :scan_id, :code_version_tag, :pipeline_url_parameter
 WITH monitored AS (
   SELECT job_name, job_name_regex, job_name_exclude_regex, schedule_type, max_gap_minutes, max_runtime_minutes,
          severity, owner
@@ -83,6 +84,7 @@ runs AS (
     MAX_BY(termination_code, period_end_time) AS termination_code,
     MAX_BY(termination_type, period_end_time) AS termination_type,
     MAX(trigger_type) AS trigger_type,
+    MAX_BY(job_parameters, period_end_time) AS job_parameters,
     -- rows are hourly slices, so a first slice in the window's first hour
     -- usually means the run began before the window: its real start is unknown
     MIN(period_start_time) < timestampadd(HOUR, 1 - CAST(:lookback_hours AS INT), current_timestamp())
@@ -119,6 +121,7 @@ last_runs AS (
     n.last_seen AS newest_seen,
     n.trigger_type AS newest_trigger,
     n.started_before_window AS newest_before_window,
+    n.job_parameters AS newest_parameters,
     f.run_id,
     f.run_start,
     f.result_state,
@@ -126,6 +129,7 @@ last_runs AS (
     f.termination_type,
     f.trigger_type,
     f.started_before_window,
+    f.job_parameters,
     f.last_seen
   FROM matched mt
   LEFT JOIN newest_run n ON n.workspace_id = mt.workspace_id AND n.job_id = mt.job_id
@@ -229,7 +233,8 @@ checks AS (
       WHEN l.started_before_window THEN NULL
       ELSE timestampdiff(SECOND, l.run_start, l.last_seen)
     END AS run_duration_seconds,
-    CASE WHEN l.running THEN l.newest_trigger ELSE l.trigger_type END AS raw_trigger
+    CASE WHEN l.running THEN l.newest_trigger ELSE l.trigger_type END AS raw_trigger,
+    CASE WHEN l.running THEN l.newest_parameters ELSE l.job_parameters END AS job_parameters
   FROM last_runs l
 
   UNION ALL
@@ -255,7 +260,8 @@ checks AS (
     CASE WHEN n.started_before_window THEN NULL ELSE n.run_start END,
     CASE WHEN n.result_state IS NULL THEN CAST(NULL AS TIMESTAMP) ELSE n.last_seen END,
     CASE WHEN n.started_before_window THEN NULL ELSE timestampdiff(SECOND, n.run_start, n.last_seen) END,
-    n.trigger_type
+    n.trigger_type,
+    n.job_parameters
   FROM matched mt
   LEFT JOIN failed_tasks t ON t.workspace_id = mt.workspace_id AND t.job_id = mt.job_id
   LEFT JOIN newest_run n ON n.workspace_id = mt.workspace_id AND n.job_id = mt.job_id
@@ -297,7 +303,8 @@ checks AS (
     CASE WHEN s.started_before_window THEN NULL ELSE s.run_start END,
     CASE WHEN s.result_state IS NULL THEN CAST(NULL AS TIMESTAMP) ELSE s.last_seen END,
     CASE WHEN s.started_before_window THEN NULL ELSE timestampdiff(SECOND, s.run_start, s.last_seen) END,
-    s.trigger_type
+    s.trigger_type,
+    s.job_parameters
   FROM matched mt
   LEFT JOIN newest_run s ON s.workspace_id = mt.workspace_id AND s.job_id = mt.job_id
   WHERE mt.schedule_type = 'scheduled' AND mt.max_gap_minutes IS NOT NULL
@@ -327,7 +334,8 @@ checks AS (
     CASE WHEN lr.started_before_window THEN NULL ELSE lr.run_start END,
     CASE WHEN lr.result_state IS NULL THEN CAST(NULL AS TIMESTAMP) ELSE lr.last_seen END,
     CASE WHEN lr.started_before_window THEN NULL ELSE timestampdiff(SECOND, lr.run_start, lr.last_seen) END,
-    lr.trigger_type
+    lr.trigger_type,
+    lr.job_parameters
   FROM matched mt
   LEFT JOIN over_limit o
     ON o.job_name = mt.job_name AND o.workspace_id = mt.workspace_id AND o.job_id = mt.job_id
@@ -355,7 +363,8 @@ checks AS (
     CAST(NULL AS TIMESTAMP),
     CAST(NULL AS TIMESTAMP),
     CAST(NULL AS BIGINT),
-    CAST(NULL AS STRING)
+    CAST(NULL AS STRING),
+    CAST(NULL AS MAP<STRING, MAP<STRING, STRING>>)
   FROM monitored m
   WHERE NOT EXISTS (SELECT 1 FROM matched mt WHERE mt.job_name = m.job_name)
 )
@@ -413,7 +422,12 @@ SELECT
   END AS trigger_type,
   CAST(NULL AS STRING) AS triggered_by,
   c.job_tags,
-  CASE WHEN :code_version_tag <> '' THEN try_element_at(c.job_tags, :code_version_tag) END AS code_version
+  CASE WHEN :code_version_tag <> '' THEN try_element_at(c.job_tags, :code_version_tag) END AS code_version,
+  -- job_parameters holds {name: {value, default}} for the run
+  CASE WHEN :pipeline_url_parameter <> '' THEN coalesce(
+    try_element_at(try_element_at(c.job_parameters, :pipeline_url_parameter), 'value'),
+    try_element_at(try_element_at(c.job_parameters, :pipeline_url_parameter), 'default'))
+  END AS pipeline_url
 FROM checks c
 JOIN monitored m ON m.job_name = c.job_name
 LEFT JOIN dependents d ON d.job_name = c.job_name

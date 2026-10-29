@@ -36,7 +36,7 @@
       "displayName": "Latest run per job and workspace",
       "queryLines": [
         "SELECT\n",
-        "  job_name, workspace_name, environment, code_version, trigger_type, triggered_by,\n",
+        "  job_name, workspace_name, environment, code_version, pipeline_url, trigger_type, triggered_by,\n",
         "  run_start_time, run_end_time,\n",
         "  ROUND(CASE\n",
         "          WHEN run_start_time IS NOT NULL AND run_end_time IS NOT NULL\n",
@@ -789,6 +789,10 @@
                       "expression": "`code_version`"
                     },
                     {
+                      "name": "pipeline_url",
+                      "expression": "`pipeline_url`"
+                    },
+                    {
                       "name": "trigger_type",
                       "expression": "`trigger_type`"
                     },
@@ -837,6 +841,13 @@
                   {
                     "fieldName": "code_version",
                     "displayName": "Code version"
+                  },
+                  {
+                    "fieldName": "pipeline_url",
+                    "displayName": "Pipeline",
+                    "link": {
+                      "templatedURL": "{{@}}"
+                    }
                   },
                   {
                     "fieldName": "trigger_type",

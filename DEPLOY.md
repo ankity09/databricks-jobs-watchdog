@@ -27,6 +27,7 @@ Ask for each value **one at a time**. Offer the default where there is one, and 
 6. **monitored-jobs file** (default `config/monitored_jobs.example.yml`): a path to the operator's own copy, outside the Git folder, such as `/Workspace/Users/<user>/watchdog/monitored_jobs.yml` or `/Volumes/<catalog>/<schema>/<volume>/monitored_jobs.yml`. The example file is fine for a first run with the demo jobs. Ask whether any test copies should be excluded (`job_name_exclude_regex`) and whether workspaces should get environment labels (the `workspaces` section).
 7. **lookback_hours** (default `48`): how far back the system table checks look.
 8. **code_version_tag** (default `code_version`): the name of the job tag whose value is the deployed code version. Findings show that value when the job has the tag, so a CI pipeline that tags each deploy makes version changes visible.
+   **pipeline_url_parameter** (default `PIPELINE_URL`): the name of the job parameter that holds the link to the CI pipeline that deployed the job. Findings show it as `pipeline_url`.
 9. **Schedule** (default `0 0/20 * * * ?`, every 20 minutes in UTC, and `schedule_status` `PAUSED`): keep it paused until the first `watchdog_phase_1` run has passed. Then `UNPAUSED` turns the scan on.
 10. **warehouse_id** (optional): a SQL warehouse for the dashboard (notebook 08). Skip it if the operator does not want a dashboard yet.
 

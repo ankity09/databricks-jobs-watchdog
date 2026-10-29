@@ -101,14 +101,15 @@ def resolve_jobs(client, jobs):
     return resolved
 
 
-def collect_target(client, target, jobs, now, code_version_tag="code_version"):
+def collect_target(client, target, jobs, now, code_version_tag="code_version", pipeline_url_parameter="PIPELINE_URL"):
     """Findings rows for one workspace.
 
     API errors never escape: a workspace that cannot be read gives one
     api_unreachable row per job, and a job that cannot be read gives one
     api_unreachable row for that job while the others are still checked.
     code_version is the value of the job tag named code_version_tag, or the
-    git commit the run used when the job has no such tag.
+    git commit the run used when the job has no such tag. pipeline_url is the
+    value of the run's job parameter named pipeline_url_parameter.
     """
     if now.tzinfo is None:
         raise ValueError("now must include a timezone")
@@ -135,7 +136,8 @@ def collect_target(client, target, jobs, now, code_version_tag="code_version"):
             job_rows, run = _job_rows(client, target, job, job_id, now)
         except Exception as err:
             job_rows, run = [_unreachable(target, job, job_id, err)], None
-        extra = dict(_run_columns(run, now), job_tags=tags, code_version=_code_version(tags, code_version_tag, run))
+        extra = dict(_run_columns(run, now), job_tags=tags, code_version=_code_version(tags, code_version_tag, run),
+                     pipeline_url=_job_parameter(run, pipeline_url_parameter))
         rows.extend(dict(row, **extra) for row in job_rows)
     return rows
 
@@ -255,6 +257,16 @@ def _started_by(run):
     # for a scheduled or continuous run, the run's creator is not who started it
     if normalize_trigger(getattr(run, "trigger", None)) == "ONE_TIME":
         return getattr(run, "creator_user_name", None)
+    return None
+
+
+def _job_parameter(run, name):
+    """A job parameter of the run: its value, or its default when no value was passed."""
+    if not name or run is None:
+        return None
+    for parameter in getattr(run, "job_parameters", None) or []:
+        if getattr(parameter, "name", None) == name:
+            return getattr(parameter, "value", None) or getattr(parameter, "default", None)
     return None
 
 

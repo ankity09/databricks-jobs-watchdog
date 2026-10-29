@@ -42,7 +42,7 @@ def task(key, life_cycle, result=None, run_id=None, attempt=0, message="", termi
 
 
 def run(run_id, life_cycle, result=None, minutes_ago=10, tasks=(), message="", next_page_token=None,
-        ended_minutes_ago=None, trigger=None, creator=None, git_commit=None):
+        ended_minutes_ago=None, trigger=None, creator=None, git_commit=None, parameters=None):
     return NS(
         run_id=run_id,
         start_time=ms(NOW - timedelta(minutes=minutes_ago)),
@@ -55,6 +55,7 @@ def run(run_id, life_cycle, result=None, minutes_ago=10, tasks=(), message="", n
         trigger=trigger,
         creator_user_name=creator,
         git_source=None if git_commit is None else NS(git_snapshot=NS(used_commit=git_commit)),
+        job_parameters=[NS(name=name, value=value, default=default) for name, value, default in (parameters or [])],
     )
 
 
@@ -430,3 +431,27 @@ def test_explain_job_names_who_started_only_one_time_runs():
             run(11, "TERMINATED", "SUCCESS", minutes_ago=60, trigger="ONE_TIME", creator="someone@example.com")]
     explained = explain_job(FakeClient(runs={1: runs}), 1)
     assert [r["started_by"] for r in explained["runs"]] == [None, "someone@example.com"]
+
+
+def test_pipeline_url_comes_from_the_runs_job_parameter():
+    params = [("PIPELINE_URL", "https://ci.example.invalid/pipelines/42", "https://ci.example.invalid/pipelines/41"),
+              ("ENV", "prod", None)]
+    client = FakeClient(jobs=[(1, "orders")], runs={1: [run(11, "TERMINATED", "SUCCESS", parameters=params)]})
+    row = by_check(collect_target(client, TARGET, [monitored()], NOW))["live_run_status"]
+    assert row["pipeline_url"] == "https://ci.example.invalid/pipelines/42"
+
+
+def test_pipeline_url_falls_back_to_the_parameter_default():
+    params = [("PIPELINE_URL", None, "https://ci.example.invalid/pipelines/41")]
+    client = FakeClient(jobs=[(1, "orders")], runs={1: [run(11, "TERMINATED", "SUCCESS", parameters=params)]})
+    row = by_check(collect_target(client, TARGET, [monitored()], NOW))["live_run_status"]
+    assert row["pipeline_url"] == "https://ci.example.invalid/pipelines/41"
+
+
+def test_pipeline_url_is_empty_without_the_parameter_or_when_switched_off():
+    params = [("PIPELINE_URL", "https://ci.example.invalid/pipelines/42", None)]
+    client = FakeClient(jobs=[(1, "orders")], runs={1: [run(11, "TERMINATED", "SUCCESS")]})
+    assert by_check(collect_target(client, TARGET, [monitored()], NOW))["live_run_status"]["pipeline_url"] is None
+    client = FakeClient(jobs=[(1, "orders")], runs={1: [run(11, "TERMINATED", "SUCCESS", parameters=params)]})
+    row = by_check(collect_target(client, TARGET, [monitored()], NOW, pipeline_url_parameter=""))["live_run_status"]
+    assert row["pipeline_url"] is None

@@ -88,6 +88,7 @@ instead, and the task still counts as failed.
 |---|---|
 | `settings.name` | the name each monitored job's regex is searched in |
 | `settings.tags` | `job_tags`, and the value of the tag named by `code_version_tag` |
+| `job_parameters` (on the run) | `pipeline_url`: the value, or else the default, of the parameter named by `pipeline_url_parameter` |
 
 The scan lists the jobs once per workspace, so the tags come from that listing. The tag is read from the job's current definition, so every row shows the version deployed now, including rows about older runs. For a job without the tag, each row shows the git commit of the run it judged, when that run came from a Git source.
 

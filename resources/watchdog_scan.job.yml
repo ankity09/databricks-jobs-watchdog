@@ -45,6 +45,8 @@ resources:
           default: ${var.monitored_jobs_path}
         - name: code_version_tag
           default: ${var.code_version_tag}
+        - name: pipeline_url_parameter
+          default: ${var.pipeline_url_parameter}
       tasks:
         - task_key: create_tables
           notebook_task:

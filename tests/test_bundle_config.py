@@ -84,6 +84,15 @@ def test_phase_1_passes_the_code_version_tag():
     assert "code_version_tag" in names
 
 
+def test_both_jobs_pass_the_pipeline_url_parameter_setting():
+    for job in (load_job(), load_scan_job()):
+        defaults = {p["name"]: p["default"] for p in job["parameters"]}
+        assert defaults["pipeline_url_parameter"] == "${var.pipeline_url_parameter}"
+    assert load_bundle()["variables"]["pipeline_url_parameter"]["default"] == "PIPELINE_URL"
+    scan = yaml.safe_load((repo_root() / "accelerator.yaml").read_text())["scan"]
+    assert scan["pipeline_url_parameter"] == "PIPELINE_URL"
+
+
 def test_phase_1_stays_on_demand():
     assert "schedule" not in load_job()
 
@@ -257,3 +266,9 @@ def test_custom_check_example_compiles_and_writes_custom_rows():
 @pytest.mark.parametrize("name", sorted(DEMO_SCHEDULES))
 def test_demo_jobs_carry_a_code_version_tag_like_a_ci_deploy(name):
     assert demo_jobs()[name]["tags"]["code_version"] == "${bundle.git.branch}@${bundle.git.commit}"
+
+
+@pytest.mark.parametrize("name", sorted(DEMO_SCHEDULES))
+def test_demo_jobs_carry_a_pipeline_url_parameter_like_a_ci_deploy(name):
+    defaults = {p["name"]: p["default"] for p in demo_jobs()[name].get("parameters", [])}
+    assert defaults["PIPELINE_URL"] == "${bundle.git.origin_url}"

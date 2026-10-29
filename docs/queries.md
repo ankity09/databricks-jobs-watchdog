@@ -2,7 +2,7 @@
 
 Every SQL file in `sql/` holds one statement and starts with a comment that says what it does. This page adds the parameters, the columns it returns, how to read the result, and any temp view it needs. The views in `sql/views` are the one exception: they hold a template, explained below.
 
-The notebooks run these files with named parameters (`jobs_watchdog/sqlfiles.py`). Object names reach SQL only through `IDENTIFIER(:catalog || '.' || :schema || '.<table>')`, and the notebook checks that `catalog` and `schema` contain only letters, digits and underscores before anything runs. The only parameters are `catalog`, `schema`, `region`, `lookback_hours`, `scan_id` and `code_version_tag`.
+The notebooks run these files with named parameters (`jobs_watchdog/sqlfiles.py`). Object names reach SQL only through `IDENTIFIER(:catalog || '.' || :schema || '.<table>')`, and the notebook checks that `catalog` and `schema` contain only letters, digits and underscores before anything runs. The only parameters are `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `code_version_tag` and `pipeline_url_parameter`.
 
 ## Running a file in the SQL editor
 
@@ -147,7 +147,7 @@ Which real jobs each monitored job matches. Notebook 02 shows it after loading t
 
 The system table checks, shaped as findings rows. Notebook 05 runs it, saves the result as `watchdog_new_findings`, and merges it with `30_merge_findings.sql`.
 
-- **Parameters:** `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `code_version_tag`.
+- **Parameters:** `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `code_version_tag`, `pipeline_url_parameter`.
 - **Needs:** the temp view `watchdog_workspace_names`.
 - **Columns:** the 28 `findings` columns, in table order, with `source` = `SYSTEM_TABLES`. `triggered_by` is always empty here, because only the Jobs API knows who started a run.
 - **Read it:** one row per check for each workspace job a monitored job matches, plus one `not_found` row for each enabled job that matches nothing:
@@ -163,6 +163,7 @@ The system table checks, shaped as findings rows. Notebook 05 runs it, saves the
 - **Environments:** `environment` comes from `monitored_workspaces`. An entry with the workspace's ID is used first. Otherwise an entry with no ID whose name matches the workspace name, ignoring case, is used.
 - **Run timing and trigger:** `run_start_time`, `run_end_time` and `run_duration_seconds` describe the run each row is about, as explained in [Run timing](data-model.md#run-timing). When the first hourly slice of a run falls in the window's first hour, the run may have begun before the window, so `run_start_time` and `run_duration_seconds` are left empty. `trigger_type` uses the same mapping as the Jobs API scan, described in [trigger_type](data-model.md#trigger_type), and it maps `ONETIME_RETRY` to `RETRY`.
 - **Code version:** `code_version` is the value of the job tag named by `:code_version_tag` on the job's current definition, so it shows the version deployed now. It is empty when the job has no such tag. System table rows have no git commit to fall back on.
+- **Pipeline link:** `pipeline_url` comes from the run's `job_parameters` column, which holds `{name: {value, default}}`: the value of the parameter named by `:pipeline_url_parameter`, or its default.
 
 ### 30_merge_findings.sql
 

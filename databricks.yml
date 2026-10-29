@@ -49,6 +49,9 @@ variables:
   code_version_tag:
     description: Job tag whose value is the deployed code version
     default: code_version
+  pipeline_url_parameter:
+    description: Job parameter whose value is the link to the CI pipeline that deployed the job
+    default: PIPELINE_URL
   scan_schedule:
     description: Quartz cron for the watchdog_scan job, in UTC (every 20 minutes by default)
     default: "0 0/20 * * * ?"
@@ -74,6 +77,11 @@ targets:
           # tagged the way a CI pipeline tags a deploy, so findings show a code_version
           tags:
             code_version: ${bundle.git.branch}@${bundle.git.commit}
+          # and given a PIPELINE_URL parameter, as a CI deploy would (here the repo link stands in
+          # for a pipeline link), so findings show a pipeline_url
+          parameters:
+            - name: PIPELINE_URL
+              default: ${bundle.git.origin_url}
           schedule:
             quartz_cron_expression: "0 0 * * * ?"  # hourly
             timezone_id: UTC
@@ -87,6 +95,9 @@ targets:
           description: Sample job for the Watchdog demo. The load task fails on purpose.
           tags:
             code_version: ${bundle.git.branch}@${bundle.git.commit}
+          parameters:
+            - name: PIPELINE_URL
+              default: ${bundle.git.origin_url}
           schedule:
             quartz_cron_expression: "0 0 0/4 * * ?"  # every 4 hours
             timezone_id: UTC
@@ -105,6 +116,9 @@ targets:
           description: Sample job for the Watchdog demo. The task waits about three minutes, then succeeds.
           tags:
             code_version: ${bundle.git.branch}@${bundle.git.commit}
+          parameters:
+            - name: PIPELINE_URL
+              default: ${bundle.git.origin_url}
           schedule:
             quartz_cron_expression: "0 30 0/4 * * ?"  # every 4 hours, 30 minutes past the hour
             timezone_id: UTC
@@ -118,6 +132,9 @@ targets:
           description: Sample job for the Watchdog demo. The task fails twice, then succeeds on its third attempt.
           tags:
             code_version: ${bundle.git.branch}@${bundle.git.commit}
+          parameters:
+            - name: PIPELINE_URL
+              default: ${bundle.git.origin_url}
           schedule:
             quartz_cron_expression: "0 0 0/6 * * ?"  # every 6 hours
             timezone_id: UTC

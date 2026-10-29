@@ -25,6 +25,7 @@ scan:
 
 # The scan settings for watchdog_scan. Accelerator files from before them lack these keys.
 SCHEDULE_KEYS = """  code_version_tag: code_version
+  pipeline_url_parameter: PIPELINE_URL
   schedule: "0 0/20 * * * ?"
   schedule_status: PAUSED
 """
@@ -80,6 +81,7 @@ def test_script_explains_missing_values(tmp_path):
 def test_scan_schedule_settings_come_from_the_scan_section(tmp_path):
     variables = bundle_variables(write(tmp_path, COMPLETE + SCHEDULE_KEYS))
     assert variables["code_version_tag"] == "code_version"
+    assert variables["pipeline_url_parameter"] == "PIPELINE_URL"
     assert variables["scan_schedule"] == "0 0/20 * * * ?"
     assert variables["scan_schedule_status"] == "PAUSED"
 

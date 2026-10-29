@@ -200,3 +200,11 @@ def test_latest_view_ranks_scans_by_when_they_first_wrote():
 
     text = render_view("sql/views/01_findings_latest.sql", "main", "watchdog")
     assert "min(observed_at) AS first_seen" in text and "max_by(scan_id, first_seen)" in text
+
+
+def test_scan_reads_pipeline_url_from_the_runs_job_parameters():
+    exp, ctes = _scan_ctes()
+    assert "job_parameters" in ctes["runs"].named_selects
+    text = load_sql("sql/scan/21_system_table_findings.sql")
+    assert "try_element_at(try_element_at(c.job_parameters, :pipeline_url_parameter), 'value')" in text
+    assert "pipeline_url_parameter" in parameters(text)

@@ -15,7 +15,7 @@
 # MAGIC
 # MAGIC With `auth_mode = current_workspace`, it checks only this workspace, as you. With `service_principal`, it checks every workspace in the region that has jobs, signing in with the OAuth secret in `secret_scope`.
 # MAGIC
-# MAGIC **Inputs (widgets).** `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `auth_mode`, `secret_scope`, `client_id_key`, `client_secret_key`, `code_version_tag` (the job tag that holds the deployed code version). Use the same `scan_id` as notebook 05 to make one scan across both sources; the bundle job does this for you. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
+# MAGIC **Inputs (widgets).** `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `auth_mode`, `secret_scope`, `client_id_key`, `client_secret_key`, `code_version_tag` (the job tag that holds the deployed code version), `pipeline_url_parameter` (the job parameter that holds the CI pipeline link). Use the same `scan_id` as notebook 05 to make one scan across both sources; the bundle job does this for you. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
 # MAGIC **What to look for.** Rows for each matched job. `api_unreachable` rows say which permission or URL is missing.
 
@@ -27,7 +27,7 @@
 
 # Shows the input boxes (widgets) at the top of the notebook. Fill them in, then run the cells below.
 NAMES = ("catalog", "schema", "region", "lookback_hours", "scan_id", "auth_mode", "secret_scope", "client_id_key",
-         "client_secret_key", "code_version_tag")
+         "client_secret_key", "code_version_tag", "pipeline_url_parameter")
 define_widgets(*NAMES)
 
 # COMMAND ----------
@@ -84,7 +84,8 @@ for target in targets:
         except Exception as err:
             rows.extend(unreachable_rows(target, enabled, short_error(err)))
             continue
-    rows.extend(collect_target(client, target, enabled, now, code_version_tag=s.code_version_tag))
+    rows.extend(collect_target(client, target, enabled, now, code_version_tag=s.code_version_tag,
+                               pipeline_url_parameter=s.pipeline_url_parameter))
 for target in missing:
     rows.extend(unreachable_rows(target, enabled, "No URL for this workspace in system.access.workspaces_latest"))
 rows = merge_not_found(rows, enabled)

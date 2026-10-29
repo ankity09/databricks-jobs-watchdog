@@ -21,12 +21,9 @@ REPO = Path(__file__).resolve().parents[1]
 TEMPLATE = REPO / "dashboards" / "watchdog_findings.lvdash.json"
 NOTEBOOK = REPO / "notebooks" / "08_create_dashboard.py"
 
-FINDINGS_COLUMNS = {
-    "observed_at", "scan_id", "account_id", "region", "workspace_id", "workspace_name", "job_id", "job_name",
-    "check_id", "status", "severity", "failure_category", "run_id", "run_page_url", "failed_task_keys",
-    "error_summary", "affected_jobs", "owner", "source", "environment", "schedule_type", "run_start_time",
-    "run_end_time", "run_duration_seconds", "trigger_type", "triggered_by", "job_tags", "code_version",
-}
+from jobs_watchdog.findings import FINDINGS_COLUMNS as _COLUMNS
+
+FINDINGS_COLUMNS = set(_COLUMNS)
 TABLES = {"findings", "findings_latest"}
 # Widget type -> spec version, from the Lakeview widget index the template follows.
 WIDGET_VERSIONS = {
@@ -122,7 +119,7 @@ def test_rendered_queries_parse_as_databricks_sql():
 
 
 def test_rendered_queries_read_only_the_findings_tables_and_columns():
-    assert len(FINDINGS_COLUMNS) == 28
+    assert len(FINDINGS_COLUMNS) == 29
     for dataset in rendered()["datasets"]:
         tree = sqlglot.parse_one(sql_of(dataset), read="databricks")
         tables = list(tree.find_all(exp.Table))
@@ -332,3 +329,18 @@ def test_notebook_creates_the_widgets_it_describes():
     assert 'define_widgets("catalog", "schema")' in text
     for name in ("warehouse_id", "dashboard_folder", "dashboard_name"):
         assert f'"{name}"' in text, name
+
+
+def test_versions_page_links_the_deploy_pipeline():
+    template = json.loads(TEMPLATE.read_text())
+    runs = next(d for d in template["datasets"] if d["name"] == "ds_runs")
+    assert "pipeline_url" in sql_of(runs)
+    for page in template["pages"]:
+        for item in page["layout"]:
+            widget = item["widget"]
+            if widget["name"] == "table-runs":
+                columns = {c["fieldName"]: c for c in widget["spec"]["encodings"]["columns"]}
+                assert columns["pipeline_url"]["link"] == {"templatedURL": "{{@}}"}
+                assert "pipeline_url" in [f["name"] for f in widget["queries"][0]["query"]["fields"]]
+                return
+    raise AssertionError("table-runs not found")

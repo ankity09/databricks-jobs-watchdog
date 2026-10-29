@@ -11,7 +11,8 @@ from pathlib import Path
 
 from jobs_watchdog.identifiers import validate_identifier
 
-ALLOWED_PARAMS = {"catalog", "schema", "region", "lookback_hours", "scan_id", "code_version_tag"}
+ALLOWED_PARAMS = {"catalog", "schema", "region", "lookback_hours", "scan_id", "code_version_tag",
+                  "pipeline_url_parameter"}
 _PARAM = re.compile(r"(?<![:\w]):([A-Za-z_][A-Za-z0-9_]*)")
 
 
