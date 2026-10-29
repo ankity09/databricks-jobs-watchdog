@@ -310,3 +310,36 @@ def test_make_client_service_principal_uses_oauth(monkeypatch):
     make_client("service_principal", "https://example.invalid", "abc", "s3cret")
     assert captured == {"host": "https://example.invalid", "client_id": "abc", "client_secret": "s3cret",
                         "auth_type": "oauth-m2m"}
+
+
+def test_unreachable_rows_cover_every_enabled_job():
+    from jobs_watchdog.jobs_api import unreachable_rows
+
+    jobs = [monitored("orders"), monitored("billing", "billing"), monitored("old", "old", enabled=False)]
+    rows = unreachable_rows(Target("2002", None, None), jobs, "No URL for this workspace")
+    assert [(r["job_name"], r["check_id"], r["status"], r["error_summary"]) for r in rows] == [
+        ("orders", "api_unreachable", "UNKNOWN", "No URL for this workspace"),
+        ("billing", "api_unreachable", "UNKNOWN", "No URL for this workspace"),
+    ]
+
+
+def test_explain_job_shows_runs_tasks_and_errors():
+    from jobs_watchdog.jobs_api import explain_job
+
+    failed = run(11, "TERMINATED", "FAILED", tasks=[
+        task("extract", "TERMINATED", "SUCCESS", run_id=111),
+        task("load", "TERMINATED", "FAILED", run_id=112, termination_type="CLIENT_ERROR"),
+    ])
+    client = FakeClient(jobs=[(1, "orders")], runs={1: [failed]}, outputs={112: "ValueError: bad row"})
+    explained = explain_job(client, 1)
+    assert [r["run_id"] for r in explained["runs"]] == [11]
+    assert explained["runs"][0]["result_state"] == "FAILED"
+    assert [(t["task_key"], t["result_state"], t["termination_type"]) for t in explained["tasks"]] == [
+        ("extract", "SUCCESS", None), ("load", "FAILED", "CLIENT_ERROR")]
+    assert explained["errors"] == [{"task_key": "load", "task_run_id": 112, "error": "ValueError: bad row"}]
+
+
+def test_explain_job_with_no_runs():
+    from jobs_watchdog.jobs_api import explain_job
+
+    assert explain_job(FakeClient(runs={1: []}), 1) == {"runs": [], "tasks": [], "errors": []}

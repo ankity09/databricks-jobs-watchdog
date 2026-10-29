@@ -13,6 +13,7 @@ ported from an earlier pilot collector.
 import itertools
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from jobs_watchdog.config import AUTH_MODES
 from jobs_watchdog.states import API_FAILED_RESULTS, API_IN_PROGRESS, as_text, failure_category, status_from_api
@@ -117,6 +118,40 @@ def collect_target(client, target, jobs, now):
     return rows
 
 
+def unreachable_rows(target, jobs, reason):
+    """api_unreachable rows for every enabled job, for a workspace that cannot be scanned."""
+    return [_row(target, job, None, "api_unreachable", "UNKNOWN", error_summary=reason) for job in jobs if job.enabled]
+
+
+def explain_job(client, job_id):
+    """The Jobs API fields the Watchdog reads, for one job's newest run.
+
+    Notebook 04 shows these as tables: the newest runs from list_runs, every
+    task of the newest run from get_run, and the error text of failed tasks
+    from get_run_output.
+    """
+    runs = list(itertools.islice(client.jobs.list_runs(job_id=job_id, limit=2), 2))
+    runs.sort(key=lambda item: getattr(item, "start_time", None) or 0, reverse=True)
+    if not runs:
+        return {"runs": [], "tasks": [], "errors": []}
+    run, tasks = _full_run(client, runs[0].run_id)
+    errors = []
+    for key, task in sorted(_latest_attempts(tasks).items()):
+        if not _failed(task):
+            continue
+        try:
+            error = getattr(client.jobs.get_run_output(run_id=task.run_id), "error", None)
+        except Exception as err:
+            error = f"could not read the output: {type(err).__name__}: {err}"
+        errors.append({"task_key": key, "task_run_id": getattr(task, "run_id", None), "error": error})
+    return {
+        "runs": [_fields(item, run_id=item.run_id, run_page_url=getattr(item, "run_page_url", None)) for item in runs],
+        "tasks": [_fields(task, task_key=getattr(task, "task_key", None), task_run_id=getattr(task, "run_id", None),
+                          attempt_number=_attempt(task)) for task in tasks],
+        "errors": errors,
+    }
+
+
 def merge_not_found(rows, jobs, workspaces_checked):
     """Combine not_found rows from a scan of several workspaces.
 
@@ -206,12 +241,7 @@ def _live_run_status(target, job, job_id, run, previous):
 
 
 def _live_task_failures(client, target, job, job_id, run, latest):
-    failed = []
-    for key, task in sorted(latest.items()):
-        state = getattr(task, "state", None)
-        result = as_text(getattr(state, "result_state", None))
-        if result in API_FAILED_RESULTS or as_text(getattr(state, "life_cycle_state", None)) == "INTERNAL_ERROR":
-            failed.append((key, task))
+    failed = [(key, task) for key, task in sorted(latest.items()) if _failed(task)]
     if not failed:
         return _row(target, job, job_id, "live_task_failures", "HEALTHY", run=run,
                     error_summary="No failed tasks in the newest run.")
@@ -259,6 +289,28 @@ def _task_error(client, task):
             pass  # without access to the output, the task's state still stands
     message = " ".join(str(message).split())
     return message[:_TASK_MESSAGE_CHARS] or as_text(getattr(state, "result_state", None)) or "failed"
+
+
+def _failed(task):
+    state = getattr(task, "state", None)
+    result = as_text(getattr(state, "result_state", None))
+    return result in API_FAILED_RESULTS or as_text(getattr(state, "life_cycle_state", None)) == "INTERNAL_ERROR"
+
+
+def _fields(item, **first):
+    """The state fields of a run or task, after any fields given."""
+    state = getattr(item, "state", None)
+    details = getattr(getattr(item, "status", None), "termination_details", None)
+    start = getattr(item, "start_time", None)
+    return {
+        **first,
+        "start_time": datetime.fromtimestamp(start / 1000, tz=timezone.utc).isoformat() if start else None,
+        "life_cycle_state": as_text(getattr(state, "life_cycle_state", None)),
+        "result_state": as_text(getattr(state, "result_state", None)),
+        "termination_type": as_text(getattr(details, "type", None)),
+        "termination_code": as_text(getattr(details, "code", None)),
+        "state_message": getattr(state, "state_message", None) or None,
+    }
 
 
 def _attempt(task):

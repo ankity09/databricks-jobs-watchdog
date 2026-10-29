@@ -260,7 +260,7 @@ SELECT
   current_timestamp() AS observed_at,
   :scan_id AS scan_id,
   c.account_id,
-  :region AS region,
+  nullif(:region, '') AS region,
   c.workspace_id,
   w.workspace_name,
   c.job_id,

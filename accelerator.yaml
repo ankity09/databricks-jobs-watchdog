@@ -25,8 +25,9 @@ auth:
 
 scan:
   lookback_hours: 48            # how far back the system-table checks look
-  monitored_jobs_path: ../config/monitored_jobs.example.yml
-                                # point this at your own copy, kept outside the Git folder
+  monitored_jobs_path: config/monitored_jobs.example.yml
+                                # relative paths start at the repo root; point this at your
+                                # own copy outside the Git folder, for example a /Volumes path
 
 resources: {}                   # nothing extra is needed in Phase 1
 

@@ -164,3 +164,8 @@ def test_write_findings_with_no_rows_does_nothing():
     spark = FakeSpark()
     assert write_findings(spark, [], "main", "watchdog") == 0
     assert spark.frames == [] and spark.calls == []
+
+
+def test_empty_region_is_stored_as_null():
+    rows = finalize_rows([api_row("orders_ingest", "HEALTHY")], "s", NOW, "", "acct", JOBS, DEPENDENCIES)
+    assert rows[0]["region"] is None

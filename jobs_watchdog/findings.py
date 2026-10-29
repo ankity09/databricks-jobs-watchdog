@@ -76,7 +76,7 @@ def finalize_rows(rows, scan_id, observed_at, region, account_id, jobs, dependen
             row,
             scan_id=scan_id,
             observed_at=observed_at,
-            region=region,
+            region=region or None,
             account_id=account_id,
             severity=job.severity if job is not None and status != "HEALTHY" else None,
             owner=job.owner if job is not None else None,
