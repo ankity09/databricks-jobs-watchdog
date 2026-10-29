@@ -2,8 +2,6 @@
 
 The Watchdog is a job that runs in one Unity Catalog workspace per cloud region. Each scan reads two sources, checks them against your list of monitored jobs, and writes the results into one table, `findings`. A scheduled scan runs every 20 minutes by default, and it starts paused. Each scheduled run first brings the tables and the view up to date. A dashboard reads the view `findings_latest`, which holds the newest scan from each source, judged by the time each scan first wrote. This page walks through the two diagrams and the timing details that shape the checks.
 
-> **The diagrams predate Phase 1.1.** The second diagram shows the first 19 of the 28 findings columns, and its labels place the schedule in Phase 2. The text on this page and in [data-model.md](data-model.md) is current.
-
 ## Diagram 1: Unity Catalog, system tables and the Watchdog identity
 
 ![Unity Catalog, system tables and the Watchdog identity](images/watchdog-unity-catalog-system-tables.png)

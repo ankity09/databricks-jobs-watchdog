@@ -6,12 +6,12 @@
   <rect x="0" y="0" width="1600" height="1200" fill="#F9F7F4"/>
 
     <text x="40" y="52" font-size="29" font-weight="700" fill="#1B3139" letter-spacing="-0.5">Inside the Watchdog: three steps, one findings table, alerts and an app</text>
-  <text x="40" y="84" font-size="16" fill="#5A6F77">One job per region, running as you or as a Watchdog service principal. Steps 1 and 2 gather evidence; step 3 writes the one table that alerts (Phase 3) and the app (Phase 4) read.</text>
+  <text x="40" y="84" font-size="16" fill="#5A6F77">One job per region, as you or a Watchdog service principal, on demand or every 20 minutes. Steps 1 and 2 gather evidence; step 3 writes the one table that the dashboard, alerts and the app read.</text>
 
     <rect x="24" y="108" width="1052" height="1052" rx="20" fill="#F1EFEA" stroke="#D9D6CF" stroke-width="1.5"/>
   <image x="44" y="122" width="24" height="24" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgdmlld0JveD0iMCAwIDUxMiA1MTIiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxwYXRoIGQ9Ik0yMjAuNDA4IDQwMS4zNDJMMzYyLjc4NSAyNTcuMjQyTDIyMC40MDggMTEzLjE0M0wyMjAuNDA4IDU2TDI5OS41ODIgNTZMMjk5LjU4MiAxMzYuNTQ0TDMxNC4zODcgMTQyLjc5MkwzNzAuMjkxIDg1LjgzNzlMNDI2LjcxMyAxNDMuMzJMMzcwLjgwNyAyMDAuMjc0TDM3Ni45NDEgMjE1LjM1Nkg0NTYuMDAyVjI5Ni42NDRIMzc2Ljk0MUwzNzAuODA3IDMxMS43MjZMNDI2LjcxMyAzNjguNjhMMzcwLjI5MSA0MjYuMTYyTDMxNC4zODUgMzY5LjIwOEwyOTkuNTgyIDM3NS40NTZMMjk5LjU4MiA0NTZIMjIwLjQwOEwyMjAuNDA4IDQwMS4zNDJaIiBmaWxsPSIjRkFCRkJBIi8+CjxwYXRoIGQ9Ik0xNTYuNTg0IDEwMC45ODRWMTAwLjcyMkwzMDguNzggMjU2LjAwMUwxNTYuNTg0IDQxMS4yODFWNDExLjAwNEwxNDEuNzExIDQyNi4xNTlMODUuMjg5NSAzNjguNjc2TDE0MS4xOTYgMzExLjcyMkwxMzUuMDYxIDI5Ni42NDFINTZWMjE1LjM1MkgxMzUuMDYxTDE0MS4xOTYgMjAwLjI3MUw4NS4yODk1IDE0My4zMTdMMTQxLjcxMSA4NS44MzQ1TDE1Ni41ODQgMTAwLjk4NFoiIGZpbGw9IiNGRjVGNDYiLz4KPC9zdmc+Cg=="/>
   <image x="74" y="122" width="24" height="24" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTUwIiBoZWlnaHQ9IjE1MCIgdmlld0JveD0iMCAwIDE1MCAxNTAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxwYXRoIGQ9Ik02My4zIDQ5LjJMNjYuMiA0OC40TDYzLjEgMzYuOEM2Ni45IDM1LjggNzAuOCAzNS4yIDc0LjkgMzUuMkM3OSAzNS4yIDgzIDM1LjcgODYuOCAzNi44TDgzLjcgNDguNEw4Ni42IDQ5LjJMODkuNiAzNy43Qzk2LjQgNDAgMTAyLjQgNDMuOCAxMDcuNCA0OC43TDk5IDU3LjJMMTAxLjEgNTkuM0wxMDkuNSA1MC44QzExNi43IDU5IDEyMSA2OS42IDEyMSA4MS4yQzEyMSA4NS4zIDEyMC41IDg5LjIgMTE5LjUgOTMuMUwxMDcuOCA5MEwxMDcgOTIuOUwxMTguNiA5NS45QzExNyAxMDAuOCAxMTQuNSAxMDUuNCAxMTEuMiAxMDkuNkwxMTMuNiAxMTEuNUMxMjAuNCAxMDIuOCAxMjQgOTIuNCAxMjQgODEuM0MxMjQgNTQuMyAxMDIgMzIuMyA3NSAzMi4zQzQ4IDMyLjMgMjYgNTQuMyAyNiA4MS4zQzI2IDk0LjggMzEuNiAxMDcuOCA0MS40IDExN0w0Mi41IDExOEw1My4xIDEwNy41TDUxIDEwNS40TDQyLjUgMTEzLjlDMzcuNCAxMDguOCAzMy43IDEwMi44IDMxLjUgOTYuMUw0My4xIDkzLjFMNDIuMiA5MEwzMC41IDkzLjFDMjkuNSA4OS4zIDI5IDg1LjMgMjkgODEuMkMyOSA3OC4xIDI5LjMgNzUuMSAyOS45IDcyLjJMNDEuNCA3NS4zTDQyLjIgNzIuNEwzMC42IDY5LjJDMzIuNSA2Mi4zIDM1LjkgNTYgNDAuNSA1MC44TDQ4LjkgNTkuM0w1MSA1Ny4yTDQyLjUgNDguN0M0Ny40IDQzLjggNTMuNSA0MCA2MC4zIDM3LjdMNjMuMyA0OS4yWiIgZmlsbD0iIzFCMzEzOSIvPgo8cGF0aCBkPSJNMTEzLjQgNzAuNkw4NSA3Ny40QzgzLjQgNzMuNCA3OS41IDcwLjYgNzUgNzAuNkM2OSA3MC42IDY0LjIgNzUuNCA2NC4yIDgxLjRDNjQuMiA4Ny40IDY5IDkyLjIgNzUgOTIuMkM4MSA5Mi4yIDg1LjggODcuNCA4NS44IDgxLjRDODUuOCA4MS4xIDg1LjggODAuNyA4NS43IDgwLjRMMTE0LjEgNzMuNkwxMTMuNCA3MC42Wk04Mi44IDgxLjRDODIuOCA4NS43IDc5LjMgODkuMiA3NSA4OS4yQzcwLjcgODkuMiA2Ny4yIDg1LjcgNjcuMiA4MS40QzY3LjIgNzcuMSA3MC43IDczLjYgNzUgNzMuNkM3OC4xIDczLjYgODAuOCA3NS41IDgyLjEgNzguMkw3NC43IDgwTDc1LjQgODIuOUw4Mi44IDgxLjFDODIuOCA4MS4yIDgyLjggODEuMyA4Mi44IDgxLjRaIiBmaWxsPSIjMUIzMTM5Ii8+CjxwYXRoIGQ9Ik03NSAyMi42QzQyLjcgMjIuNiAxNi40IDQ4LjkgMTYuNCA4MS4yQzE2LjQgOTkuMiAyNC41IDExNS45IDM4LjUgMTI3LjFMMzguOSAxMjcuNEg2MS4zVjExNS4zSDg4LjdWMTI3LjRIMTAyLjlWMTI0LjRIOTEuN1YxMTIuM0g1OC4zVjEyNC40SDQwQzI2LjkgMTEzLjggMTkuNCA5OC4xIDE5LjQgODEuMkMxOS40IDUwLjUgNDQuNCAyNS42IDc1IDI1LjZDMTA1LjcgMjUuNiAxMzAuNyA1MC42IDEzMC43IDgxLjJDMTMwLjcgOTYuMSAxMjQuOSAxMTAgMTE0LjUgMTIwLjVMOTkgMTA1LjJMOTYuOSAxMDcuM0wxMTQuNCAxMjQuNkwxMTUuNSAxMjMuNkMxMjcuMSAxMTIuNiAxMzMuNyA5Ny4xIDEzMy43IDgxLjFDMTMzLjYgNDguOSAxMDcuMyAyMi42IDc1IDIyLjZaIiBmaWxsPSIjMUIzMTM5Ii8+Cjwvc3ZnPgo="/>
-  <text x="108" y="140" font-size="13" font-weight="700" fill="#5A6F77" letter-spacing="1.6">WATCHDOG · ONE JOB PER REGION · ON DEMAND IN PHASE 1, SCHEDULED FROM PHASE 2</text>
+  <text x="108" y="140" font-size="13" font-weight="700" fill="#5A6F77" letter-spacing="1.6">WATCHDOG · ONE JOB PER REGION · ON DEMAND, OR EVERY 20 MINUTES ON A SCHEDULE</text>
 
     <rect x="44" y="160" width="506" height="520" rx="14" fill="#FFFFFF" stroke="#C4CCD6" stroke-width="1.5"/>
   <rect x="44" y="160" width="506" height="6" rx="3" fill="#FF3621"/>
@@ -72,10 +72,10 @@
   <g font-size="13" fill="#1B3139">
     <text x="586" y="424">• the run right now: life_cycle_state (QUEUED, RUNNING,</text>
     <text x="598" y="441">TERMINATED) and result_state (SUCCESS, FAILED, TIMEDOUT)</text>
-    <text x="586" y="461">• start and end time, so how long it has been running</text>
+    <text x="586" y="461">• start, end and trigger, and who started a manual run</text>
     <text x="586" y="480">• every task: task_key, state, and attempt for retries</text>
     <text x="586" y="499">• the real error for a failed task: message and stack trace</text>
-    <text x="586" y="518">• run_page_url, a direct link for the alert</text>
+    <text x="586" y="518">• job tags (code version) and run_page_url, the run link</text>
   </g>
   <text x="586" y="544" font-size="11" font-weight="700" fill="#5A6F77" letter-spacing="1.4">BEST FOR</text>
   <text x="586" y="563" font-size="13" font-weight="600" fill="#1B3139">live checks: failed tasks, even inside a</text>
@@ -96,31 +96,34 @@
   <text x="134" y="761" font-size="13" fill="#5A6F77"><tspan font-family="DM Mono, Menlo, monospace">&lt;catalog&gt;.watchdog.findings</tspan> · one row per job and check, every scan</text>
 
     <text x="60" y="792" font-size="11" font-weight="700" fill="#5A6F77" letter-spacing="1.4">CHECKS</text>
-  <text x="60" y="810" font-size="12" fill="#5A6F77">config: your job list, owners and dependency map</text>
+  <text x="60" y="810" font-size="12" fill="#5A6F77">config: your job list, exclusions and dependency map</text>
   <g font-size="13" fill="#1B3139">
     <text x="60" y="834">• task failed, even inside a running job</text>
     <text x="60" y="854">• ran past its time limit (SLA)</text>
     <text x="60" y="874">• missed its schedule (no run in the window)</text>
     <text x="60" y="894">• retry loop (more retries than allowed)</text>
     <text x="60" y="914">• later: stuck batch or no new data (Phase 2)</text>
-    <text x="60" y="934">• later: service probes, such as Kafka (Phase 2)</text>
+    <text x="60" y="934">• your own checks, e.g. service probes (notebook 09)</text>
     <text x="60" y="954">• upstream impact: list the downstream jobs</text>
     <text x="60" y="974">• could not check: unknown coverage</text>
   </g>
   <text x="60" y="1006" font-size="13" font-weight="700" fill="#1B3139">Writes safely</text>
   <text x="60" y="1024" font-size="13" fill="#1B3139">appends every scan, keyed by scan, job and check,</text>
   <text x="60" y="1042" font-size="13" fill="#1B3139">so a re-run never duplicates rows</text>
+  <text x="60" y="1074" font-size="13" font-weight="700" fill="#1B3139">Reads easily</text>
+  <text x="60" y="1092" font-size="13" fill="#1B3139">findings_latest: the newest scan, read</text>
+  <text x="60" y="1110" font-size="13" fill="#1B3139">by the dashboard (notebook 08)</text>
   <line x1="420" y1="782" x2="420" y2="1126" stroke="#E2E0DA" stroke-width="1"/>
 
-    <text x="440" y="792" font-size="11" font-weight="700" fill="#5A6F77" letter-spacing="1.4">FINDINGS TABLE COLUMNS</text>
+    <text x="440" y="792" font-size="11" font-weight="700" fill="#5A6F77" letter-spacing="1.4">FINDINGS TABLE COLUMNS (28)</text>
   <g font-size="12" font-family="DM Mono, Menlo, monospace" fill="#1B3139">
-    <text x="440" y="814">observed_at</text><text x="440" y="832">scan_id</text><text x="440" y="850">account_id</text><text x="440" y="868">region</text><text x="440" y="886">workspace_id</text>
-    <text x="575" y="814">workspace_name</text><text x="575" y="832">job_id</text><text x="575" y="850">job_name</text><text x="575" y="868">check_id</text><text x="575" y="886">status</text>
-    <text x="710" y="814">severity</text><text x="710" y="832">failure_category</text><text x="710" y="850">run_id</text><text x="710" y="868">run_page_url</text><text x="710" y="886">failed_task_keys</text>
-    <text x="845" y="814">error_summary</text><text x="845" y="832" fill="#FF3621">affected_jobs</text><text x="845" y="850">owner</text><text x="845" y="868">source</text>
+    <text x="440" y="812" font-size="11.5">observed_at</text><text x="440" y="828" font-size="11.5">scan_id</text><text x="440" y="844" font-size="11.5">account_id</text><text x="440" y="860" font-size="11.5">region</text><text x="440" y="876" font-size="11.5">workspace_id</text><text x="440" y="892" font-size="11.5">workspace_name</text><text x="440" y="908" font-size="11.5">job_id</text>
+    <text x="590" y="812" font-size="11.5">job_name</text><text x="590" y="828" font-size="11.5">check_id</text><text x="590" y="844" font-size="11.5">status</text><text x="590" y="860" font-size="11.5">severity</text><text x="590" y="876" font-size="11.5">failure_category</text><text x="590" y="892" font-size="11.5">run_id</text><text x="590" y="908" font-size="11.5">run_page_url</text>
+    <text x="740" y="812" font-size="11.5">failed_task_keys</text><text x="740" y="828" font-size="11.5">error_summary</text><text x="740" y="844" font-size="11.5" fill="#FF3621">affected_jobs</text><text x="740" y="860" font-size="11.5">owner</text><text x="740" y="876" font-size="11.5">source</text><text x="740" y="892" font-size="11.5">environment</text><text x="740" y="908" font-size="11.5">schedule_type</text>
+    <text x="890" y="812" font-size="11.5">run_start_time</text><text x="890" y="828" font-size="11.5">run_end_time</text><text x="890" y="844" font-size="11.5">run_duration_seconds</text><text x="890" y="860" font-size="11.5">trigger_type</text><text x="890" y="876" font-size="11.5">triggered_by</text><text x="890" y="892" font-size="11.5">job_tags</text><text x="890" y="908" font-size="11.5">code_version</text>
   </g>
-  <text x="440" y="924" font-size="11" fill="#5A6F77" xml:space="preserve">status: HEALTHY · WARNING · FAILED · UNKNOWN   ·   source: SYSTEM_TABLES or JOBS_API</text>
-  <text x="947" y="832" font-size="11" fill="#FF3621">← dependency map</text>
+  <text x="440" y="924" font-size="11" fill="#5A6F77" xml:space="preserve">status: HEALTHY · WARNING · FAILED · UNKNOWN · source: SYSTEM_TABLES, JOBS_API, CUSTOM · red: dependency map</text>
+  
 
     <text x="440" y="948" font-size="11" font-weight="700" fill="#5A6F77" letter-spacing="1.4">EXAMPLE ROWS (ILLUSTRATIVE)</text>
   <rect x="440" y="956" width="600" height="22" rx="4" fill="#EEEDE9"/>
@@ -215,8 +218,8 @@
     <text x="1114" y="1033">• <tspan font-weight="700">Later:</tspan> acknowledge, add triage notes, and ask</text>
     <text x="1126" y="1050">questions in plain language</text>
   </g>
-  <text x="1114" y="1088" font-size="12" fill="#5A6F77">Planned for Phase 4. A good first version shows</text>
-  <text x="1114" y="1104" font-size="12" fill="#5A6F77">health, incidents and the summary.</text>
+  <text x="1114" y="1088" font-size="12" fill="#5A6F77">Until Phase 4, the dashboard from notebook 08 shows</text>
+  <text x="1114" y="1104" font-size="12" fill="#5A6F77">health, code versions and history.</text>
 
     <line x1="1058" y1="730" x2="1092" y2="730" stroke="#1B3139" stroke-width="2.2" marker-end="url(#arrNavy)"/>
   <rect x="1060" y="709" width="32" height="14" rx="4" fill="#F9F7F4"/>

@@ -62,8 +62,8 @@
   <text x="358" y="480" font-size="13" fill="#1B3139">live status and task errors</text>
   <text x="342" y="505" font-size="13" font-weight="700" fill="#1B3139">3. Writes findings to one</text>
   <text x="358" y="522" font-size="13" fill="#1B3139">Unity Catalog table</text>
-  <text x="444" y="566" font-size="12" fill="#5A6F77" text-anchor="middle">on demand in Phase 1, then</text>
-  <text x="444" y="582" font-size="12" fill="#5A6F77" text-anchor="middle">scheduled from Phase 2</text>
+  <text x="444" y="566" font-size="12" fill="#5A6F77" text-anchor="middle">on demand, or on a schedule</text>
+  <text x="444" y="582" font-size="12" fill="#5A6F77" text-anchor="middle">every 20 minutes (watchdog_scan)</text>
 
     <rect x="626" y="208" width="560" height="184" rx="14" fill="none" stroke="#B9B4AA" stroke-width="1.3" stroke-dasharray="6 5"/>
   <text x="640" y="228" font-size="11" font-weight="700" fill="#5A6F77" letter-spacing="1.4">MONITORED WORKSPACES (SAME ACCOUNT AND REGION)</text>
@@ -128,7 +128,7 @@
     <rect x="626" y="640" width="240" height="96" rx="14" fill="#FFFFFF" stroke="#C4CCD6" stroke-width="1.5"/>
   <image x="642" y="664" width="40" height="40" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgdmlld0JveD0iMCAwIDUxMiA1MTIiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxwYXRoIGQ9Ik02NCA2NEgyMjRWMjI0SDY0VjY0WiIgZmlsbD0iI0ZBQkZCQSIvPgo8cGF0aCBkPSJNNDQwIDQ0OEwyODAgNDQ4TDI4MCAzNTJDMjgwIDMxNi42NTQgMzA4LjY1NCAyODggMzQ0IDI4OEwzNzYgMjg4QzQxMS4zNDYgMjg4IDQ0MCAzMTYuNjU0IDQ0MCAzNTJMNDQwIDQ0OFoiIGZpbGw9IiNGQUJGQkEiLz4KPHBhdGggZD0iTTE1MiAyODhMMjQwIDQ0OEg2NEwxNTIgMjg4WiIgZmlsbD0iI0ZGNUY0NiIvPgo8cGF0aCBkPSJNMjgwIDE0OEMyODAgMTAxLjYwOCAzMTcuNjA4IDY0IDM2NCA2NFY2NEM0MTAuMzkyIDY0IDQ0OCAxMDEuNjA4IDQ0OCAxNDhWMTQ4QzQ0OCAxOTQuMzkyIDQxMC4zOTIgMjMyIDM2NCAyMzJWMjMyQzMxNy42MDggMjMyIDI4MCAxOTQuMzkyIDI4MCAxNDhWMTQ4WiIgZmlsbD0iI0ZGNUY0NiIvPgo8L3N2Zz4K"/>
   <text x="694" y="676" font-size="16" font-weight="700" fill="#1B3139">Watchdog app</text>
-  <text x="694" y="694" font-size="12" fill="#5A6F77">Databricks App · Phase 4</text>
+  <text x="694" y="694" font-size="12" fill="#5A6F77">dashboard now · app in Phase 4</text>
   <text x="694" y="714" font-size="13" fill="#1B3139">one view across workspaces</text>
   <line x1="566" y1="688" x2="622" y2="688" stroke="#1B3139" stroke-width="2.2" marker-end="url(#arrNavy)"/>
   <text x="595" y="680" font-size="11" fill="#1B3139" text-anchor="middle">reads</text>

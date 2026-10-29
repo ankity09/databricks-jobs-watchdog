@@ -23,9 +23,7 @@ Each region has one Unity Catalog metastore, and its system tables collect job h
 
 ![Inside the Watchdog: three steps, one findings table, alerts and an app](docs/images/watchdog-inside-steps-findings-alerts.png)
 
-Inside a scan, step 1 reads the system tables, step 2 calls the Jobs API, and step 3 checks both against your config and writes findings. The schedule repeats these steps every 20 minutes by default. Alerts (Phase 3) and the app (Phase 4) read the same table. [docs/architecture.md](docs/architecture.md) walks through both diagrams.
-
-The diagram labels predate Phase 1.1. The schedule is in this release, and the findings table has more columns than the diagram shows. The text is current.
+Inside a scan, step 1 reads the system tables, step 2 calls the Jobs API, and step 3 checks both against your config and writes findings. The schedule repeats these steps every 20 minutes by default. The dashboard (notebook 08) reads the same table now, through the view `findings_latest`; alerts (Phase 3) and the app (Phase 4) will too. [docs/architecture.md](docs/architecture.md) walks through both diagrams.
 
 ### What Phase 1 checks
 
