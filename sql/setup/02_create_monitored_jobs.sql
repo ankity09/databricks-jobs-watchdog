@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema || '.monitored_
   schedule_type STRING NOT NULL COMMENT 'continuous or scheduled',
   max_gap_minutes INT COMMENT 'Scheduled jobs: longest allowed gap between run starts',
   max_runtime_minutes INT COMMENT 'Longest allowed run before a warning',
-  max_retries INT COMMENT 'More task attempts than this is a retry loop',
+  max_retries INT COMMENT 'A task retried more times than this is a retry loop',
   severity STRING NOT NULL COMMENT 'CRITICAL or WARNING, used when the job is not healthy',
   owner STRING COMMENT 'Team or person to route findings to',
   enabled BOOLEAN NOT NULL COMMENT 'false keeps the entry without checking it',

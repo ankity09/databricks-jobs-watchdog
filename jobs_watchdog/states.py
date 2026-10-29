@@ -18,7 +18,7 @@ _SYSTEM_STATUS = {
     "BLOCKED": "WARNING",
 }
 
-_API_IN_PROGRESS = {"RUNNING", "PENDING", "QUEUED", "BLOCKED", "WAITING_FOR_RETRY", "TERMINATING"}
+API_IN_PROGRESS = {"RUNNING", "PENDING", "QUEUED", "BLOCKED", "WAITING_FOR_RETRY", "TERMINATING"}
 
 _API_RESULT_STATUS = {
     "SUCCESS": "HEALTHY",
@@ -59,7 +59,7 @@ def status_from_system_table(result_state):
 def status_from_api(life_cycle_state, result_state):
     """Status for a Jobs API run or task state."""
     life_cycle_state, result_state = as_text(life_cycle_state), as_text(result_state)
-    if life_cycle_state in _API_IN_PROGRESS:
+    if life_cycle_state in API_IN_PROGRESS:
         return "HEALTHY"
     if life_cycle_state == "INTERNAL_ERROR":
         return "FAILED"
@@ -73,3 +73,27 @@ def status_from_api(life_cycle_state, result_state):
 def category_from_termination(termination_type):
     """failure_category for a failed run, from its termination type."""
     return _TERMINATION_CATEGORY.get(as_text(termination_type), "FUNCTIONAL")
+
+
+_CHECK_CATEGORY = {
+    "long_runtime": "SLA_EXCEEDED",
+    "live_long_runtime": "SLA_EXCEEDED",
+    "schedule_gap": "SCHEDULE_GAP",
+    "retry_loop": "RETRY_LOOP",
+}
+
+
+def failure_category(check_id, status, termination_type=None):
+    """failure_category for a findings row.
+
+    sql/scan/21_system_table_findings.sql applies the same rules in SQL.
+    UNKNOWN means the Watchdog could not see the job, so it is COVERAGE.
+    """
+    if status == "HEALTHY":
+        return "NONE"
+    if status == "UNKNOWN":
+        return "COVERAGE"
+    if check_id in _CHECK_CATEGORY:
+        return _CHECK_CATEGORY[check_id]
+    category = category_from_termination(termination_type)
+    return "FUNCTIONAL" if category == "NONE" else category

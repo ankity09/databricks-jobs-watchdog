@@ -10,7 +10,7 @@
 # schedule_type     continuous or scheduled
 # max_gap_minutes   scheduled jobs: longest allowed gap between run starts
 # max_runtime_minutes  longest allowed run before a warning
-# max_retries       more task attempts than this is a retry loop
+# max_retries       a task retried more times than this is a retry loop
 # severity          CRITICAL or WARNING, used when the job is not healthy
 # owner             team or person to route findings to
 # enabled           false keeps the entry without checking it
