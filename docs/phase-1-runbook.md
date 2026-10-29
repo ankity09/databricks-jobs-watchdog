@@ -1,6 +1,6 @@
 # Phase 1 runbook
 
-Phase 1 ends with validated findings from both sources in one table. Phase 1.1, in this release, adds a scheduled scan and a first dashboard. Both are optional. This runbook goes role by role.
+Phase 1 ends with validated findings from both sources in one table. Phase 1.1 adds a scheduled scan and a first dashboard, both optional. Phase 1.2, in this release, adds shared defaults and per-environment settings to the job list. This runbook goes role by role.
 
 Most teams need three people, or one person with all three hats:
 
@@ -16,7 +16,7 @@ Decide five things:
 
 1. **The region.** System tables are regional: they cover the workspaces in one account and one cloud region. Run one Watchdog per region.
 2. **The Watchdog workspace.** One Unity Catalog workspace in that region, with serverless notebooks and jobs. The Watchdog runs there.
-3. **The catalog and schema.** Where the four tables and the view go, for example `<catalog>.watchdog`.
+3. **The catalog and schema.** Where the five tables and the view go, for example `<catalog>.watchdog`.
 4. **The mode.**
    - `current_workspace`: checks only the Watchdog workspace, with the identity running the notebooks. Nothing extra to set up. Start here.
    - `service_principal`: checks every workspace in the region that has jobs, signing in to each as a service principal. Needs the workspace admin steps below.
@@ -99,12 +99,12 @@ After every pull, restart Python on any notebook you have open, so it loads the 
 1. In the Git folder, click Pull.
 2. Restart Python on any open notebook (detach and reattach).
 3. Run notebook 01. It prints the columns it added to each table, and `view findings_latest:` followed by created, replaced or current. Your existing rows stay.
-4. If the release adds options you want, add them to your job list file, then run notebook 02.
+4. If the release adds options you want, add them to your job list file, then run notebook 02. Notebook 02 stops on any setting it does not know and names it, so a misspelled key is caught here.
 5. Run notebooks 05 and 06, and check notebook 07 still prints only PASS lines.
 
 ### Write your config
 
-1. **The job list.** Copy `config/monitored_jobs.example.yml` somewhere outside the Git folder: your workspace home folder, or a Unity Catalog volume such as `/Volumes/<catalog>/<schema>/<volume>/monitored_jobs.yml`. Edits there never conflict with pulls. Replace the examples with your jobs and dependencies. The file's comments explain every field, and [data-model.md](data-model.md) explains how each is used.
+1. **The job list.** Copy `config/monitored_jobs.example.yml` somewhere outside the Git folder: your workspace home folder, or a Unity Catalog volume such as `/Volumes/<catalog>/<schema>/<volume>/monitored_jobs.yml`. Edits there never conflict with pulls. Replace the examples with your jobs and dependencies. The file has four sections: `defaults`, `workspaces`, `jobs` and `dependencies`. Only `jobs` is required. The file's comments explain every field, and [data-model.md](data-model.md) explains how each is used.
 2. **The settings.** In the repo root of your Git folder, create `accelerator.local.yaml` as a copy of `accelerator.yaml`, and fill in `target.catalog`, `target.schema`, `target.region`, the `auth` section, and `scan.monitored_jobs_path` (the path to your job list). The optional settings are:
    - `scan.code_version_tag`: the job tag that holds the deployed code version (`code_version` by default);
    - `scan.pipeline_url_parameter`: the job parameter that holds the CI pipeline link (`PIPELINE_URL` by default);
@@ -117,15 +117,18 @@ To write `job_name_regex` values, look at your real job names in notebook 03 (qu
 
 ### Exclude test copies
 
-Test copies often share a job's name, for example `daily_revenue_report_test`. Add `job_name_exclude_regex` to the entry. The scans skip every job whose real name matches it, even when `job_name_regex` matches it too:
+Test copies often share a job's name, for example `orders_ingest_test_prod`. Set `job_name_exclude_regex`, in `defaults` for every job (as the example file does) or on one entry. The scans skip every job whose real name matches it, even when `job_name_regex` matches it too:
 
 ```yaml
-  - job_name: daily_revenue_report
-    job_name_regex: "^daily_revenue_report(_[a-z0-9]+)?$"
-    job_name_exclude_regex: "_test(_|$)"
+defaults:
+  job_name_exclude_regex: "_test(_|$)"
+
+jobs:
+  - job_name: orders_ingest
+    job_name_regex: "^orders_ingest(_[a-z]+)?_(prod|dev)$"   # also matches orders_ingest_test_prod
 ```
 
-Like `job_name_regex`, the exclusion matches anywhere in the name unless you anchor it. The pattern needs `_test` to be followed by `_` or the end of the name, so it skips `daily_revenue_report_test` and keeps `daily_revenue_report_latest`. The example anchors it because a bare `test` would also match names such as `contest`. Notebook 02's match table applies the same exclusion, and the scans write no rows for excluded jobs.
+A job that sets its own `job_name_exclude_regex` uses that one instead. Like `job_name_regex`, the exclusion matches anywhere in the name unless you anchor it. The pattern needs `_test` to be followed by `_` or the end of the name, so it skips `orders_ingest_test_prod` and `daily_revenue_report_test`, and keeps `daily_revenue_report_latest`. The example anchors it because a bare `test` would also match names such as `contest`. Notebook 02's match table applies the same exclusion, and the scans write no rows for excluded jobs.
 
 ### Label workspaces by environment
 
@@ -133,16 +136,65 @@ Add an optional top-level `workspaces` section to the same file:
 
 ```yaml
 workspaces:
-  - workspace_id: "1111111111111111"
+  - workspace_name: example-prod
     environment: production
-    notes: Orders and billing jobs
-  - workspace_name: example-lower-workspace
+  - workspace_name: example-staging
     environment: lower
+  - workspace_id: "1111111111111111"
+    environment: lower
+    notes: Development, given by workspace ID instead of name
 ```
 
 - Give each entry a `workspace_id` (digits) or a `workspace_name`, and an `environment`: letters, digits, `-` or `_`.
 - An entry with an ID matches only that workspace. An entry with only a name matches the workspace with that name, ignoring case. The ID is tried first, so give each workspace one entry. Two name entries that differ only in case are rejected as listed twice.
 - Every finding from a labelled workspace carries its environment. You can filter the dashboard by it now, and route alerts to separate channels in Phase 3. Rows that cover no single workspace have no environment.
+- A Watchdog sees only the workspaces in its own region, and ignores entries for other regions. A job that runs in no workspace of its region gets a `not_found` row there, so regions can share one file only when they run the same jobs. Otherwise give each region's Watchdog its own job list file.
+
+### Share settings with `defaults`
+
+Settings that most jobs share go in an optional top-level `defaults` section:
+
+```yaml
+defaults:
+  schedule_type: scheduled
+  severity: WARNING
+  owner: platform-team
+  job_name_exclude_regex: "_test(_|$)"
+```
+
+Every job gets these unless it sets its own. `defaults` can hold any job setting except `job_name`, `job_name_regex` and `environments`. Notebook 02 shows `monitored_jobs` with the defaults filled in, so you can check what each job ends up with.
+
+### Change a job's settings per environment
+
+One entry covers a job in every workspace where it runs. To treat its copies differently by environment, add an `environments` section to the entry, keyed by the labels from the `workspaces` section:
+
+```yaml
+  - job_name: orders_ingest
+    severity: CRITICAL
+    environments:
+      lower: {severity: WARNING}  # checked in lower environments too, but never CRITICAL there
+  - job_name: orders_enrich
+    environments:
+      lower: {enabled: false}  # production only for now
+```
+
+- An environment can set `severity`, `owner`, `enabled`, `max_gap_minutes`, `max_runtime_minutes`, `max_retries` and `min_attempt_minutes`. Any other key, or a label the `workspaces` section does not define, stops the load with a message that names it.
+- Each finding uses the settings for its workspace's label. A workspace with no label uses the job's own settings.
+- A job switched off in an environment gets no rows in that environment's workspaces. To check a job in one environment only, set `enabled: false` on the job and `enabled: true` under that label.
+- A job switched on somewhere, but found only where it is switched off, gets a `not_found` row that says so, so it never drops out of the findings unnoticed.
+- Notebook 02 shows the overrides in `monitored_job_environments`. Its match table shows each match's `environment`, and `checked_here`: whether the job is switched on there.
+
+### Catch tasks that fail fast and restart
+
+`max_retries` counts retries, but a task that fails within minutes of starting and restarts is in trouble long before it reaches the job's retry limit. Set `min_attempt_minutes` to catch it: when a task attempt ran shorter than this and was then retried, the Jobs API scan's `retry_loop` row is a WARNING.
+
+```yaml
+  - job_name: orders_ingest
+    max_retries: 3
+    min_attempt_minutes: 10  # a task that restarts within 10 minutes of starting is a retry loop
+```
+
+The two rules work together: either one makes the row a WARNING, and its summary names the rule and the tasks. Only the Jobs API scan checks retries, on each job's newest run.
 
 ### Run Phase 1 by hand
 
@@ -151,8 +203,8 @@ Open each notebook in `notebooks/`, attach it to serverless compute, run its fir
 | Notebook | What it does | Look for |
 |---|---|---|
 | `00_check_access` | checks system table access, the region's workspaces and the Jobs API | every line PASS, and the workspace names you expect in section 3 |
-| `01_create_tables` | creates or upgrades the schema, the four tables and the view `findings_latest` | five `exists: True` lines, a `view findings_latest:` line that says created, replaced or current, and the columns it added, if any |
-| `02_load_config` | loads your YAML file into the config tables, shows what each job matches | every enabled job matches a real job |
+| `01_create_tables` | creates or upgrades the schema, the five tables and the view `findings_latest` | six `exists: True` lines, a `view findings_latest:` line that says created, replaced or current, and the columns it added, if any |
+| `02_load_config` | loads your YAML file into the config tables, shows what each job matches | every job matches a real job where you expect it, with `checked_here` true where it should be checked |
 | `03_explore_system_tables` | runs the read-only system table queries | your jobs and runs, as you expect |
 | `04_explore_jobs_api` | walks one job through the Jobs API calls | the newest run, its tasks, any error text |
 | `05_scan_system_tables` | writes the system table findings | one row per check for each matched job |
@@ -238,7 +290,7 @@ To add your own checks, build rows with the keys `job_name`, `check_id`, `status
 ## What success looks like
 
 - Notebook 00 prints only PASS lines (and WARN lines in service principal mode, for workspaces the service principal cannot reach).
-- Notebook 07 prints five PASS lines: the four tables and the view exist, config has enabled jobs, both sources wrote findings, every enabled job has findings, no duplicate keys.
+- Notebook 07 prints five PASS lines: the five tables and the view exist, config has enabled jobs, both sources wrote findings, every enabled job has findings, no duplicate keys. A job counts as enabled when it is switched on in at least one environment.
 - `findings` has rows with `source = SYSTEM_TABLES` and `source = JOBS_API` for the same `scan_id` (job runs) or for each source's newest scan (by hand).
 - `findings_latest` returns the newest scan of each source, judged by when each scan first wrote.
 - With the demo target: `watchdog_demo_succeeds` is HEALTHY, and `watchdog_demo_fails` is FAILED with `load` in `failed_task_keys` and the error text in `error_summary`. The example config is set so that `watchdog_demo_slow` warns for `long_runtime` and `watchdog_demo_retries` warns for `retry_loop`. The FAILED row for `watchdog_demo_fails` lists `watchdog_demo_succeeds` in `affected_jobs`. The system table rows for the demo jobs can say `not_found` or UNKNOWN for about an hour, until the system tables catch up. Run the job again later to see them.
@@ -288,18 +340,22 @@ The history is what lets the alerts in Phase 3 fire once when a job breaks and o
 | `catalog must be letters, digits or underscores` (or `schema`) | the name has a hyphen, space or quote | use a name with only letters, digits and underscores |
 | `job <name>: scheduled jobs need max_gap_minutes` (or another config error) | the YAML file has a mistake | fix the file; the message names the job and the field |
 | `job <name>: enabled must be true or false` | `enabled` was quoted, for example `"false"`, or has another value | write `enabled: false` without quotes |
+| `job <name>: unknown keys [...]; allowed: [...]` (or `defaults has unknown keys`, or `environments.<label> has unknown keys`) | a misspelled or unsupported setting | fix the key; the message lists the allowed ones |
+| `defaults cannot set <key>: set it on each job` | `defaults` holds `job_name`, `job_name_regex` or `environments` | move that key to the job entries |
+| `job <name>: environment '<label>' is not a label in the workspaces section (...)` | the job's `environments` section uses a label that no workspace entry has | add the workspace entry, or fix the label; the message lists the labels defined |
 | `workspace <label>: ...` (workspace_id must be digits, environment is required, environment must be letters, digits, - or _, or listed twice) | an entry in the `workspaces` section is wrong | fix that entry; the message names it |
 | `Cannot find the repo root above ...` | the notebook is not in the repo's `notebooks` folder | open the notebooks from the Git folder (or the deployed bundle) |
 | `... is missing or unreadable (...). Run notebook 01 first.` | the Watchdog tables or the schema are not there yet | run notebook 01 |
 | `... is missing columns ...: run notebook 01 once to add them` | you pulled a newer version, and the tables are from an older one | run notebook 01 (or `watchdog_phase_1`). It adds the columns and keeps your rows. A scheduled run does the same; if its `create_tables` task fails, check that task's output for a privilege error. |
 | `findings_latest ... is missing or out of date: run notebook 01 once.` | the view is missing, or its columns differ from `findings` | run notebook 01. If it stops on the view, another identity owns the view: its owner runs notebook 01, or the owner drops the view and notebook 01 creates it again. |
 | `FAIL  tables exist: missing ...` in notebook 07 | notebook 01 has not run with this catalog and schema | run notebook 01 |
-| `FAIL  config has enabled jobs: 0 enabled` | the config is empty, or every job is disabled | edit the YAML file, then run notebook 02 |
+| `FAIL  config has enabled jobs: 0 enabled` | the config is empty, or every job is switched off in every environment | edit the YAML file, then run notebook 02 |
 | `FAIL  both sources wrote findings: no rows from ...` | that scan did not run, or ran with a different `scan_id` | run notebook 05 or 06; clear the `scan_id` widget in notebook 07 |
 | `FAIL  every enabled job has findings: <job> (<source>)` | a scan wrote nothing for that job | re-run that scan and read its output |
 | `FAIL  no duplicate keys` | a key was inserted twice | should not happen; open an issue with the output of query 41 |
 | `not_found` from SYSTEM_TABLES only | the job is new (system tables are about an hour behind), the regex is wrong, or the job is in another region | wait an hour; check the regex with notebook 02; check the workspace list in notebook 00 for the region |
 | `not_found` from JOBS_API only: "No job that this identity can see ... matches ..." | the identity cannot see the job (no CAN VIEW), the regex is wrong, or the job is in another workspace while you run in `current_workspace` mode | grant CAN VIEW; check the regex with notebook 02; use service principal mode for other workspaces |
+| `not_found`: "Every job in this region that matches ... is in an environment where this job is switched off." (SYSTEM_TABLES) or "No workspace checked has ... switched on ..." (JOBS_API) | the job is switched off in the environment of every workspace that has it, in this region | nothing, if that is what you meant; otherwise check the job's `environments` section and the labels in the `workspaces` section |
 | `api_unreachable` with a permission error for one job | no CAN VIEW on that job | grant CAN VIEW to the identity |
 | `watchdog_scan` shows a failed `create_tables` or `load_config` | a privilege error in `create_tables`, or a mistake in the config file | grant `CREATE TABLE` and `MODIFY` on the schema to the scheduled identity, or fix the file. The two scans still run, with the config loaded last time if the load failed. Then wait for the next run or run `watchdog_phase_1`. |
 | `warehouse_id is empty` (notebook 08) | no SQL warehouse is set for the dashboard | type an ID in the `warehouse_id` box, or set `target.warehouse_id` in `accelerator.local.yaml` |
@@ -315,7 +371,7 @@ The history is what lets the alerts in Phase 3 fire once when a job breaks and o
 
 System table records arrive about an hour after the fact. The Watchdog allows for it:
 
-- `schedule_gap` adds 60 minutes to `max_gap_minutes` before it reports a missed schedule.
+- `schedule_gap` adds 60 minutes to `max_gap_minutes` before it reports a missed schedule. So a job that runs every 10 minutes, with `max_gap_minutes: 20`, is reported after 80 minutes without a run start. Only the system table scan checks schedules, so a job that stops running altogether shows only there.
 - A job created in the last hour is `not_found` in the system table scan while the Jobs API scan already sees it.
 - A run longer than an hour is split into hourly rows, and its result lands with the last row.
 
@@ -326,6 +382,8 @@ For anything that must be live, read the Jobs API rows.
 Each region has its own metastore and its own system tables. A Watchdog sees the workspaces in its own account and region only. Check the workspace list in notebook 00 against the regions you expect, because workspace names often carry a region suffix.
 
 For more regions, run one Watchdog in a workspace in each region, each writing to a catalog in that region, so each region's data stays in that region. Rolling results up across regions is a later phase, after your security team approves it.
+
+Each Watchdog reads its own job list file. A job that runs in no workspace of the region gets a `not_found` row there, so regions can share one file only when they run the same jobs. Otherwise give each region's Watchdog its own file. Entries in the `workspaces` section for other regions are ignored, so they do no harm.
 
 ## Networking
 
@@ -341,7 +399,7 @@ The Jobs API scan calls each workspace's public API from serverless compute in t
 
 `--drop-schema` asks you to type the schema name first. Without it, the schema and its history stay.
 
-It drops the four Watchdog tables and the `findings_latest` view. If the schema holds any other table or view, the script stops before changing anything. If the script refuses, check that the schema holds only Watchdog objects, then drop it by hand in the SQL editor. This deletes the findings history:
+It drops the five Watchdog tables and the `findings_latest` view. If the schema holds any other table or view, the script stops before changing anything. If the script refuses, check that the schema holds only Watchdog objects, then drop it by hand in the SQL editor. This deletes the findings history:
 
 ```sql
 DROP SCHEMA <catalog>.<schema> CASCADE

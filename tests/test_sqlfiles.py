@@ -11,9 +11,11 @@ EXPECTED_FILES = [
     "sql/setup/03_create_job_dependencies.sql",
     "sql/setup/04_create_findings.sql",
     "sql/setup/05_create_monitored_workspaces.sql",
+    "sql/setup/06_create_monitored_job_environments.sql",
     "sql/config/01_load_monitored_jobs.sql",
     "sql/config/02_load_job_dependencies.sql",
     "sql/config/03_load_monitored_workspaces.sql",
+    "sql/config/04_load_monitored_job_environments.sql",
     "sql/explore/10_workspaces_in_region.sql",
     "sql/explore/11_workspace_names.sql",
     "sql/explore/12_job_inventory.sql",
@@ -36,7 +38,7 @@ ALL_SQL = sorted(
     for p in (repo_root() / "sql").rglob("*.sql")
     if not p.relative_to(repo_root()).as_posix().startswith("sql/views/")
 )
-WATCHDOG_TABLES = ("monitored_jobs", "job_dependencies", "findings", "monitored_workspaces")
+WATCHDOG_TABLES = ("monitored_jobs", "job_dependencies", "findings", "monitored_workspaces", "monitored_job_environments")
 
 
 class FakeSpark:
@@ -153,7 +155,7 @@ def test_open_runs_are_measured_to_their_newest_system_table_record():
 
 def test_scan_skips_names_matching_the_exclude_regex():
     exp, ctes = _scan_ctes()
-    calls = [call for call in ctes["matched"].find_all(exp.RegexpLike)]
+    calls = [call for call in ctes["regex_matched"].find_all(exp.RegexpLike)]
     assert {call.expression.name for call in calls} >= {"job_name_regex", "job_name_exclude_regex"}
     assert any(isinstance(call.parent, exp.Not) for call in calls)
 
@@ -208,3 +210,23 @@ def test_scan_reads_pipeline_url_from_the_runs_job_parameters():
     text = load_sql("sql/scan/21_system_table_findings.sql")
     assert "try_element_at(try_element_at(c.job_parameters, :pipeline_url_parameter), 'value')" in text
     assert "pipeline_url_parameter" in parameters(text)
+
+
+def test_scan_applies_environment_overrides_and_reports_jobs_switched_off_everywhere():
+    exp, ctes = _scan_ctes()
+    assert "monitored_job_environments" in {t.name for t in ctes["overrides"].find_all(exp.Table)}
+    assert {"regex_matched", "overrides"} <= {t.name for t in ctes["matched"].find_all(exp.Table)}
+    text = load_sql("sql/scan/21_system_table_findings.sql")
+    assert "coalesce(o.enabled, r.enabled)" in text
+    assert "switched off" in text
+
+
+def test_resolve_query_shows_each_matches_environment_and_whether_it_is_checked():
+    sqlglot = pytest.importorskip("sqlglot")
+    tree = sqlglot.parse_one(for_parsing(load_sql("sql/scan/20_resolve_monitored_jobs.sql")), read="databricks")
+    assert {"environment", "checked_here"} <= set(tree.named_selects)
+
+
+def test_validation_counts_jobs_switched_on_in_any_environment():
+    text = load_sql("sql/validate/42_enabled_jobs_without_findings.sql")
+    assert "monitored_job_environments" in text and "o.enabled" in text

@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema || '.monitored_
   enabled BOOLEAN NOT NULL COMMENT 'false keeps the entry without checking it',
   notes STRING,
   loaded_at TIMESTAMP NOT NULL COMMENT 'When this row was loaded from the YAML file',
-  job_name_exclude_regex STRING COMMENT 'Job names matching this are skipped, for example test copies'
+  job_name_exclude_regex STRING COMMENT 'Job names matching this are skipped, for example test copies',
+  min_attempt_minutes INT COMMENT 'A task attempt that ran shorter than this before a retry counts as a retry loop'
 )
 COMMENT 'Watchdog config: jobs to check'

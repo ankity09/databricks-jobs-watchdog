@@ -102,7 +102,7 @@ def test_teardown_accepts_exactly_the_objects_notebook_01_creates():
     from jobs_watchdog.upgrade import watchdog_objects
 
     text = (repo_root() / "teardown.sh").read_text()
-    listed = set(re.search(r"watchdog = \{([^}]*)\}", text).group(1).replace('"', "").replace(" ", "").split(","))
+    listed = set(re.findall(r'"(\w+)"', re.search(r"watchdog = \{([^}]*)\}", text).group(1)))
     assert listed == set(watchdog_objects())
 
 

@@ -244,3 +244,97 @@ def test_workspace_names_differing_only_in_case_are_listed_twice(tmp_path):
     path = write(tmp_path, "jobs:" + VALID_JOB + "workspaces:\n" + entries)
     with pytest.raises(ConfigError, match="listed twice"):
         load_monitored_workspaces(path)
+
+
+ENVIRONMENTS = """
+defaults:
+  schedule_type: scheduled
+  severity: WARNING
+  owner: data-platform
+  job_name_exclude_regex: "_test(_|$)"
+  max_gap_minutes: 120
+workspaces:
+  - workspace_name: prod-workspace
+    environment: production
+  - workspace_name: dev-workspace
+    environment: lower
+jobs:
+  - job_name: orders_ingest
+    job_name_regex: "^orders_ingest_(prod|dev)$"
+    schedule_type: continuous
+    severity: CRITICAL
+    max_retries: 3
+    min_attempt_minutes: 10
+    environments:
+      lower: {severity: WARNING, enabled: false}
+  - job_name: orders_enrich
+    job_name_regex: "^orders_enrich_(prod|dev)$"
+    enabled: false
+    environments:
+      production: {enabled: true, max_gap_minutes: 90, owner: enrich-team}
+"""
+
+
+def test_defaults_fill_every_key_a_job_leaves_out(tmp_path):
+    jobs, _ = load_monitored_jobs(write(tmp_path, ENVIRONMENTS))
+    ingest, enrich = jobs
+    assert (ingest.severity, ingest.owner, ingest.job_name_exclude_regex) == ("CRITICAL", "data-platform", "_test(_|$)")
+    assert ingest.schedule_type == "continuous"
+    assert (enrich.schedule_type, enrich.max_gap_minutes, enrich.severity) == ("scheduled", 120, "WARNING")
+
+
+def test_min_attempt_minutes_loads(tmp_path):
+    jobs, _ = load_monitored_jobs(write(tmp_path, ENVIRONMENTS))
+    assert jobs[0].min_attempt_minutes == 10 and jobs[1].min_attempt_minutes is None
+
+
+def test_environment_overrides_apply_only_in_their_environment(tmp_path):
+    ingest, enrich = load_monitored_jobs(write(tmp_path, ENVIRONMENTS))[0]
+    lower = ingest.settings_for("lower")
+    assert (lower.severity, lower.enabled, lower.max_retries) == ("WARNING", False, 3)
+    assert ingest.settings_for("production") == ingest
+    assert ingest.settings_for(None) == ingest
+    production = enrich.settings_for("production")
+    assert (production.enabled, production.max_gap_minutes, production.owner) == (True, 90, "enrich-team")
+    assert enrich.settings_for("lower").enabled is False
+
+
+def test_a_job_is_active_when_any_environment_switches_it_on(tmp_path):
+    ingest, enrich = load_monitored_jobs(write(tmp_path, ENVIRONMENTS))[0]
+    assert ingest.active and enrich.active
+    assert not enrich.enabled
+
+
+def test_environment_labels_must_be_defined_in_workspaces(tmp_path):
+    text = ENVIRONMENTS.replace("lower: {severity: WARNING, enabled: false}", "staging: {enabled: false}")
+    with pytest.raises(ConfigError, match="staging.*workspaces"):
+        load_monitored_jobs(write(tmp_path, text))
+
+
+@pytest.mark.parametrize(
+    "override,message",
+    [
+        ("lower: {severity: LOUD}", "severity"),
+        ("lower: {max_retries: -1}", "max_retries"),
+        ("lower: {enabled: \"no\"}", "enabled"),
+        ("lower: {colour: red}", "colour"),
+        ("lower: warning", "mapping"),
+    ],
+)
+def test_bad_environment_overrides_are_rejected(tmp_path, override, message):
+    text = ENVIRONMENTS.replace("lower: {severity: WARNING, enabled: false}", override)
+    with pytest.raises(ConfigError, match=message):
+        load_monitored_jobs(write(tmp_path, text))
+
+
+def test_unknown_keys_in_a_job_or_defaults_are_rejected(tmp_path):
+    with pytest.raises(ConfigError, match="enviroments"):
+        load_monitored_jobs(write(tmp_path, ENVIRONMENTS.replace("    environments:\n      lower", "    enviroments:\n      lower")))
+    with pytest.raises(ConfigError, match="defaults.*severty"):
+        load_monitored_jobs(write(tmp_path, ENVIRONMENTS.replace("  severity: WARNING\n  owner", "  severty: WARNING\n  owner")))
+
+
+def test_defaults_cannot_set_names_or_patterns(tmp_path):
+    text = ENVIRONMENTS.replace("defaults:\n", "defaults:\n  job_name_regex: \"x\"\n")
+    with pytest.raises(ConfigError, match="defaults.*job_name_regex"):
+        load_monitored_jobs(write(tmp_path, text))

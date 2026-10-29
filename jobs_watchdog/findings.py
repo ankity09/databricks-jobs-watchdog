@@ -86,6 +86,8 @@ def finalize_rows(rows, scan_id, observed_at, region, account_id, jobs, dependen
     complete = []
     for row in rows:
         job = by_name.get(row["job_name"])
+        if job is not None:
+            job = job.settings_for(row.get("environment"))
         status = row["status"]
         summary = row.get("error_summary")
         filled = dict(

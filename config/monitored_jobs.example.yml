@@ -4,119 +4,160 @@
 # a Unity Catalog volume), replace the examples with your own jobs, and point
 # scan.monitored_jobs_path (or the notebook's monitored_jobs_path widget) at it.
 #
-# jobs:
-# job_name          a short logical name used in findings and alerts
-# job_name_regex    matches the job's real name in each workspace, for example
-#                   ^orders_ingest_(dev|prod)$ when environments add a suffix
-# job_name_exclude_regex  optional; a job whose real name matches this regex is
-#                   skipped, even if job_name_regex matches it. Like job_name_regex,
-#                   it matches anywhere in the name unless anchored with ^ and $.
-# schedule_type     continuous or scheduled
-# max_gap_minutes   scheduled jobs: longest allowed gap between run starts
-# max_runtime_minutes  longest allowed run before a warning
-# max_retries       a task retried more times than this is a retry loop; set it
-#                   below the job's own retry limit so you hear before it gives up
-# severity          CRITICAL or WARNING, used when the job is not healthy
-# owner             team or person to route findings to
-# enabled           false keeps the entry without checking it
-# notes             free text for the people who read this file
+# One entry covers one job everywhere it runs. When the same job is deployed to
+# several workspaces, each copy with its own job ID, job_name_regex finds the
+# copy in each workspace, and every finding says which workspace and job ID it
+# is about. You never list job IDs.
 #
-# dependencies:     job_name depends on depends_on. dependency_type is job or child_job
-#                   for another monitored job, or service for something else the job
-#                   needs, such as a message broker (free text). When a monitored job
-#                   fails, affected_jobs lists the jobs that depend on it.
+# The file has four sections. Only jobs is required.
 #
-# workspaces:       optional, top level: an environment label for each workspace.
-#                   Give workspace_id or workspace_name, then environment (a label such
-#                   as production or lower) and optional notes. Uncomment to use:
-# workspaces:
-#   - workspace_id: "1111111111111111"
-#     environment: production
-#     notes: Orders and billing jobs
-#   - workspace_name: example-lower-workspace
-#     environment: lower
+# defaults:      settings every job gets unless it sets its own: any job setting
+#                except job_name, job_name_regex and environments.
+#
+# workspaces:    an environment label for each workspace, such as production or
+#                lower, by workspace_id or workspace_name, with optional notes.
+#                Every finding carries the label, and a job's environments
+#                section can change its settings for one label. A Watchdog sees
+#                only the workspaces in its own region and ignores entries for
+#                other regions. A job that runs in no workspace of its region gets
+#                a not_found row, so give each region its own file when the
+#                regions run different jobs.
+#
+# jobs:          one entry per job to watch, with these settings:
+#   job_name          a short logical name used in findings and alerts; unique
+#   job_name_regex    matches the job's real name in each workspace. It matches
+#                     anywhere in the name unless anchored with ^ and $.
+#   job_name_exclude_regex  real names matching this are skipped, for example
+#                     test copies with "_test(_|$)". A bare "test" would also skip
+#                     names such as daily_revenue_report_latest.
+#   schedule_type     continuous or scheduled
+#   max_gap_minutes   scheduled jobs: longest allowed gap between run starts
+#   max_runtime_minutes  longest allowed run before a warning
+#   max_retries       a task retried more times than this is a retry loop; set it
+#                     below the job's own retry limit so you hear before it gives up
+#   min_attempt_minutes  a task attempt shorter than this that was then retried
+#                     is also a retry loop: the task fails fast and restarts
+#   severity          CRITICAL or WARNING, used when the job is not healthy
+#   owner             team or person to route findings to
+#   enabled           false keeps the entry without checking it
+#   notes             free text for the people who read this file
+#   environments      settings for one environment label, for example
+#                     lower: {severity: WARNING} or lower: {enabled: false}. It can
+#                     set severity, owner, enabled, max_gap_minutes,
+#                     max_runtime_minutes, max_retries and min_attempt_minutes.
+#                     Each label must be defined in the workspaces section.
+#
+# dependencies:  job_name depends on depends_on. dependency_type is job (another
+#                monitored job), child_job (a monitored job that the depends_on
+#                job starts) or service (anything else the job needs, such as a
+#                message broker; any name). Dependencies are between job names,
+#                so they apply in every workspace where the jobs run. When a job
+#                fails, affected_jobs lists the jobs that depend on it.
+
+defaults:
+  schedule_type: scheduled
+  severity: WARNING
+  owner: platform-team
+  job_name_exclude_regex: "_test(_|$)"  # skips test copies such as orders_ingest_test_prod
+
+workspaces:
+  # Placeholders: replace them with your own workspace names or IDs.
+  - workspace_name: example-prod
+    environment: production
+  - workspace_name: example-prod-eu
+    environment: production
+    notes: Production in a second region; that region runs its own Watchdog
+  - workspace_name: example-staging
+    environment: lower
+  - workspace_id: "1111111111111111"
+    environment: lower
+    notes: Development, given by workspace ID instead of name
 
 jobs:
   # The demo jobs are created by the bundle's demo target, so a new deployment
   # shows a healthy job, a failing job, a slow job and a retrying job at once.
   - job_name: watchdog_demo_succeeds
     job_name_regex: "watchdog_demo_succeeds"
-    schedule_type: scheduled
     max_gap_minutes: 1440
     max_runtime_minutes: 30
     max_retries: 1
-    severity: WARNING
-    owner: platform-team
-    enabled: true
     notes: Sample job from the demo target; succeeds every run.
 
   - job_name: watchdog_demo_fails
     job_name_regex: "watchdog_demo_fails"
-    schedule_type: scheduled
     max_gap_minutes: 1440
     max_runtime_minutes: 30
     max_retries: 1
     severity: CRITICAL
-    owner: platform-team
-    enabled: true
     notes: Sample job from the demo target; fails on purpose.
 
   - job_name: watchdog_demo_slow
     job_name_regex: "watchdog_demo_slow"
-    schedule_type: scheduled
     max_gap_minutes: 300
     max_runtime_minutes: 1
     max_retries: 1
-    severity: WARNING
-    owner: platform-team
-    enabled: true
     notes: Sample job from the demo target; runs about three minutes, so it warns for long runtime.
 
   - job_name: watchdog_demo_retries
     job_name_regex: "watchdog_demo_retries"
-    schedule_type: scheduled
     max_gap_minutes: 420
     max_runtime_minutes: 30
     max_retries: 1
-    severity: WARNING
-    owner: platform-team
-    enabled: true
     notes: Sample job from the demo target; its task retries twice, so it warns for a retry loop.
 
-  # Illustrative entries showing a small pipeline. Enable and edit them, or
-  # replace them with your own jobs.
+  # An illustrative pipeline, switched off. Its jobs are named
+  # <family>[_<variant>][_<region>]_<environment>, for example orders_ingest_prod,
+  # orders_ingest_eu_prod and orders_ingest_dev, and every workspace has its own
+  # copy with its own job ID. Test copies such as orders_ingest_test_prod are
+  # skipped by the defaults. Enable and edit these, or replace them with your
+  # own jobs.
   - job_name: orders_ingest
-    job_name_regex: "^orders_ingest(_[a-z0-9]+)?$"
+    # (_[a-z]+)? allows one word before the environment, such as a region in
+    # orders_ingest_eu_prod. It also matches orders_ingest_test_prod, which the
+    # default exclude skips. Listing the words, as orders_enrich does, is stricter.
+    job_name_regex: "^orders_ingest(_[a-z]+)?_(prod|dev)$"
     schedule_type: continuous
     # no max_runtime_minutes: a streaming run is meant to keep going
     max_retries: 3
+    min_attempt_minutes: 10  # a task that restarts within 10 minutes of starting is a retry loop
     severity: CRITICAL
     owner: ingestion-team
     enabled: false
     notes: Continuous ingestion; everything downstream depends on it.
+    environments:
+      lower: {severity: WARNING}  # checked in lower environments too, but never CRITICAL there
 
   - job_name: orders_enrich
-    job_name_regex: "^orders_enrich(_[a-z0-9]+)?$"
-    schedule_type: scheduled
+    # One entry covers both variants, orders_enrich_web_* and orders_enrich_mobile_*,
+    # because they share settings. Give a variant its own entry when it needs other settings.
+    job_name_regex: "^orders_enrich_(web|mobile)(_(eu|us))?_(prod|dev)$"
     max_gap_minutes: 90
     max_runtime_minutes: 45
     max_retries: 2
-    severity: WARNING
     owner: ingestion-team
     enabled: false
-    notes: Runs hourly.
+    notes: Runs hourly, once per variant.
+    environments:
+      lower: {enabled: false}  # production only for now
 
   - job_name: daily_revenue_report
-    job_name_regex: "^daily_revenue_report(_[a-z0-9]+)?$"
-    job_name_exclude_regex: "_test(_|$)"  # skips test copies such as daily_revenue_report_test, keeps ..._latest
-    schedule_type: scheduled
+    job_name_regex: "^daily_revenue_report(_(eu|us))?_(prod|dev)$"
     max_gap_minutes: 1500
     max_runtime_minutes: 120
     max_retries: 1
-    severity: WARNING
     owner: analytics-team
     enabled: false
-    notes: Runs once a day.
+    notes: Runs once a day, then starts daily_revenue_export.
+    environments:
+      lower: {max_gap_minutes: 4500, owner: analytics-dev}  # lower environments run it every few days
+
+  - job_name: daily_revenue_export
+    job_name_regex: "^daily_revenue_export(_(eu|us))?_(prod|dev)$"
+    max_gap_minutes: 1500
+    max_runtime_minutes: 30
+    owner: analytics-team
+    enabled: false
+    notes: Has no schedule of its own; daily_revenue_report starts it with a Run Job task.
 
 dependencies:
   # Demo: when watchdog_demo_fails fails, affected_jobs lists watchdog_demo_succeeds.
@@ -129,11 +170,19 @@ dependencies:
   - job_name: daily_revenue_report
     depends_on: orders_enrich
     dependency_type: job
+  - job_name: daily_revenue_export
+    depends_on: daily_revenue_report
+    dependency_type: child_job
+    notes: daily_revenue_report starts it as its last task.
   - job_name: orders_ingest
     depends_on: kafka
     dependency_type: service
-    notes: Reads events from Kafka.
+    notes: Reads order events from Kafka.
   - job_name: orders_enrich
     depends_on: config_api
     dependency_type: service
     notes: Looks up customer settings from a config service.
+  - job_name: daily_revenue_export
+    depends_on: object_storage
+    dependency_type: service
+    notes: Writes the export files to a storage bucket.

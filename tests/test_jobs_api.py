@@ -10,7 +10,8 @@ NOW = datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc)
 TARGET = Target(workspace_id="1001", workspace_name="analytics", host=None)
 
 
-def monitored(name="orders", regex="orders", max_runtime=60, max_retries=1, enabled=True, exclude=None):
+def monitored(name="orders", regex="orders", max_runtime=60, max_retries=1, enabled=True, exclude=None,
+              min_attempt=None, environments=None):
     return MonitoredJob(
         job_name=name,
         job_name_regex=regex,
@@ -23,6 +24,8 @@ def monitored(name="orders", regex="orders", max_runtime=60, max_retries=1, enab
         enabled=enabled,
         notes="",
         job_name_exclude_regex=exclude,
+        min_attempt_minutes=min_attempt,
+        environments=environments or {},
     )
 
 
@@ -30,12 +33,15 @@ def ms(moment):
     return int(moment.timestamp() * 1000)
 
 
-def task(key, life_cycle, result=None, run_id=None, attempt=0, message="", termination_type=None):
+def task(key, life_cycle, result=None, run_id=None, attempt=0, message="", termination_type=None,
+         started_minutes_ago=None, ended_minutes_ago=None):
     details = NS(type=termination_type, code=None, message=None) if termination_type else None
     return NS(
         task_key=key,
         run_id=run_id,
         attempt_number=attempt,
+        start_time=None if started_minutes_ago is None else ms(NOW - timedelta(minutes=started_minutes_ago)),
+        end_time=None if ended_minutes_ago is None else ms(NOW - timedelta(minutes=ended_minutes_ago)),
         state=NS(life_cycle_state=life_cycle, result_state=result, state_message=message),
         status=NS(termination_details=details),
     )
@@ -455,3 +461,49 @@ def test_pipeline_url_is_empty_without_the_parameter_or_when_switched_off():
     client = FakeClient(jobs=[(1, "orders")], runs={1: [run(11, "TERMINATED", "SUCCESS", parameters=params)]})
     row = by_check(collect_target(client, TARGET, [monitored()], NOW, pipeline_url_parameter=""))["live_run_status"]
     assert row["pipeline_url"] is None
+
+
+def test_an_environment_can_switch_a_job_off_in_its_workspaces():
+    job = monitored(environments={"lower": {"enabled": False}})
+    client = FakeClient(jobs=[(1, "orders")], runs={1: [run(11, "TERMINATED", "SUCCESS")]})
+    assert collect_target(client, Target("1001", None, None, "lower"), [job], NOW) == []
+    assert collect_target(client, Target("1001", None, None, "production"), [job], NOW)
+
+
+def test_an_environment_can_change_a_jobs_limits():
+    job = monitored(max_runtime=60, environments={"lower": {"max_runtime_minutes": 5}})
+    client = FakeClient(jobs=[(1, "orders")], runs={1: [run(11, "RUNNING", minutes_ago=10)]})
+    lower = by_check(collect_target(client, Target("1001", None, None, "lower"), [job], NOW))
+    production = by_check(collect_target(client, Target("1001", None, None, "production"), [job], NOW))
+    assert lower["live_long_runtime"]["status"] == "WARNING"
+    assert production["live_long_runtime"]["status"] == "HEALTHY"
+
+
+def test_a_task_retried_after_a_short_attempt_is_a_retry_loop():
+    retried = run(11, "RUNNING", tasks=[
+        task("ingest", "TERMINATED", "FAILED", run_id=112, attempt=0, started_minutes_ago=6, ended_minutes_ago=4),
+        task("ingest", "RUNNING", run_id=113, attempt=1, started_minutes_ago=3),
+    ])
+    client = FakeClient(jobs=[(1, "orders")], runs={1: [retried]})
+    row = by_check(collect_target(client, TARGET, [monitored(max_retries=3, min_attempt=10)], NOW))["retry_loop"]
+    assert row["status"] == "WARNING"
+    assert row["failed_task_keys"] == ["ingest"]
+    assert "shorter than 10 minutes" in row["error_summary"]
+
+
+def test_a_task_retried_after_a_long_attempt_is_fine():
+    retried = run(11, "RUNNING", tasks=[
+        task("ingest", "TERMINATED", "FAILED", run_id=112, attempt=0, started_minutes_ago=40, ended_minutes_ago=20),
+        task("ingest", "RUNNING", run_id=113, attempt=1, started_minutes_ago=19),
+    ])
+    client = FakeClient(jobs=[(1, "orders")], runs={1: [retried]})
+    row = by_check(collect_target(client, TARGET, [monitored(max_retries=3, min_attempt=10)], NOW))["retry_loop"]
+    assert row["status"] == "HEALTHY"
+
+
+def test_merge_not_found_reports_a_job_no_workspace_checked():
+    job = monitored("orders", "^orders$", environments={"lower": {"enabled": False}})
+    rows = merge_not_found([], [job])
+    assert [(r["job_name"], r["check_id"], r["status"], r["workspace_id"]) for r in rows] == [
+        ("orders", "not_found", "UNKNOWN", None)]
+    assert "switched off" in rows[0]["error_summary"]

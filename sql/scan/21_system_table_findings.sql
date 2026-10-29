@@ -19,16 +19,30 @@
 -- System tables run about an hour behind, so a job created in the last hour
 -- is not_found here while the Jobs API scan (notebook 06) already sees it.
 -- Job names matching a job's job_name_exclude_regex (for example test copies)
--- are skipped. Each row also carries the environment label of its workspace
+-- are skipped. A job's environments section (monitored_job_environments) can
+-- switch it off, or change its limits, severity and owner, in one environment;
+-- a job found only where it is switched off still gets a not_found row. Each
+-- row also carries the environment label of its workspace
 -- (monitored_workspaces), when and how the run it is about started, the job
 -- tags, the code version (the value of the job tag named :code_version_tag),
 -- and the CI pipeline link (the run's job parameter named :pipeline_url_parameter).
 -- Parameters: :catalog, :schema, :region, :lookback_hours, :scan_id, :code_version_tag, :pipeline_url_parameter
 WITH monitored AS (
+  -- every configured job; whether it is checked is decided per environment below
   SELECT job_name, job_name_regex, job_name_exclude_regex, schedule_type, max_gap_minutes, max_runtime_minutes,
-         severity, owner
+         severity, owner, enabled
   FROM IDENTIFIER(:catalog || '.' || :schema || '.monitored_jobs')
-  WHERE enabled
+),
+overrides AS (
+  -- per-environment settings from the environments sections of the job list
+  SELECT job_name, environment, severity, owner, enabled, max_gap_minutes, max_runtime_minutes
+  FROM IDENTIFIER(:catalog || '.' || :schema || '.monitored_job_environments')
+),
+active AS (
+  -- jobs switched on in at least one environment
+  SELECT m.job_name, m.job_name_regex
+  FROM monitored m
+  WHERE m.enabled OR EXISTS (SELECT 1 FROM overrides o WHERE o.job_name = m.job_name AND o.enabled)
 ),
 dependents AS (
   -- the jobs that directly depend on each job, listed on its FAILED rows
@@ -54,22 +68,47 @@ environments AS (
   LEFT JOIN IDENTIFIER(:catalog || '.' || :schema || '.monitored_workspaces') by_name
     ON by_name.workspace_id IS NULL AND lower(by_name.workspace_name) = lower(n.workspace_name)
 ),
-matched AS (
+regex_matched AS (
+  -- every job in the region a monitored job's patterns match, with its workspace's environment
   SELECT
     m.job_name,
     m.schedule_type,
     m.max_gap_minutes,
     m.max_runtime_minutes,
     m.severity,
+    m.enabled,
     j.account_id,
     j.workspace_id,
     j.job_id,
     j.paused,
-    j.tags
+    j.tags,
+    e.environment
   FROM monitored m
   JOIN latest_jobs j
     ON regexp_like(j.name, m.job_name_regex)
     AND (m.job_name_exclude_regex IS NULL OR NOT regexp_like(j.name, m.job_name_exclude_regex))
+  LEFT JOIN environments e ON e.workspace_id = j.workspace_id
+),
+matched AS (
+  -- the matches switched on in their environment, with that environment's settings
+  SELECT
+    r.job_name,
+    r.schedule_type,
+    coalesce(o.max_gap_minutes, r.max_gap_minutes) AS max_gap_minutes,
+    coalesce(o.max_runtime_minutes, r.max_runtime_minutes) AS max_runtime_minutes,
+    coalesce(o.severity, r.severity) AS severity,
+    r.account_id,
+    r.workspace_id,
+    r.job_id,
+    r.paused,
+    r.tags
+  FROM regex_matched r
+  LEFT JOIN overrides o ON o.job_name = r.job_name AND o.environment = r.environment
+  WHERE coalesce(o.enabled, r.enabled)
+),
+switched_off AS (
+  -- monitored jobs found in the region only where they are switched off
+  SELECT DISTINCT job_name FROM regex_matched
 ),
 runs AS (
   -- one row per run; a run longer than an hour spans several timeline rows,
@@ -347,7 +386,7 @@ checks AS (
   UNION ALL
 
   SELECT
-    m.job_name,
+    a.job_name,
     (SELECT MAX(account_id) FROM latest_jobs),
     CAST(NULL AS STRING),
     CAST(NULL AS STRING),
@@ -356,17 +395,23 @@ checks AS (
     CAST(NULL AS STRING),
     CAST(NULL AS STRING),
     CAST(NULL AS ARRAY<STRING>),
-    format_string(
-      'No job in the system tables for this region matches %s. A new job takes about an hour to appear.',
-      m.job_name_regex),
+    CASE
+      WHEN s.job_name IS NOT NULL THEN format_string(
+        'Every job in this region that matches %s is in an environment where this job is switched off.',
+        a.job_name_regex)
+      ELSE format_string(
+        'No job in the system tables for this region matches %s. A new job takes about an hour to appear.',
+        a.job_name_regex)
+    END,
     CAST(NULL AS MAP<STRING, STRING>),
     CAST(NULL AS TIMESTAMP),
     CAST(NULL AS TIMESTAMP),
     CAST(NULL AS BIGINT),
     CAST(NULL AS STRING),
     CAST(NULL AS MAP<STRING, MAP<STRING, STRING>>)
-  FROM monitored m
-  WHERE NOT EXISTS (SELECT 1 FROM matched mt WHERE mt.job_name = m.job_name)
+  FROM active a
+  LEFT JOIN switched_off s ON s.job_name = a.job_name
+  WHERE NOT EXISTS (SELECT 1 FROM matched mt WHERE mt.job_name = a.job_name)
 )
 SELECT
   current_timestamp() AS observed_at,
@@ -379,7 +424,7 @@ SELECT
   c.job_name,
   c.check_id,
   c.status,
-  CASE WHEN c.status <> 'HEALTHY' THEN m.severity END AS severity,
+  CASE WHEN c.status <> 'HEALTHY' THEN coalesce(so.severity, m.severity) END AS severity,
   CASE
     WHEN c.status = 'HEALTHY' THEN 'NONE'
     WHEN c.status = 'UNKNOWN' THEN 'COVERAGE'
@@ -398,7 +443,7 @@ SELECT
   CASE
     WHEN c.status = 'FAILED' THEN coalesce(d.affected_jobs, CAST(array() AS ARRAY<STRING>))
   END AS affected_jobs,
-  m.owner,
+  coalesce(so.owner, m.owner) AS owner,
   'SYSTEM_TABLES' AS source,
   e.environment,
   m.schedule_type,
@@ -433,3 +478,4 @@ JOIN monitored m ON m.job_name = c.job_name
 LEFT JOIN dependents d ON d.job_name = c.job_name
 LEFT JOIN watchdog_workspace_names w ON w.workspace_id = c.workspace_id
 LEFT JOIN environments e ON e.workspace_id = c.workspace_id
+LEFT JOIN overrides so ON so.job_name = c.job_name AND so.environment = e.environment

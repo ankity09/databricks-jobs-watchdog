@@ -226,3 +226,12 @@ def test_custom_rows_keep_their_owner_unless_the_name_is_a_configured_job():
            "source": "CUSTOM"}
     assert finalize([row])[0]["owner"] == "platform"
     assert finalize([dict(row, job_name="orders_enrich")])[0]["owner"] == "enrich-team"
+
+
+def test_environment_overrides_set_severity_and_owner_on_findings():
+    jobs = [MonitoredJob("orders_ingest", "^orders_ingest$", "scheduled", 90, 60, 1, "CRITICAL", "data-team", True, "",
+                         environments={"lower": {"severity": "WARNING", "owner": "lower-team"}})]
+    lower = dict(api_row("orders_ingest", "FAILED"), environment="lower")
+    production = dict(api_row("orders_ingest", "FAILED"), environment="production")
+    rows = finalize_rows([lower, production], "s", NOW, "r", "acct", jobs, DEPENDENCIES)
+    assert [(r["severity"], r["owner"]) for r in rows] == [("WARNING", "lower-team"), ("CRITICAL", "data-team")]

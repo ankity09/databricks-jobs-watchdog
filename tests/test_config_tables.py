@@ -4,6 +4,8 @@ from jobs_watchdog.config_tables import (
     DEPENDENCY_COLUMNS,
     JOB_COLUMNS,
     JOBS_VIEW,
+    ENVIRONMENT_COLUMNS,
+    ENVIRONMENTS_VIEW,
     WORKSPACE_COLUMNS,
     WORKSPACES_VIEW,
     read_config,
@@ -13,7 +15,8 @@ from jobs_watchdog.config_tables import (
 from jobs_watchdog.sqlfiles import load_sql
 from jobs_watchdog.upgrade import ddl_columns
 
-JOB = MonitoredJob("orders", "^orders$", "scheduled", 90, 60, 1, "CRITICAL", "data-team", True, "hourly", "test")
+JOB = MonitoredJob("orders", "^orders$", "scheduled", 90, 60, 1, "CRITICAL", "data-team", True, "hourly", "test", 10,
+                  {"lower": {"severity": "WARNING", "enabled": False}})
 DEP = Dependency("orders", "kafka", "service", "events")
 WS = MonitoredWorkspace("1234", None, "production", "main one")
 
@@ -26,11 +29,14 @@ def test_config_columns_match_the_table_ddl_without_loaded_at():
     assert without_loaded_at("sql/setup/02_create_monitored_jobs.sql") == list(JOB_COLUMNS)
     assert without_loaded_at("sql/setup/03_create_job_dependencies.sql") == list(DEPENDENCY_COLUMNS)
     assert without_loaded_at("sql/setup/05_create_monitored_workspaces.sql") == list(WORKSPACE_COLUMNS)
+    assert without_loaded_at("sql/setup/06_create_monitored_job_environments.sql") == list(ENVIRONMENT_COLUMNS)
 
 
 def test_load_files_select_columns_in_table_order():
     for load, setup in (("sql/config/01_load_monitored_jobs.sql", "sql/setup/02_create_monitored_jobs.sql"),
-                        ("sql/config/03_load_monitored_workspaces.sql", "sql/setup/05_create_monitored_workspaces.sql")):
+                        ("sql/config/03_load_monitored_workspaces.sql", "sql/setup/05_create_monitored_workspaces.sql"),
+                        ("sql/config/04_load_monitored_job_environments.sql",
+                         "sql/setup/06_create_monitored_job_environments.sql")):
         sqlglot = __import__("pytest").importorskip("sqlglot")
         from tests.helpers import for_parsing
 
@@ -67,21 +73,22 @@ def test_write_config_loads_the_views_then_the_tables():
     spark = FakeSpark()
     write_config(spark, [JOB], [DEP], "main", "watchdog", [WS])
     assert spark.views[JOBS_VIEW].data == [("orders", "^orders$", "scheduled", 90, 60, 1, "CRITICAL", "data-team",
-                                            True, "hourly", "test")]
+                                            True, "hourly", "test", 10)]
+    assert spark.views[ENVIRONMENTS_VIEW].data == [("orders", "lower", "WARNING", None, False, None, None, None, None)]
     assert spark.views[JOBS_VIEW].schema.startswith("job_name STRING, job_name_regex STRING")
     assert spark.views[DEPENDENCIES_VIEW].data == [("orders", "kafka", "service", "events")]
     assert spark.views[WORKSPACES_VIEW].data == [("1234", None, "production", "main one")]
     assert [("INSERT OVERWRITE" in text, args) for text, args in spark.calls] == [
-        (True, {"catalog": "main", "schema": "watchdog"})] * 3
-    assert [table in text for table, (text, _) in
-            zip(("monitored_jobs", "job_dependencies", "monitored_workspaces"), spark.calls)] == [True] * 3
+        (True, {"catalog": "main", "schema": "watchdog"})] * 4
+    tables = ("monitored_jobs", "job_dependencies", "monitored_workspaces", "monitored_job_environments")
+    assert [table in text for table, (text, _) in zip(tables, spark.calls)] == [True] * 4
 
 
 def test_write_config_without_workspaces_empties_that_table():
     spark = FakeSpark()
     write_config(spark, [JOB], [DEP], "main", "watchdog")
     assert spark.views[WORKSPACES_VIEW].data == []
-    assert len(spark.calls) == 3
+    assert len(spark.calls) == 4
 
 
 def test_read_config_rebuilds_jobs_and_dependencies():
@@ -89,9 +96,14 @@ def test_read_config_rebuilds_jobs_and_dependencies():
                                                                        "notes": None}
     dep_row = {"job_name": "orders", "depends_on": "kafka", "dependency_type": "service", "notes": None,
                "loaded_at": None}
-    spark = FakeSpark({"main.watchdog.monitored_jobs": [job_row], "main.watchdog.job_dependencies": [dep_row]})
+    env_row = {"job_name": "orders", "environment": "lower", "severity": "WARNING", "owner": None, "enabled": False,
+               "max_gap_minutes": None, "max_runtime_minutes": None, "max_retries": None, "min_attempt_minutes": None,
+               "loaded_at": None}
+    spark = FakeSpark({"main.watchdog.monitored_jobs": [job_row], "main.watchdog.job_dependencies": [dep_row],
+                       "main.watchdog.monitored_job_environments": [env_row]})
     jobs, deps = read_config(spark, "main", "watchdog")
-    assert jobs == [MonitoredJob("orders", "^orders$", "scheduled", 90, 60, 1, "CRITICAL", "", True, "", "test")]
+    assert jobs == [MonitoredJob("orders", "^orders$", "scheduled", 90, 60, 1, "CRITICAL", "", True, "", "test", 10,
+                                 {"lower": {"severity": "WARNING", "enabled": False}})]
     assert deps == [Dependency("orders", "kafka", "service", "")]
 
 

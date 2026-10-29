@@ -11,7 +11,7 @@ The notebooks run these files with named parameters (`jobs_watchdog/sqlfiles.py`
 3. Fill in the fields, for example `catalog` = `main`, `schema` = `watchdog`, `lookback_hours` = `48`. Numbers can be typed as text; the queries cast them.
 4. Run it.
 
-Five files read a temp view that a notebook creates first (see the table below). Temp views live only in the session that created them, so those files run from their notebook, not on their own. To try `21_system_table_findings.sql` in the SQL editor, put these two statements in one query and run them together, and fill in `code_version_tag` (`code_version` by default) with the other parameters:
+Seven files read a temp view that a notebook creates first (see the table below). Temp views live only in the session that created them, so those files run from their notebook, not on their own. To try `21_system_table_findings.sql` (or `20_resolve_monitored_jobs.sql`) in the SQL editor, put these two statements in one query and run them together, and fill in `code_version_tag` (`code_version` by default) with the other parameters:
 
 ```sql
 CREATE OR REPLACE TEMPORARY VIEW watchdog_workspace_names AS
@@ -25,6 +25,8 @@ CREATE OR REPLACE TEMPORARY VIEW watchdog_workspace_names AS
 | `sql/config/01_load_monitored_jobs.sql` | `watchdog_config_jobs` | notebook 02 |
 | `sql/config/02_load_job_dependencies.sql` | `watchdog_config_dependencies` | notebook 02 |
 | `sql/config/03_load_monitored_workspaces.sql` | `watchdog_config_workspaces` | notebook 02 |
+| `sql/config/04_load_monitored_job_environments.sql` | `watchdog_config_environments` | notebook 02 |
+| `sql/scan/20_resolve_monitored_jobs.sql` | `watchdog_workspace_names` | notebook 02 (from `11_workspace_names.sql`) |
 | `sql/scan/21_system_table_findings.sql` | `watchdog_workspace_names` | notebooks 05 and 06 (from `11_workspace_names.sql`) |
 | `sql/scan/30_merge_findings.sql` | `watchdog_new_findings` | notebook 05 (system table rows), notebook 06 (Jobs API rows) and notebook 09 (custom rows) |
 
@@ -46,24 +48,26 @@ Run in order by notebook 01. Every statement is `IF NOT EXISTS`, so re-running c
 | `01_create_schema.sql` | `catalog`, `schema` | Creates the schema. Needs `USE CATALOG` and `CREATE SCHEMA` on the catalog. |
 | `02_create_monitored_jobs.sql` | `catalog`, `schema` | Creates `monitored_jobs`, the jobs to check. |
 | `03_create_job_dependencies.sql` | `catalog`, `schema` | Creates `job_dependencies`, what each job depends on. |
-| `04_create_findings.sql` | `catalog`, `schema` | Creates `findings`, the table both scans write. It has 28 columns. |
+| `04_create_findings.sql` | `catalog`, `schema` | Creates `findings`, the table both scans write. It has 29 columns. |
 | `05_create_monitored_workspaces.sql` | `catalog`, `schema` | Creates `monitored_workspaces`, the environment label for each workspace. |
+| `06_create_monitored_job_environments.sql` | `catalog`, `schema` | Creates `monitored_job_environments`, the settings each job changes in one environment. |
 
 ## sql/config
 
-Run by notebook 02, after it reads your monitored-jobs YAML file into three temp views.
+Run by notebook 02, after it reads your monitored-jobs YAML file into four temp views.
 
 | File | Parameters | What it does |
 |---|---|---|
 | `01_load_monitored_jobs.sql` | `catalog`, `schema` | Replaces every row of `monitored_jobs` with the rows of `watchdog_config_jobs`, stamping `loaded_at`. |
 | `02_load_job_dependencies.sql` | `catalog`, `schema` | Replaces every row of `job_dependencies` with the rows of `watchdog_config_dependencies`. |
 | `03_load_monitored_workspaces.sql` | `catalog`, `schema` | Replaces every row of `monitored_workspaces` with the rows of `watchdog_config_workspaces`. |
+| `04_load_monitored_job_environments.sql` | `catalog`, `schema` | Replaces every row of `monitored_job_environments` with the rows of `watchdog_config_environments` (one per job and environment label in the `environments` sections), stamping `loaded_at`. |
 
-All three use `INSERT OVERWRITE`, which keeps the table definition and column comments.
+All four use `INSERT OVERWRITE`, which keeps the table definition and column comments.
 
 ## sql/views
 
-Made current by notebook 01, after the tables are upgraded. Notebook 01 creates the view when it is missing, and replaces it only when its columns no longer match `findings`. A view that already matches is left alone, so its owner and grants stay.
+Made current by notebook 01, after the tables are upgraded. Notebook 01 creates the view when it is missing, and replaces it only when its columns no longer match `findings` or its definition version (the table property `watchdog.view_version`) differs from the file's. A view that is current is left alone, so its owner and grants stay.
 
 | File | Parameters | What it does |
 |---|---|---|
@@ -140,8 +144,9 @@ The newest finished run of every job.
 Which real jobs each monitored job matches. Notebook 02 shows it after loading the config.
 
 - **Parameters:** `catalog`, `schema`.
-- **Columns:** `job_name`, `enabled`, `job_name_regex`, `job_name_exclude_regex`, `workspace_id`, `job_id`, `matched_job_name`, `run_as`.
-- **Read it:** one row per monitored job and matching job. Names matching `job_name_exclude_regex` are left out, as the scans leave them out. A monitored job with empty workspace and job columns matches nothing, and the system table scan will report it as `not_found`. Fix its regex, or wait an hour if the job is new.
+- **Needs:** the temp view `watchdog_workspace_names`, which notebook 02 creates before it runs this query. Workspace labels by name need it.
+- **Columns:** `job_name`, `enabled`, `job_name_regex`, `job_name_exclude_regex`, `workspace_id`, `environment`, `checked_here`, `job_id`, `matched_job_name`, `run_as`.
+- **Read it:** one row per monitored job and matching job. Names matching `job_name_exclude_regex` are left out, as the scans leave them out. `environment` is the label of the match's workspace, and `checked_here` says whether the job is switched on there: its `enabled`, unless its `environments` section sets `enabled` for that label. A match with `checked_here` false gets no findings. A monitored job with empty workspace and job columns matches nothing, and the system table scan will report it as `not_found`. Fix its regex, or wait an hour if the job is new.
 
 ### 21_system_table_findings.sql
 
@@ -149,18 +154,19 @@ The system table checks, shaped as findings rows. Notebook 05 runs it, saves the
 
 - **Parameters:** `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `code_version_tag`, `pipeline_url_parameter`.
 - **Needs:** the temp view `watchdog_workspace_names`.
-- **Columns:** the 28 `findings` columns, in table order, with `source` = `SYSTEM_TABLES`. `triggered_by` is always empty here, because only the Jobs API knows who started a run.
-- **Read it:** one row per check for each workspace job a monitored job matches, plus one `not_found` row for each enabled job that matches nothing:
+- **Columns:** the 29 `findings` columns, in table order, with `source` = `SYSTEM_TABLES`. `triggered_by` is always empty here, because only the Jobs API knows who started a run.
+- **Read it:** one row per check for each workspace job a monitored job matches where the job is switched on, plus one `not_found` row for each job, switched on in at least one environment, that has no such match:
   - `last_run_result`: for scheduled jobs, the newest finished run in the window; for continuous jobs, the newest run, even while it runs (a healthy stream never finishes, so its last finished run is usually an old restart);
   - `task_failures`: tasks whose newest attempt failed, in the job's newest run;
   - `schedule_gap` (scheduled jobs): minutes since the newest run started, against `max_gap_minutes` plus 60 for system table lag; UNKNOWN when no run is in the window and the limit is longer than the window; the summary says so when the job is paused;
   - `long_runtime` (when `max_runtime_minutes` is set): runs still going and the newest finished run, measured up to their newest system table record, against the limit;
-  - `not_found`: no job in the region matches the regex.
+  - `not_found`: no job in the region matches the regex, or every match is in an environment where the job is switched off. The summary says which.
 
   [data-model.md](data-model.md#checks) lists the status each check gives.
 
 - **Exclusions:** a job whose name matches its `job_name_exclude_regex` is skipped, so it writes no rows.
 - **Environments:** `environment` comes from `monitored_workspaces`. An entry with the workspace's ID is used first. Otherwise an entry with no ID whose name matches the workspace name, ignoring case, is used.
+- **Overrides:** each match uses its environment's row in `monitored_job_environments`, when there is one: `enabled`, `max_gap_minutes`, `max_runtime_minutes`, `severity` and `owner`. An empty column there keeps the job's own setting. A match in an environment where the job is switched off writes no rows. A workspace with no label uses the job's own settings.
 - **Run timing and trigger:** `run_start_time`, `run_end_time` and `run_duration_seconds` describe the run each row is about, as explained in [Run timing](data-model.md#run-timing). When the first hourly slice of a run falls in the window's first hour, the run may have begun before the window, so `run_start_time` and `run_duration_seconds` are left empty. `trigger_type` uses the same mapping as the Jobs API scan, described in [trigger_type](data-model.md#trigger_type), and it maps `ONETIME_RETRY` to `RETRY`.
 - **Code version:** `code_version` is the value of the job tag named by `:code_version_tag` on the job's current definition, so it shows the version deployed now. It is empty when the job has no such tag. System table rows have no git commit to fall back on.
 - **Pipeline link:** `pipeline_url` comes from the run's `job_parameters` column, which holds `{name: {value, default}}`: the value of the parameter named by `:pipeline_url_parameter`, or its default.
@@ -194,4 +200,4 @@ Run by notebook 07. `:scan_id` works the same way in `40` and `42`: set it to ch
 
 - **Parameters:** `catalog`, `schema`, `scan_id`.
 - **Columns:** `job_name`, `source`.
-- **Read it:** expect no rows. The system table scan always writes `last_run_result` or `not_found` for an enabled job, and the Jobs API scan always writes `live_run_status`, `not_found` or `api_unreachable`. A row here names a job and the source that wrote nothing about it.
+- **Read it:** expect no rows. It checks every job switched on in at least one environment: `enabled: true`, or `enabled: true` for a label in its `environments` section. The system table scan always writes `last_run_result` or `not_found` for such a job, and the Jobs API scan always writes `live_run_status`, `not_found` or `api_unreachable`. A row here names a job and the source that wrote nothing about it.

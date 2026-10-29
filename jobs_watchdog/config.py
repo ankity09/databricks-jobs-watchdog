@@ -1,7 +1,7 @@
 """Load and validate accelerator.yaml and the monitored-jobs file."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import yaml
@@ -13,6 +13,17 @@ SEVERITIES = {"CRITICAL", "WARNING"}
 DEPENDENCY_TYPES = {"job", "child_job", "service"}
 AUTH_MODES = {"current_workspace", "service_principal"}
 ACCELERATOR_SECTIONS = ("metadata", "target", "auth", "scan", "resources", "features")
+
+# keys a job entry may set; defaults may set any of them except the names and patterns
+JOB_KEYS = {
+    "job_name", "job_name_regex", "job_name_exclude_regex", "schedule_type", "max_gap_minutes",
+    "max_runtime_minutes", "max_retries", "min_attempt_minutes", "severity", "owner", "enabled", "notes",
+    "environments",
+}
+DEFAULT_KEYS = JOB_KEYS - {"job_name", "job_name_regex", "environments"}
+# settings an environment can override for one job
+OVERRIDE_KEYS = ("severity", "owner", "enabled", "max_gap_minutes", "max_runtime_minutes", "max_retries",
+                 "min_attempt_minutes")
 
 
 class ConfigError(Exception):
@@ -32,6 +43,19 @@ class MonitoredJob:
     enabled: bool
     notes: str
     job_name_exclude_regex: str | None = None
+    min_attempt_minutes: int | None = None
+    # environment label -> {setting: value}, from the job's environments section
+    environments: dict = field(default_factory=dict, hash=False)
+
+    def settings_for(self, environment):
+        """This job with the overrides for one environment label applied."""
+        overrides = self.environments.get(environment) if environment else None
+        return replace(self, **overrides) if overrides else self
+
+    @property
+    def active(self):
+        """True when the job is checked in at least one environment."""
+        return self.enabled or any(o.get("enabled") for o in self.environments.values())
 
 
 @dataclass(frozen=True)
@@ -83,22 +107,80 @@ def _compiled(raw, name, field):
     return raw
 
 
-def _parse_job(raw):
+def _check_severity(value, where):
+    if value not in SEVERITIES:
+        raise ConfigError(f"{where}: severity must be one of {sorted(SEVERITIES)}, got {value!r}")
+    return value
+
+
+def _check_enabled(value, where):
+    if not isinstance(value, bool):
+        raise ConfigError(f"{where}: enabled must be true or false, got {value!r}")
+    return value
+
+
+def _parse_defaults(raw):
+    if raw in (None, {}):
+        return {}
+    if not isinstance(raw, dict):
+        raise ConfigError(f"defaults must be a mapping of job settings, got {raw!r}")
+    for key in raw:
+        if key in JOB_KEYS - DEFAULT_KEYS:
+            raise ConfigError(f"defaults cannot set {key}: set it on each job")
+    unknown = sorted(set(raw) - DEFAULT_KEYS)
+    if unknown:
+        raise ConfigError(f"defaults has unknown keys {unknown}; allowed: {sorted(DEFAULT_KEYS)}")
+    return dict(raw)
+
+
+def _parse_environments(raw, name, labels):
+    if raw in (None, {}):
+        return {}
+    if not isinstance(raw, dict):
+        raise ConfigError(f"job {name}: environments must be a mapping of environment label to settings")
+    parsed = {}
+    for label, overrides in raw.items():
+        label = str(label)
+        where = f"job {name}: environments.{label}"
+        if label not in labels:
+            defined = ", ".join(sorted(labels)) or "none defined"
+            raise ConfigError(f"job {name}: environment {label!r} is not a label in the workspaces section ({defined})")
+        if not isinstance(overrides, dict):
+            raise ConfigError(f"{where} must be a mapping such as {{severity: WARNING}}, got {overrides!r}")
+        unknown = sorted(set(overrides) - set(OVERRIDE_KEYS))
+        if unknown:
+            raise ConfigError(f"{where} has unknown keys {unknown}; allowed: {list(OVERRIDE_KEYS)}")
+        values = {}
+        for key, value in overrides.items():
+            if key == "severity":
+                values[key] = _check_severity(value, where)
+            elif key == "enabled":
+                values[key] = _check_enabled(value, where)
+            elif key == "owner":
+                values[key] = str(value or "")
+            else:
+                values[key] = _optional_int(value, name, f"environments.{label}.{key}")
+        parsed[label] = values
+    return parsed
+
+
+def _parse_job(raw, defaults=None, labels=()):
     if not isinstance(raw, dict) or not raw.get("job_name"):
         raise ConfigError(f"every job needs a job_name, got {raw!r}")
     name = str(raw["job_name"])
+    unknown = sorted(set(raw) - JOB_KEYS)
+    if unknown:
+        raise ConfigError(f"job {name}: unknown keys {unknown}; allowed: {sorted(JOB_KEYS)}")
+    environments = _parse_environments(raw.get("environments"), name, set(labels))
+    raw = {**(defaults or {}), **raw}
     regex = _compiled(raw.get("job_name_regex") or f"^{re.escape(name)}$", name, "job_name_regex")
     exclude = raw.get("job_name_exclude_regex")
     exclude = _compiled(str(exclude), name, "job_name_exclude_regex") if exclude not in (None, "") else None
-    enabled = raw.get("enabled", True)
-    if not isinstance(enabled, bool):
-        raise ConfigError(f"job {name}: enabled must be true or false, got {enabled!r}")
+    enabled = _check_enabled(raw.get("enabled", True), f"job {name}")
     schedule_type = raw.get("schedule_type", "scheduled")
     if schedule_type not in SCHEDULE_TYPES:
         raise ConfigError(f"job {name}: schedule_type must be one of {sorted(SCHEDULE_TYPES)}, got {schedule_type!r}")
-    severity = raw.get("severity", "WARNING")
-    if severity not in SEVERITIES:
-        raise ConfigError(f"job {name}: severity must be one of {sorted(SEVERITIES)}, got {severity!r}")
+    severity = _check_severity(raw.get("severity", "WARNING"), f"job {name}")
     max_gap = _optional_int(raw.get("max_gap_minutes"), name, "max_gap_minutes")
     if schedule_type == "scheduled" and max_gap is None:
         raise ConfigError(f"job {name}: scheduled jobs need max_gap_minutes")
@@ -114,6 +196,8 @@ def _parse_job(raw):
         enabled=enabled,
         notes=str(raw.get("notes") or ""),
         job_name_exclude_regex=exclude,
+        min_attempt_minutes=_optional_int(raw.get("min_attempt_minutes"), name, "min_attempt_minutes"),
+        environments=environments,
     )
 
 
@@ -136,9 +220,16 @@ def _parse_dependency(raw, job_names):
 
 
 def load_monitored_jobs(path):
-    """Return (jobs, dependencies) from a monitored-jobs YAML file."""
+    """Return (jobs, dependencies) from a monitored-jobs YAML file.
+
+    The optional top-level defaults section fills every key a job leaves out.
+    A job's environments section overrides settings for one environment label,
+    and each label must be defined in the workspaces section.
+    """
     data = _read_yaml(path)
-    jobs = [_parse_job(raw) for raw in data.get("jobs") or []]
+    defaults = _parse_defaults(data.get("defaults"))
+    labels = {_parse_workspace(raw).environment for raw in data.get("workspaces") or []}
+    jobs = [_parse_job(raw, defaults, labels) for raw in data.get("jobs") or []]
     if not jobs:
         raise ConfigError(f"{path} lists no jobs")
     seen = set()

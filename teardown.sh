@@ -9,8 +9,9 @@
 # from notebook 08; move that to the trash in the workspace yourself.
 #
 # --drop-schema also drops <catalog>.<schema> with its tables and view
-# (monitored_jobs, job_dependencies, findings, monitored_workspaces and
-# findings_latest; jobs_watchdog.upgrade.watchdog_objects). The bundle does not own the
+# (monitored_jobs, job_dependencies, findings, monitored_workspaces,
+# monitored_job_environments and findings_latest;
+# jobs_watchdog.upgrade.watchdog_objects). The bundle does not own the
 # schema, because notebook 01 creates it, so it survives a plain teardown and
 # keeps your findings history. You type the schema name to confirm unless -y.
 # If the schema holds any other table, teardown stops before changing
@@ -51,7 +52,8 @@ import json, sys
 text = sys.stdin.read().strip()
 data = json.loads(text) if text else []
 tables = data.get("tables", []) if isinstance(data, dict) else (data or [])
-watchdog = {"monitored_jobs", "job_dependencies", "findings", "monitored_workspaces", "findings_latest"}
+watchdog = {"monitored_jobs", "job_dependencies", "findings", "monitored_workspaces", "monitored_job_environments",
+            "findings_latest"}
 names = sorted({table.get("name", "") for table in tables} - watchdog)
 print(" ".join(names))
 ')"

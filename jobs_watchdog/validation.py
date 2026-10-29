@@ -6,7 +6,8 @@ SOURCES = ("SYSTEM_TABLES", "JOBS_API")
 def phase_1_checks(tables, enabled_jobs, by_source, missing, duplicates):
     """Return (check, passed, detail) tuples.
 
-    tables: {table name: exists}. enabled_jobs: enabled rows in monitored_jobs.
+    tables: {table name: exists}. enabled_jobs: monitored jobs switched on in at
+    least one environment.
     by_source, missing and duplicates: rows of sql/validate/40, 42 and 41.
     """
     absent = sorted(name for name, exists in tables.items() if not exists)

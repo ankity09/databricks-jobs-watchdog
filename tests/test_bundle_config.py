@@ -235,23 +235,51 @@ def test_example_config_makes_succeeds_depend_on_fails():
     )
 
 
-def test_example_config_shows_an_anchored_job_name_exclude_regex():
+def test_example_config_sets_an_anchored_job_name_exclude_regex_in_defaults():
     import re
 
-    raw_jobs = yaml.safe_load(EXAMPLE_CONFIG.read_text())["jobs"]
-    patterns = [job["job_name_exclude_regex"] for job in raw_jobs if job.get("job_name_exclude_regex")]
-    assert patterns
-    for pattern in patterns:
-        assert re.search(pattern, "daily_revenue_report_test") and re.search(pattern, "orders_test_prod")
-        assert not re.search(pattern, "daily_revenue_report_latest") and not re.search(pattern, "contest_scores")
+    pattern = yaml.safe_load(EXAMPLE_CONFIG.read_text())["defaults"]["job_name_exclude_regex"]
+    assert re.search(pattern, "daily_revenue_report_test") and re.search(pattern, "orders_test_prod")
+    assert not re.search(pattern, "daily_revenue_report_latest") and not re.search(pattern, "contest_scores")
+    assert all(job.job_name_exclude_regex == pattern for job in load_monitored_jobs(EXAMPLE_CONFIG)[0])
 
 
-def test_example_config_shows_a_commented_workspaces_block():
-    text = EXAMPLE_CONFIG.read_text()
-    assert "# workspaces:" in text
-    assert "environment: production" in text
-    assert "environment: lower" in text
-    assert "workspaces" not in yaml.safe_load(text)
+def test_example_config_labels_workspaces_and_changes_settings_by_environment():
+    raw = yaml.safe_load(EXAMPLE_CONFIG.read_text())
+    assert {entry["environment"] for entry in raw["workspaces"]} == {"production", "lower"}
+    jobs = {job.job_name: job for job in load_monitored_jobs(EXAMPLE_CONFIG)[0]}
+    assert jobs["orders_ingest"].settings_for("production").severity == "CRITICAL"
+    assert jobs["orders_ingest"].settings_for("lower").severity == "WARNING"
+    assert jobs["orders_ingest"].min_attempt_minutes == 10
+    assert jobs["orders_enrich"].settings_for("lower").enabled is False
+    assert jobs["daily_revenue_report"].settings_for("lower").owner == "analytics-dev"
+    assert jobs["watchdog_demo_succeeds"].owner == "platform-team"  # from the defaults
+
+
+def test_example_config_regexes_match_the_names_its_comments_describe():
+    import re
+
+    jobs = {job.job_name: job for job in load_monitored_jobs(EXAMPLE_CONFIG)[0]}
+
+    def watched(job_name, real_name):
+        job = jobs[job_name]
+        excluded = job.job_name_exclude_regex and re.search(job.job_name_exclude_regex, real_name)
+        return bool(re.search(job.job_name_regex, real_name)) and not excluded
+
+    for real_name in ("orders_ingest_prod", "orders_ingest_eu_prod", "orders_ingest_dev"):
+        assert watched("orders_ingest", real_name)
+    assert not watched("orders_ingest", "orders_ingest_test_prod")
+    assert watched("orders_enrich", "orders_enrich_web_prod") and watched("orders_enrich", "orders_enrich_mobile_eu_dev")
+    assert not watched("orders_enrich", "orders_enrich_prod")
+    assert watched("daily_revenue_report", "daily_revenue_report_eu_prod")
+    assert watched("daily_revenue_export", "daily_revenue_export_prod")
+
+
+def test_example_config_has_a_child_job_and_service_dependencies():
+    _, dependencies = load_monitored_jobs(EXAMPLE_CONFIG)
+    kinds = {(dep.job_name, dep.depends_on, dep.dependency_type) for dep in dependencies}
+    assert ("daily_revenue_export", "daily_revenue_report", "child_job") in kinds
+    assert {dep.depends_on for dep in dependencies if dep.dependency_type == "service"} >= {"kafka", "config_api"}
 
 
 def test_custom_check_example_compiles_and_writes_custom_rows():

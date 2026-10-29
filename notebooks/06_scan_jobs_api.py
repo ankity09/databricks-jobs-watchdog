@@ -55,7 +55,8 @@ print(f"scan_id: {scan_id}")
 require_current_tables(spark, s.catalog, s.schema)
 jobs, dependencies = read_config(spark, s.catalog, s.schema)
 labels = read_workspaces(spark, s.catalog, s.schema)
-enabled = [job for job in jobs if job.enabled]
+# jobs switched on in at least one environment; each workspace applies its own environment's overrides
+enabled = [job for job in jobs if job.active]
 names, names_error = register_workspace_names(spark)
 region_workspaces = [
     row.asDict()

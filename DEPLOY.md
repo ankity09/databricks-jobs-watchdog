@@ -18,13 +18,13 @@ Read these files before doing anything else:
 Ask for each value **one at a time**. Offer the default where there is one, and say why the value matters.
 
 1. **catalog** (required): the catalog that will hold the Watchdog schema. The operator needs `USE CATALOG` and `CREATE SCHEMA` on it, or, when the schema already exists, `USE CATALOG` on the catalog plus `USE SCHEMA`, `CREATE TABLE`, `SELECT` and `MODIFY` on the schema.
-2. **schema** (default `watchdog`): the schema for the four Watchdog tables and the `findings_latest` view.
+2. **schema** (default `watchdog`): the schema for the five Watchdog tables and the `findings_latest` view.
 3. **region** (required): the cloud region of this workspace's metastore, for example `us-east-2`. `SELECT current_metastore()` usually shows it in the form `<cloud>:<region>:<id>`. It is recorded on every finding. A Watchdog sees only the workspaces in its own region, so run one per region.
 4. **auth mode** (default `current_workspace`):
    - `current_workspace`: the Jobs API scan checks only this workspace, as the identity running the notebooks or the job.
    - `service_principal`: the Jobs API scan checks every workspace in the region that has jobs, signing in as a service principal.
 5. **Service principal mode only**: the **secret scope** holding its OAuth credentials, and the **key names** for the application ID (default `client_id`) and the secret (default `client_secret`).
-6. **monitored-jobs file** (default `config/monitored_jobs.example.yml`): a path to the operator's own copy, outside the Git folder, such as `/Workspace/Users/<user>/watchdog/monitored_jobs.yml` or `/Volumes/<catalog>/<schema>/<volume>/monitored_jobs.yml`. The example file is fine for a first run with the demo jobs. Ask whether any test copies should be excluded (`job_name_exclude_regex`) and whether workspaces should get environment labels (the `workspaces` section).
+6. **monitored-jobs file** (default `config/monitored_jobs.example.yml`): a path to the operator's own copy, outside the Git folder, such as `/Workspace/Users/<user>/watchdog/monitored_jobs.yml` or `/Volumes/<catalog>/<schema>/<volume>/monitored_jobs.yml`. The example file is fine for a first run with the demo jobs. Ask whether any test copies should be excluded (`job_name_exclude_regex`, which the example sets for every job in `defaults`), whether workspaces should get environment labels (the `workspaces` section), and whether any job needs other settings in one environment, such as a lower severity or no checks in lower environments (the job's `environments` section). If other regions run different jobs, each region's Watchdog needs its own file: a job that runs in no workspace of this region gets a `not_found` row here.
 7. **lookback_hours** (default `48`): how far back the system table checks look.
 8. **code_version_tag** (default `code_version`): the name of the job tag whose value is the deployed code version. Findings show that value when the job has the tag, so a CI pipeline that tags each deploy makes version changes visible.
    **pipeline_url_parameter** (default `PIPELINE_URL`): the name of the job parameter that holds the link to the CI pipeline that deployed the job. Findings show it as `pipeline_url`.
@@ -64,7 +64,7 @@ Show the operator:
 
 1. the completed `accelerator.local.yaml`;
 2. the capability matrix from step 2;
-3. what step 5 will create: the schema `<catalog>.<schema>` with four tables and the view `findings_latest`. With the bundle path, the `watchdog_phase_1` job and the `watchdog_scan` job, which is created paused. With the demo target, four sample jobs as well. The dashboard is created only if the operator runs notebook 08.
+3. what step 5 will create: the schema `<catalog>.<schema>` with five tables and the view `findings_latest`. With the bundle path, the `watchdog_phase_1` job and the `watchdog_scan` job, which is created paused. With the demo target, four sample jobs as well. The dashboard is created only if the operator runs notebook 08.
 
 **Wait for the operator to approve.** Nothing has been created yet. If they change a value, update `accelerator.local.yaml` and show it again.
 
@@ -101,8 +101,8 @@ Known degradations:
 
 Run `notebooks/07_validate_phase_1` with the same `catalog` and `schema`, and the `scan_id` from step 5 (or empty, to check each source's newest scan). Print its PASS and FAIL lines. All five should pass:
 
-1. the four tables and the `findings_latest` view exist (`monitored_jobs`, `job_dependencies`, `monitored_workspaces`, `findings`, `findings_latest`);
-2. the config has enabled jobs;
+1. the five tables and the `findings_latest` view exist (`monitored_jobs`, `job_dependencies`, `monitored_workspaces`, `monitored_job_environments`, `findings`, `findings_latest`);
+2. the config has enabled jobs (switched on in at least one environment);
 3. both sources wrote findings;
 4. every enabled job has findings from each source;
 5. no findings key appears twice.
@@ -129,4 +129,4 @@ Point the operator at `teardown.sh`:
 ./teardown.sh -t demo --drop-schema --profile <profile>    # also the sample jobs and the Watchdog schema
 ```
 
-The schema is dropped only with `--drop-schema`, after the operator types its name. It drops the four tables and the `findings_latest` view. If the schema holds any other table, the script stops before changing anything. The script does not delete the dashboard from notebook 08: the operator moves it to the trash in the workspace. A service principal, secret scope and grants created for the Watchdog are not removed either; list them for the operator to remove by hand. If the script refuses, the [runbook's cleanup section](docs/phase-1-runbook.md#cleanup) has a manual fallback.
+The schema is dropped only with `--drop-schema`, after the operator types its name. It drops the five tables and the `findings_latest` view. If the schema holds any other table, the script stops before changing anything. The script does not delete the dashboard from notebook 08: the operator moves it to the trash in the workspace. A service principal, secret scope and grants created for the Watchdog are not removed either; list them for the operator to remove by hand. If the script refuses, the [runbook's cleanup section](docs/phase-1-runbook.md#cleanup) has a manual fallback.

@@ -12,17 +12,28 @@ The Watchdog is built in phases. Each phase keeps the `findings` table as the co
 
 ## Phase 1.1: a schedule and a first dashboard (built)
 
-Delivered early, in this release:
+Delivered early, in Phase 1.1:
 
 - **A 20-minute schedule.** `watchdog_scan` brings the tables and the view up to date, reloads the config, and runs both scans every 20 minutes in UTC. It is paused by default, and `scan.schedule_status` turns it on.
 - **A first dashboard.** Notebook 08 creates "Watchdog findings", with three pages: Now, Versions and runs, and History.
 - **Run and version context on every finding.** Run start and end, duration, trigger, job tags and code version, and the environment label of the workspace.
 - **Exclusions and environment labels.** `job_name_exclude_regex` skips test copies, and the optional `workspaces` section labels each workspace with an environment.
-- **Upgrades in place.** Notebook 01 adds new columns and keeps the rows. It creates `findings_latest`, and replaces it only when its columns change.
+- **Upgrades in place.** Notebook 01 adds new columns and keeps the rows. It creates `findings_latest`, and replaces it only when its columns or its definition version change.
 - **A template for your own checks.** Notebook 09 writes `CUSTOM` rows, for example service connectivity. The bundle has a commented task that runs it on its own cluster.
 - **Demo jobs.** Four sample jobs in the demo target, tagged with their code version and paused by default.
 
 Not in 1.1: alerts, incidents, the app, and other regions. Those are in the phases below.
+
+## Phase 1.2: one job list for many workspaces and environments (built)
+
+Delivered in this release:
+
+- **Shared defaults.** An optional `defaults` section holds the settings most jobs share, such as the owner, the severity and the test-copy exclusion.
+- **Per-environment settings.** A job's `environments` section changes its severity, owner and limits, or switches it off, in one environment, so one entry covers the job's copies in production and in lower environments. A new table, `monitored_job_environments`, holds these settings.
+- **Tasks that fail fast and restart.** `min_attempt_minutes` makes a retry after a short attempt a retry loop, alongside `max_retries`.
+- **Stricter loading.** An unknown or misspelled key stops the load with a message that names it.
+- **The CI pipeline link.** `pipeline_url` on every finding, from a job parameter.
+- **A dashboard fix.** Notebook 08 creates the dashboard through the dashboards REST API, so it works on every SDK version.
 
 ## Phase 2: incidents and more checks
 

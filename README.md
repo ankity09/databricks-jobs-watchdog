@@ -1,6 +1,6 @@
 # Watchdog: job monitoring across Databricks workspaces
 
-Watchdog checks your Databricks jobs in every workspace of a cloud region and writes what it finds into one Unity Catalog table. It is built in phases. **Phase 1.1**, in this repo today, creates the tables, loads your list of jobs to watch, runs the scans on a schedule (paused until you turn it on), and adds a first dashboard.
+Watchdog checks your Databricks jobs in every workspace of a cloud region and writes what it finds into one Unity Catalog table. It is built in phases. **Phase 1.2**, in this repo today, creates the tables, loads your list of jobs to watch (with shared defaults and per-environment settings), runs the scans on a schedule (paused until you turn it on), and adds a first dashboard.
 
 > **Already running the first release?** [CHANGELOG.md](CHANGELOG.md) lists everything that changed and how to upgrade: pull, restart Python on open notebooks, then run notebook 01 once.
 
@@ -35,11 +35,11 @@ Inside a scan, step 1 reads the system tables, step 2 calls the Jobs API, and st
 | | `task_failures` | tasks whose newest attempt failed, in the job's newest run |
 | | `schedule_gap` | a scheduled job with no run started within `max_gap_minutes` (plus 60 minutes for system table lag) |
 | | `long_runtime` | the newest finished run, or a run still going, over `max_runtime_minutes`, measured up to its newest system table record |
-| | `not_found` | a monitored job whose name pattern matches no job in the region |
+| | `not_found` | a monitored job whose name pattern matches no job in the region, or matches only where the job is switched off |
 | Jobs API | `live_run_status` | the state of the newest run, right now |
 | | `live_task_failures` | failed tasks in the newest run, with their error text, even while the run continues |
 | | `live_long_runtime` | a run still going past `max_runtime_minutes` |
-| | `retry_loop` | a task retried more than `max_retries` times |
+| | `retry_loop` | a task retried more than `max_retries` times, or retried after an attempt shorter than `min_attempt_minutes` |
 | | `not_found` | no job matches the name pattern in the workspaces that answered. A job found in any workspace is not reported. |
 | | `api_unreachable` | a workspace or job could not be read (a coverage gap) |
 | Your own checks | `service_connectivity` (example) | a service your jobs depend on can be reached (notebook 09) |
@@ -61,7 +61,7 @@ Use `findings_latest` for "what is wrong right now". The dashboard's Now and Ver
 
 In the catalog and schema you choose (schema `watchdog` by default):
 
-- `monitored_jobs`, `job_dependencies` and `monitored_workspaces`: your config, loaded from a YAML file.
+- `monitored_jobs`, `job_dependencies`, `monitored_workspaces` and `monitored_job_environments`: your config, loaded from a YAML file.
 - `findings`: the history, every scan, one row per job, check and source. Re-running a scan never adds duplicate rows.
 - `findings_latest`: a view of the newest scan from each source, the current status (see [History and current status](#history-and-current-status-findings-and-findings_latest)).
 
@@ -98,7 +98,7 @@ Phase 1 creates no clusters, apps, alerts or secrets. The dashboard uses a SQL w
 
 ## Run Phase 1 by hand, or as a job
 
-Both paths use the same notebooks. Settings come from `accelerator.yaml`: copy it to `accelerator.local.yaml` (git-ignored) and fill in `target.catalog` and `target.region`. Copy `config/monitored_jobs.example.yml` somewhere outside the repo, list your own jobs, and point `scan.monitored_jobs_path` at it. Use `job_name_exclude_regex` to skip test copies, and the optional `workspaces` section to label each workspace with an environment. The example file works as is with the demo jobs.
+Both paths use the same notebooks. Settings come from `accelerator.yaml`: copy it to `accelerator.local.yaml` (git-ignored) and fill in `target.catalog` and `target.region`. Copy `config/monitored_jobs.example.yml` somewhere outside the repo, list your own jobs, and point `scan.monitored_jobs_path` at it. One entry covers a job in every workspace where it runs, each copy with its own job ID, so you never list job IDs. Use `defaults` for settings most jobs share, `job_name_exclude_regex` to skip test copies, the optional `workspaces` section to label each workspace with an environment, and a job's `environments` section to change its settings in one environment, for example `WARNING` instead of `CRITICAL` in lower environments, or not checked there at all. The example file works as is with the demo jobs.
 
 ### By hand, in a Git folder
 
@@ -158,14 +158,15 @@ Both targets use development mode, so deployed names start with `[dev <your name
 ./teardown.sh -t demo --drop-schema --profile <your-profile>  # also the sample jobs and the Watchdog schema
 ```
 
-`--drop-schema` asks you to type the schema name first. It drops the schema with its four tables and the `findings_latest` view. It stops before changing anything if the schema holds any other table. The script does not delete the dashboard: move it to the trash in the workspace yourself. Any service principal, secret scope or grants you created are yours to remove.
+`--drop-schema` asks you to type the schema name first. It drops the schema with its five tables and the `findings_latest` view. It stops before changing anything if the schema holds any other table. The script does not delete the dashboard: move it to the trash in the workspace yourself. Any service principal, secret scope or grants you created are yours to remove.
 
 ## Phases
 
 | Phase | What it adds | Status |
 |---|---|---|
 | 1 | Tables, config, both scans into one `findings` table, validation, and an on-demand job | Built |
-| 1.1 | A scan every 20 minutes (paused until you unpause it), the `findings_latest` view, a first dashboard, environment labels, run timing, trigger and code version on each finding, and a template for your own checks | Built: this repo |
+| 1.1 | A scan every 20 minutes (paused until you unpause it), the `findings_latest` view, a first dashboard, environment labels, run timing, trigger and code version on each finding, and a template for your own checks | Built |
+| 1.2 | Shared `defaults` and per-environment settings in the job list, a retry rule for tasks that fail fast and restart, and the CI pipeline link on each finding | Built: this repo |
 | 2 | An incident view that changes only when a status changes, more checks such as stuck batches and service probes, and a retention rule for `findings` | Planned |
 | 3 | Databricks SQL alerts on `findings`, sent to Slack, email, Microsoft Teams, PagerDuty or a webhook, with severity routing, alerts on change and recovery, and routing by environment | Planned |
 | 4 | The Watchdog app, a Databricks App reading `findings` and `findings_latest`: health, incidents, impact, coverage, and Genie questions | Planned |

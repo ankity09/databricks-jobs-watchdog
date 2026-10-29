@@ -6,7 +6,7 @@
 # MAGIC
 # MAGIC **Inputs (widgets).** `catalog`, `schema`, `monitored_jobs_path`. Keep your own copy of the file outside the Git folder (your workspace home folder, or a Unity Catalog volume such as `/Volumes/<catalog>/<schema>/<volume>/monitored_jobs.yml`) so a pull never conflicts with your edits. Relative paths start at the repo root. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
-# MAGIC **What to look for.** Every enabled job matches at least one real job in the last table, and nothing you meant to skip (names matching `job_name_exclude_regex` are left out). A monitored job with an empty `workspace_id` matches nothing: fix its `job_name_regex`. A job created in the last hour may not match yet, because system tables run about an hour behind; notebook 06 matches through the Jobs API and finds it straight away.
+# MAGIC **What to look for.** Every enabled job matches at least one real job in the last table, and nothing you meant to skip (names matching `job_name_exclude_regex` are left out). The `environment` and `checked_here` columns show each match's environment label and whether the job is checked there, after any `environments` overrides. A monitored job with an empty `workspace_id` matches nothing: fix its `job_name_regex`. A job created in the last hour may not match yet, because system tables run about an hour behind; notebook 06 matches through the Jobs API and finds it straight away.
 
 # COMMAND ----------
 
@@ -51,6 +51,15 @@ display(spark.table(f"{s.catalog}.{s.schema}.monitored_workspaces"))
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC Per-environment overrides, from each job's `environments` section: one row per job and environment label. An empty setting means the job's own setting applies.
+
+# COMMAND ----------
+
+display(spark.table(f"{s.catalog}.{s.schema}.monitored_job_environments"))
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Which real jobs does each monitored job match?
 # MAGIC
 # MAGIC From `sql/scan/20_resolve_monitored_jobs.sql`. The regex can match anywhere in the job name unless it is anchored with `^` and `$`.
@@ -58,5 +67,7 @@ display(spark.table(f"{s.catalog}.{s.schema}.monitored_workspaces"))
 # COMMAND ----------
 
 from jobs_watchdog.sqlfiles import run_sql
+from jobs_watchdog.workspaces import register_workspace_names
 
+register_workspace_names(spark)
 display(run_sql(spark, "sql/scan/20_resolve_monitored_jobs.sql", catalog=s.catalog, schema=s.schema))

@@ -21,6 +21,7 @@ TABLES = (
     ("job_dependencies", "sql/setup/03_create_job_dependencies.sql"),
     ("findings", "sql/setup/04_create_findings.sql"),
     ("monitored_workspaces", "sql/setup/05_create_monitored_workspaces.sql"),
+    ("monitored_job_environments", "sql/setup/06_create_monitored_job_environments.sql"),
 )
 VIEW_TEMPLATES = tuple(sorted(str(p.relative_to(repo_root())) for p in (repo_root() / "sql" / "views").glob("*.sql")))
 _COLUMN = re.compile(r"^\s+(\w+)\s+([A-Z]+(?:<[A-Z, ]+>)?)(\s+NOT NULL)?(?:\s+COMMENT\s+'([^']*)')?,?\s*$")

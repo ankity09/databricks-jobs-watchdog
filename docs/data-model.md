@@ -1,16 +1,28 @@
 # Data model
 
-The Watchdog keeps four Delta tables and one view in one schema, `<catalog>.<schema>` (the schema defaults to `watchdog`). Notebook 01 creates them from the files in `sql/setup` and `sql/views`. Every column has a comment, so `DESCRIBE TABLE <catalog>.<schema>.findings` shows the same descriptions as this page.
+The Watchdog keeps five Delta tables and one view in one schema, `<catalog>.<schema>` (the schema defaults to `watchdog`). Notebook 01 creates them from the files in `sql/setup` and `sql/views`. Every column has a comment, so `DESCRIBE TABLE <catalog>.<schema>.findings` shows the same descriptions as this page.
 
 | Object | What it holds | How it changes |
 |---|---|---|
 | `monitored_jobs` | the jobs to check, with their limits | replaced each time notebook 02 loads your YAML file |
 | `job_dependencies` | what each job depends on | replaced each time notebook 02 loads your YAML file |
 | `monitored_workspaces` | an environment label for each workspace | replaced each time notebook 02 loads your YAML file |
+| `monitored_job_environments` | the settings a job changes in one environment, such as a lower severity | replaced each time notebook 02 loads your YAML file |
 | `findings` | what every scan found, from every source | rows are added, never updated or deleted |
 | `findings_latest` (view) | the newest scan from each source | computed from `findings` each time it is read |
 
 The scans read the config tables, not the YAML file. The scheduled job loads the file again on every run, so an edit counts from the next run. When you run a scan by hand, run notebook 02 first.
+
+The YAML file has four sections, and only `jobs` is required. `config/monitored_jobs.example.yml` shows all four.
+
+| Section | Loaded into | What it holds |
+|---|---|---|
+| `defaults` | no table of its own | settings every job gets unless it sets its own: any job setting except `job_name`, `job_name_regex` and `environments` |
+| `workspaces` | `monitored_workspaces` | an environment label for each workspace |
+| `jobs` | `monitored_jobs`, and each job's `environments` section into `monitored_job_environments` | the jobs to check |
+| `dependencies` | `job_dependencies` | what each job depends on |
+
+Notebook 02 fills each job's missing settings from `defaults` before it loads `monitored_jobs`, so the table shows the settings each job ends up with. An unknown key in `defaults`, in a job, or in a job's `environments` section stops the load with a message that names the key and lists the allowed ones, so a misspelled setting is never silently ignored.
 
 ## monitored_jobs
 
@@ -24,19 +36,22 @@ One row per job you want checked.
 | `schedule_type` | STRING, required | `scheduled` or `continuous`. Left out, it is `scheduled`. Only scheduled jobs get the `schedule_gap` check. |
 | `max_gap_minutes` | INT | Scheduled jobs: the longest allowed time between run starts. Required for scheduled jobs. |
 | `max_runtime_minutes` | INT | The longest allowed run. Left out turns off `long_runtime` and `live_long_runtime`. |
-| `max_retries` | INT | A task retried more times than this is a retry loop. Left out turns off `retry_loop`. Set it below the job's own task retry limit: a job never retries past its own limit, so an equal value never fires. |
-| `severity` | STRING, required | `CRITICAL` or `WARNING`. Left out, it is `WARNING`. Copied to every finding about this job that is not HEALTHY. |
-| `owner` | STRING | Team or person to route findings to. Copied to every finding. |
-| `enabled` | BOOLEAN, required | `true` or `false`, written without quotes. Any other value stops the load. `false` keeps the entry in the table without checking it. Left out, it is `true`. |
+| `max_retries` | INT | A task retried more times than this is a retry loop. Set it below the job's own task retry limit: a job never retries past its own limit, so an equal value never fires. With `min_attempt_minutes` also left out, `retry_loop` is off. |
+| `min_attempt_minutes` | INT | A task attempt that ran shorter than this and was then retried is a retry loop: the task fails fast and restarts. The Jobs API scan checks it. With `max_retries` also left out, `retry_loop` is off. |
+| `severity` | STRING, required | `CRITICAL` or `WARNING`. Left out, it is `WARNING`. Copied to every finding about this job that is not HEALTHY, unless the job's `environments` section sets another for the finding's environment. |
+| `owner` | STRING | Team or person to route findings to. Copied to every finding, unless the job's `environments` section sets another for the finding's environment. |
+| `enabled` | BOOLEAN, required | `true` or `false`, written without quotes. Any other value stops the load. `false` keeps the entry in the table without checking it. Left out, it is `true`. The job's `environments` section can switch it off, or on, in one environment. |
 | `notes` | STRING | Free text. |
 | `loaded_at` | TIMESTAMP, required | When notebook 02 loaded the row. |
+
+A setting a job leaves out comes from the file's `defaults` section when that sets it, and otherwise from the built-in default above ("Left out, it is ...").
 
 About `job_name_regex` and `job_name_exclude_regex`:
 
 - Each can match anywhere in the name unless you anchor it with `^` and `$`. That is on purpose: a bundle deployed in development mode adds a `[dev <user>]` prefix, and an unanchored regex still matches.
-- `job_name_regex` can match several jobs, in one workspace or in many. Each match gets its own findings rows. Excluded names get none.
+- `job_name_regex` can match several jobs, in one workspace or in many. Each match gets its own findings rows, with its workspace and job ID, so one entry covers a job in every workspace where it runs and you never list job IDs. Excluded names get none.
 - The system table scan matches with Spark's `regexp_like`; the Jobs API scan matches with Python's `re.search`. Simple patterns (letters, `^`, `$`, `|`, groups, character classes) behave the same in both. Avoid engine-specific syntax in either field.
-- The example config uses `_test(_|$)` rather than a bare `test`, because a bare `test` would also match names such as `daily_revenue_report_latest` and `contest`.
+- The example config sets `job_name_exclude_regex: "_test(_|$)"` in its `defaults` section, so every job skips test copies. It uses `_test(_|$)` rather than a bare `test`, because a bare `test` would also match names such as `daily_revenue_report_latest` and `contest`.
 
 ## monitored_workspaces
 
@@ -59,19 +74,59 @@ How a workspace gets its label:
 
 Every finding from a labelled workspace carries its environment (the `environment` column). Rows with no workspace have none.
 
+A Watchdog reads the system tables and workspaces of its own region only, so entries for workspaces in other regions are unused there, and are harmless. Jobs are different: a job that runs in no workspace of this region gets a `not_found` row here. Several regions can therefore share one file only when they run the same jobs. Otherwise give each region's Watchdog its own job list file.
+
+## monitored_job_environments
+
+One row per job and environment label: the settings that job changes in that environment. Notebook 02 loads the rows from each job's `environments` section, and replaces them each time it runs.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `job_name` | STRING, required | The monitored job. |
+| `environment` | STRING, required | The environment label, from the `workspaces` section. |
+| `severity` | STRING | `CRITICAL` or `WARNING` in this environment. |
+| `owner` | STRING | Team or person to route findings to in this environment. |
+| `enabled` | BOOLEAN | `false` switches the job off in this environment; `true` switches it on. |
+| `max_gap_minutes` | INT | The schedule limit in this environment. |
+| `max_runtime_minutes` | INT | The runtime limit in this environment. |
+| `max_retries` | INT | The retry limit in this environment. |
+| `min_attempt_minutes` | INT | The shortest allowed attempt before a retry in this environment. |
+| `loaded_at` | TIMESTAMP, required | When notebook 02 loaded the row. |
+
+An empty column means the job's own setting applies. Two entries from the example file, trimmed to the parts that matter here:
+
+```yaml
+  - job_name: orders_ingest
+    severity: CRITICAL
+    environments:
+      lower: {severity: WARNING}  # checked in lower environments too, but never CRITICAL there
+  - job_name: orders_enrich
+    environments:
+      lower: {enabled: false}  # production only for now
+```
+
+How the overrides apply:
+
+- Each finding uses the settings for its workspace's environment label. A workspace with no label, and a row with no workspace, use the job's own settings.
+- Each label must be defined in the `workspaces` section. An undefined label, or a key other than the seven settings above, stops the load with a message that names it.
+- A job switched off in an environment is not checked in that environment's workspaces, and gets no rows there.
+- A job is checked wherever it is switched on: `enabled: false` with `environments: {production: {enabled: true}}` checks it in production workspaces only.
+- A job switched on in some environment that a scan finds only where it is switched off still gets one `not_found` row, so it never drops out of the findings unnoticed. The system table scan says `Every job in this region that matches <regex> is in an environment where this job is switched off.` The Jobs API scan says `No workspace checked has <job_name> switched on: it is switched off in their environments, or no workspace could be checked.`
+- The system table scan uses `enabled`, `severity`, `owner`, `max_gap_minutes` and `max_runtime_minutes`. The Jobs API scan, which has no schedule check, uses `enabled`, `severity`, `owner`, `max_runtime_minutes`, `max_retries` and `min_attempt_minutes`.
+
 ## job_dependencies
 
-One row per dependency. A failure lists the jobs that depend on the failed job directly.
+One row per dependency. A failure lists the jobs that depend on the failed job directly. Dependencies are between job names, not job IDs, so one row applies in every workspace where both jobs run.
 
 | Column | Type | Meaning |
 |---|---|---|
 | `job_name` | STRING, required | The job that depends on something. Must be a job in `monitored_jobs`. |
-| `depends_on` | STRING, required | What it needs: another monitored job, a child job, or a service. |
-| `dependency_type` | STRING, required | `job`, `child_job` or `service`. Left out, it is `job`. For `job` and `child_job`, `depends_on` must be a monitored job. |
+| `depends_on` | STRING, required | What it needs: another monitored job, the monitored job that starts it, or a service. |
+| `dependency_type` | STRING, required | `job`: `job_name` needs the output of `depends_on`. `child_job`: `depends_on` starts `job_name`, for example with a Run Job task. `service`: anything else the job needs, under any name, such as a message broker. Left out, it is `job`. For `job` and `child_job`, `depends_on` must be a monitored job. |
 | `notes` | STRING | Free text. |
 | `loaded_at` | TIMESTAMP, required | When notebook 02 loaded the row. |
 
-The scans fill `affected_jobs` from `job` and `child_job` rows. `service` rows are used in two places: the custom check template (notebook 09) lists the jobs that depend on a service it found down. Built-in service probes come in Phase 2.
+The scans fill `affected_jobs` from `job` and `child_job` rows. `service` rows are used by the custom check template (notebook 09), which lists the jobs that depend on a service it found down. Built-in service probes come in Phase 2.
 
 ## findings
 
@@ -89,14 +144,14 @@ One row per check, for each job a monitored job matches, in each scan, from each
 | `job_name` | STRING, required | The logical name from `monitored_jobs`. For a `CUSTOM` row, the service name. |
 | `check_id` | STRING, required | Which check wrote the row. See [Checks](#checks). |
 | `status` | STRING, required | `HEALTHY`, `WARNING`, `FAILED` or `UNKNOWN`. |
-| `severity` | STRING | The job's configured severity on rows that are not HEALTHY. NULL on HEALTHY rows. A row whose `job_name` is not a configured job keeps the severity it sets, so a `CUSTOM` row has one only if its check sets it. |
+| `severity` | STRING | The job's configured severity, for the row's environment, on rows that are not HEALTHY. NULL on HEALTHY rows. A row whose `job_name` is not a configured job keeps the severity it sets, so a `CUSTOM` row has one only if its check sets it. |
 | `failure_category` | STRING | Why the row is not healthy. A row that sets none gets one from the rules below. See [failure_category](#failure_category). |
 | `run_id` | STRING | The job run the row is about, when there is one. HEALTHY rows that judged a run carry it too. |
 | `run_page_url` | STRING | A link to that run. |
 | `failed_task_keys` | ARRAY&lt;STRING&gt; | The tasks the row is about: failed tasks, or tasks in a retry loop. |
 | `error_summary` | STRING | What the check found, on every row. For failures, the start of the error text. At most 1,000 characters. |
 | `affected_jobs` | ARRAY&lt;STRING&gt; | On FAILED rows: the jobs that depend on this one (see [affected_jobs](#affected_jobs)). NULL on other rows. |
-| `owner` | STRING | The job's owner from the config. A row whose `job_name` is not a configured job keeps the owner it sets. |
+| `owner` | STRING | The job's owner from the config, for the row's environment. A row whose `job_name` is not a configured job keeps the owner it sets. |
 | `source` | STRING, required | `SYSTEM_TABLES`, `JOBS_API` or `CUSTOM` (your own checks). |
 | `environment` | STRING | The environment label of the workspace, from `monitored_workspaces`. Empty when the workspace has no label, and on rows with no workspace. |
 | `schedule_type` | STRING | `scheduled` or `continuous`, from the config. |
@@ -120,7 +175,7 @@ One row per check, for each job a monitored job matches, in each scan, from each
 
 ### severity
 
-`severity` comes from the job's config. It says how much the job matters, while `status` says what happened. A HEALTHY row has no severity. A WARNING row about a CRITICAL job keeps `CRITICAL`.
+`severity` comes from the job's config, or from its `environments` section for the row's environment, so one job can be `CRITICAL` in production and `WARNING` in lower environments. It says how much the job matters, while `status` says what happened. A HEALTHY row has no severity. A WARNING row about a CRITICAL job keeps `CRITICAL`.
 
 ### failure_category
 
@@ -226,14 +281,13 @@ Change-only alerts (Phase 3) compare each finding with the previous one for the 
 
 Notebook 01 creates whatever is missing, and it is safe to run again. The scheduled job runs it at the start of every run, and you run it after every pull. It does three things:
 
-1. Runs the `CREATE TABLE IF NOT EXISTS` files in `sql/setup`. Existing tables keep their rows.
-2. Adds any column the current DDL declares but the table lacks, at the end of the table and as a nullable column. Rows stay. This release adds nine columns to `findings` and one (`job_name_exclude_regex`) to `monitored_jobs`, and creates `monitored_workspaces`.
-3. Makes the view `findings_latest` current. It creates the view when it is missing, and replaces it only when the view's columns no longer match `findings`. A view that already matches is left alone, so its owner and grants stay. Notebook 01 prints `view findings_latest: created`, `replaced` or `current`.
+1. Runs the `CREATE TABLE IF NOT EXISTS` files in `sql/setup`, which creates any table that is new in this release. Existing tables keep their rows.
+2. Adds any column the current DDL declares but the table lacks, at the end of the table and as a nullable column. Rows stay.
+3. Makes the view `findings_latest` current. It creates the view when it is missing, and replaces it only when the view's columns no longer match `findings`, or when its definition version (the table property `watchdog.view_version`) differs from the one in `sql/views/01_findings_latest.sql`. A release that changes the view's SQL raises that version, so the change reaches existing views. A view that is current is left alone, so its owner and grants stay. Notebook 01 prints `view findings_latest: created`, `replaced` or `current`.
 
-Two limits follow from how the view is kept:
+[CHANGELOG.md](../CHANGELOG.md) lists the tables and columns each release adds.
 
-- A change to the view's SQL does not reach a view whose columns still match `findings`. The change in this release, which ranks each source's scans by when they first wrote, reaches only views that are created or replaced after it. To apply it to an existing view, its owner runs the view file with `{schema}` filled in, or the owner drops the view and notebook 01 creates it again.
-- Replacing a view needs ownership. If another identity owns a view whose columns have changed, notebook 01 stops with an error.
+Replacing a view needs ownership. If another identity owns a view that needs replacing, notebook 01 stops with an error. Its owner can run notebook 01 once, or drop the view so that notebook 01 creates it again.
 
 Notebooks 02, 05, 06 and 09 check the tables and the view first. A missing table or column, or an out-of-date view, stops them with a message that says to run notebook 01. Each scheduled run runs notebook 01 before its config load and its scans, so a deploy that adds columns is picked up by the next run.
 
@@ -251,9 +305,11 @@ System tables cover every workspace in the account and region, and run about an 
 | `task_failures` | Tasks in the job's newest run whose newest attempt ended FAILED, ERROR or TIMED_OUT. A task retried to success is not counted, and a newer run settles failures in older runs. | FAILED, with `failed_task_keys` | always |
 | `schedule_gap` | Minutes since the newest run started, against `max_gap_minutes` plus 60 minutes of allowance for system table lag. | FAILED for CRITICAL jobs, WARNING for WARNING jobs. UNKNOWN when no run is in the window and the limit is longer than the window. | scheduled jobs only |
 | `long_runtime` | Runs still going, plus the newest finished run, against `max_runtime_minutes`, each measured up to its newest system table record. | WARNING | `max_runtime_minutes` is set |
-| `not_found` | The regex matches no job in the region. | UNKNOWN, with no workspace or job ID | once per unmatched job |
+| `not_found` | The regex matches no job in the region, or matches only in environments where the job is switched off. The summary says which. | UNKNOWN, with no workspace or job ID | once per job switched on somewhere that has no match where it is switched on |
 
 Run lengths come from the timeline rows, as described in [Run timing](#run-timing). That keeps a finished run whose last hourly row is late from looking long.
+
+The 60 minutes of allowance in `schedule_gap` makes a missed run show late for frequent jobs: a job that runs every 10 minutes, with `max_gap_minutes: 20`, is reported after 80 minutes without a run start. The Jobs API scan has no schedule check.
 
 ### From the Jobs API (notebook 06, source `JOBS_API`)
 
@@ -264,11 +320,11 @@ The Jobs API is live. It shows a run that started a minute ago, and the error te
 | `live_run_status` | The newest run's life cycle and result state. | Running or succeeded is HEALTHY. FAILED, TIMEDOUT or INTERNAL_ERROR is FAILED. CANCELED is WARNING. A job with no runs is UNKNOWN. | always |
 | `live_task_failures` | Failed tasks in the newest run, even while the run continues, judged on each task's newest attempt. | FAILED, with `failed_task_keys` and the error text | the job has runs |
 | `live_long_runtime` | The newest run, if it is still going, against `max_runtime_minutes`. | WARNING | the job has runs and `max_runtime_minutes` is set |
-| `retry_loop` | Each task's newest attempt number in the newest run, against `max_retries`. | WARNING, with the tasks in `failed_task_keys` | the job has runs and `max_retries` is set |
-| `not_found` | No job this identity can see matches the regex in the workspaces that answered. | UNKNOWN | once per unmatched job, as described below |
+| `retry_loop` | In the newest run: each task's newest attempt number against `max_retries`, and each attempt that was then retried against `min_attempt_minutes`. | WARNING, with the tasks in `failed_task_keys` | the job has runs and `max_retries` or `min_attempt_minutes` is set |
+| `not_found` | No job this identity can see matches the regex in the workspaces that answered, or no workspace checked has the job switched on. | UNKNOWN | once per unmatched job, as described below |
 | `api_unreachable` | A workspace or job could not be read. The scan carries on with the rest. | UNKNOWN, with the error in `error_summary` | on errors only |
 
-The Jobs API scan writes `not_found` (UNKNOWN) for a monitored job that matches no job in the workspaces it checked. Only workspaces that answered count. With one workspace the row carries that workspace's ID. With several, a job found in any of them gets no `not_found` row, and a job that two or more answering workspaces did not find gets one row with no workspace, saying how many workspaces were checked. A workspace that could not be read does not count as checked: it gets `api_unreachable` rows instead. [jobs-api.md](jobs-api.md) has the field-by-field detail.
+The Jobs API scan writes `not_found` (UNKNOWN) for a monitored job that matches no job in the workspaces it checked. Only workspaces that answered count. With one workspace the row carries that workspace's ID. With several, a job found in any of them gets no `not_found` row, and a job that two or more answering workspaces did not find gets one row with no workspace, saying how many workspaces were checked. A workspace that could not be read does not count as checked: it gets `api_unreachable` rows instead. A job switched on in some environment, but in none of the workspaces checked, gets one `not_found` row with no workspace that says so. [jobs-api.md](jobs-api.md) has the field-by-field detail.
 
 ## Example rows
 
@@ -338,7 +394,7 @@ ORDER BY observed_at DESC, check_id
 
 ## Governance
 
-`findings` and `findings_latest` hold error text copied from job runs. Error text can include file paths, table names, parameter values or pieces of data. `monitored_workspaces` holds workspace names and labels. Treat these like any other operational table:
+`findings` and `findings_latest` hold error text copied from job runs. Error text can include file paths, table names, parameter values or pieces of data. `monitored_workspaces` holds workspace names and labels, and `monitored_job_environments` holds owners per environment. Treat these like any other operational table:
 
 - grant `SELECT` on them, or on the schema, only to the people and identities that need them;
 - the identity that runs the scheduled job needs `CREATE TABLE` and `MODIFY` on the schema, because each scheduled run runs notebook 01; it owns the tables when it creates them;

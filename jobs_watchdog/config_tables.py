@@ -23,6 +23,7 @@ JOB_COLUMNS = (
     ("enabled", "BOOLEAN"),
     ("notes", "STRING"),
     ("job_name_exclude_regex", "STRING"),
+    ("min_attempt_minutes", "INT"),
 )
 DEPENDENCY_COLUMNS = (
     ("job_name", "STRING"),
@@ -36,6 +37,18 @@ WORKSPACE_COLUMNS = (
     ("environment", "STRING"),
     ("notes", "STRING"),
 )
+ENVIRONMENT_COLUMNS = (
+    ("job_name", "STRING"),
+    ("environment", "STRING"),
+    ("severity", "STRING"),
+    ("owner", "STRING"),
+    ("enabled", "BOOLEAN"),
+    ("max_gap_minutes", "INT"),
+    ("max_runtime_minutes", "INT"),
+    ("max_retries", "INT"),
+    ("min_attempt_minutes", "INT"),
+)
+ENVIRONMENTS_VIEW = "watchdog_config_environments"
 JOBS_VIEW = "watchdog_config_jobs"
 DEPENDENCIES_VIEW = "watchdog_config_dependencies"
 WORKSPACES_VIEW = "watchdog_config_workspaces"
@@ -43,6 +56,7 @@ _LOADS = (
     "sql/config/01_load_monitored_jobs.sql",
     "sql/config/02_load_job_dependencies.sql",
     "sql/config/03_load_monitored_workspaces.sql",
+    "sql/config/04_load_monitored_job_environments.sql",
 )
 
 
@@ -59,6 +73,12 @@ def write_config(spark, jobs, dependencies, catalog, schema, workspaces=()):
     for items, columns, view in sets:
         data = [tuple(getattr(item, name) for name, _ in columns) for item in items]
         spark.createDataFrame(data, schema=_ddl(columns)).createOrReplaceTempView(view)
+    overrides = [
+        (job.job_name, environment, *(settings.get(name) for name, _ in ENVIRONMENT_COLUMNS[2:]))
+        for job in jobs
+        for environment, settings in sorted(job.environments.items())
+    ]
+    spark.createDataFrame(overrides, schema=_ddl(ENVIRONMENT_COLUMNS)).createOrReplaceTempView(ENVIRONMENTS_VIEW)
     for relpath in _LOADS:
         run_sql(spark, relpath, catalog=catalog, schema=schema)
 
@@ -67,12 +87,16 @@ def read_config(spark, catalog, schema):
     """(jobs, dependencies) as loaded into the config tables."""
     validate_identifier(catalog, "catalog")
     validate_identifier(schema, "schema")
+    environments = {}
+    for row in spark.table(f"{catalog}.{schema}.monitored_job_environments").collect():
+        settings = {name: row[name] for name, _ in ENVIRONMENT_COLUMNS[2:] if row[name] is not None}
+        environments.setdefault(row["job_name"], {})[row["environment"]] = settings
     jobs = []
     for row in spark.table(f"{catalog}.{schema}.monitored_jobs").collect():
         values = {name: row[name] for name, _ in JOB_COLUMNS}
         values["owner"] = values["owner"] or ""
         values["notes"] = values["notes"] or ""
-        jobs.append(MonitoredJob(**values))
+        jobs.append(MonitoredJob(**values, environments=environments.get(values["job_name"], {})))
     dependencies = []
     for row in spark.table(f"{catalog}.{schema}.job_dependencies").collect():
         values = {name: row[name] for name, _ in DEPENDENCY_COLUMNS}

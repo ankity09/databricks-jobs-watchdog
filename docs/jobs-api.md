@@ -15,8 +15,9 @@ For each workspace the scan visits:
 1. **Which workspace answered.** `w.get_workspace_id()`. If the ID differs from the workspace the
    scan meant to reach, it stops for that workspace (see [the workspace ID guard](#the-workspace-id-guard)).
 2. **Find the jobs.** `w.jobs.list(limit=100)` lists the jobs this identity can see, 100 per page.
-   Each enabled monitored job's `job_name_regex` is searched in every job name. One listing serves
-   all monitored jobs.
+   The `job_name_regex` of each monitored job switched on in this workspace's environment is searched
+   in every job name. A job switched off there is not looked for (see
+   [Environments](#environments)). One listing serves all monitored jobs.
 
 Then, for each job that matched:
 
@@ -68,6 +69,7 @@ For each task in `tasks[]`:
 | `task_key` | `failed_task_keys` and the error summary |
 | `run_id` | the task run ID, used to call `get_run_output` |
 | `attempt_number` | which attempt this is; 0 is the first try |
+| `start_time`, `end_time` | how long each attempt ran, for `min_attempt_minutes` in `retry_loop` |
 | `state.life_cycle_state`, `state.result_state` | whether the task failed |
 | `state.state_message` | the fallback error text |
 | `status.termination_details.type` | `failure_category` of a task failure |
@@ -169,8 +171,8 @@ gives RETRY_LOOP, and every UNKNOWN row gives COVERAGE. HEALTHY rows give NONE.
 | `live_run_status` | The newest run's state, mapped as above. A job with no runs is UNKNOWN, and gets no other Jobs API rows. |
 | `live_task_failures` | A task fails when its newest attempt ended FAILED or TIMEDOUT, or its life cycle is INTERNAL_ERROR. Any failed task makes the row FAILED, even while the run continues. `failed_task_keys` lists them, and `error_summary` holds `<task_key>: <error>` for each, separated by vertical bars. |
 | `live_long_runtime` | When `max_runtime_minutes` is set: WARNING if the newest run is still in progress and has been going longer than the limit, in whole minutes since `start_time`. |
-| `retry_loop` | When `max_retries` is set: WARNING if any task's newest attempt has an `attempt_number` above `max_retries`. With `max_retries: 1`, a task on its third try (attempt 2) is a retry loop. Set `max_retries` below the job's own task retry limit: a job never retries past its own limit, so an equal value never fires. |
-| `not_found` | No job this identity can see matches the regex. With several workspaces, a job found in any of them gets no row, and the row counts only the workspaces that answered. |
+| `retry_loop` | When `max_retries` or `min_attempt_minutes` is set: WARNING if any task's newest attempt has an `attempt_number` above `max_retries`, or if any task has an attempt that ran shorter than `min_attempt_minutes` (from its `start_time` to its `end_time`) and was then retried. With `max_retries: 1`, a task on its third try (attempt 2) is a retry loop. With `min_attempt_minutes: 10`, a task whose first try ended after 3 minutes and was retried is a retry loop on its first retry. Set `max_retries` below the job's own task retry limit: a job never retries past its own limit, so an equal value never fires. |
+| `not_found` | No job this identity can see matches the regex. With several workspaces, a job found in any of them gets no row, and the row counts only the workspaces that answered. A job that no workspace checked has switched on gets one row with no workspace. |
 | `api_unreachable` | The workspace or the job could not be read. |
 
 Two details:
@@ -180,6 +182,12 @@ Two details:
   still count toward `retry_loop`.
 - **Upstream failures.** Tasks with result UPSTREAM_FAILED never ran, so they are not listed in
   `failed_task_keys`. The upstream task that failed is listed, and the run itself shows FAILED.
+
+The `retry_loop` summary names the rule and the tasks, for example `Retried more than 1 time(s) in
+the newest run: load.` or `Retried after an attempt shorter than 10 minutes: load.`, joined when both
+rules fire. On a HEALTHY row it says what was checked: `No task retried more than 1 time(s) in the
+newest run.` and `No retry after an attempt shorter than 10 minutes.` Only attempts with both a start
+and an end time are measured, so an attempt still running is never counted as short.
 
 ## Paging
 
@@ -198,9 +206,9 @@ COVERAGE), and the scan moves on.
 
 | What failed | Rows written | error_summary |
 |---|---|---|
-| The workspace: sign-in, network, listing jobs | one row per enabled monitored job, with no `job_id` | `<ErrorType>: <message>` |
+| The workspace: sign-in, network, listing jobs | one row per monitored job switched on in that workspace's environment, with no `job_id` | `<ErrorType>: <message>` |
 | One job: listing or reading its runs | one row for that job, with its `job_id` | `<ErrorType>: <message>` |
-| No URL for a workspace (service principal mode) | one row per enabled monitored job | `No URL for this workspace in system.access.workspaces_latest` |
+| No URL for a workspace (service principal mode) | one row per monitored job switched on in that workspace's environment | `No URL for this workspace in system.access.workspaces_latest` |
 | Reading a failed task's output | no extra row; the task keeps its state message | |
 
 ### The workspace ID guard
@@ -221,8 +229,20 @@ In service principal mode, a job found in any of the workspaces gets no `not_fou
 found in none gets one `not_found` row with no workspace. Service principal mode is covered by unit
 tests; run notebook 00 in that mode before you rely on it.
 
+## Environments
+
 Each workspace's rows carry its environment label, from the `workspaces` section of your config. See
 [monitored_workspaces](data-model.md#monitored_workspaces).
+
+Each workspace also uses each job's settings for its label, from the job's `environments` section
+(see [monitored_job_environments](data-model.md#monitored_job_environments)). A job switched off in
+that environment is not looked for there, and `severity`, `owner`, `max_runtime_minutes`,
+`max_retries` and `min_attempt_minutes` can differ. A workspace with no label uses the job's own
+settings. The scan reads every job switched on in at least one environment, so a job with
+`enabled: false` and `environments: {production: {enabled: true}}` is checked in production
+workspaces only. A job that no workspace checked has switched on gets one `not_found` row with no
+workspace: `No workspace checked has <job_name> switched on: it is switched off in their
+environments, or no workspace could be checked.`
 
 ## Permissions
 

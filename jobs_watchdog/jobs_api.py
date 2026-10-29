@@ -113,6 +113,8 @@ def collect_target(client, target, jobs, now, code_version_tag="code_version", p
     """
     if now.tzinfo is None:
         raise ValueError("now must include a timezone")
+    # each job with its overrides for this workspace's environment; switched-off jobs are not checked here
+    jobs = [job.settings_for(target.environment) for job in jobs]
     jobs = [job for job in jobs if job.enabled]
     if not jobs:
         return []
@@ -143,7 +145,8 @@ def collect_target(client, target, jobs, now, code_version_tag="code_version", p
 
 
 def unreachable_rows(target, jobs, reason):
-    """api_unreachable rows for every enabled job, for a workspace that cannot be scanned."""
+    """api_unreachable rows for every job switched on in this workspace's environment."""
+    jobs = [job.settings_for(target.environment) for job in jobs]
     return [_row(target, job, None, "api_unreachable", "UNKNOWN", error_summary=reason) for job in jobs if job.enabled]
 
 
@@ -184,7 +187,9 @@ def merge_not_found(rows, jobs):
     A job found in any workspace keeps none of its not_found rows. A job that
     two or more workspaces answered "not found" for keeps one row with no
     workspace. Workspaces that could not be read (api_unreachable) do not
-    count as checked.
+    count as checked. A job with no rows at all, because it is switched off in
+    the environment of every workspace checked, gets one not_found row, so it
+    never disappears silently.
     """
     regex = {job.job_name: job.job_name_regex for job in jobs}
     found = {row["job_name"] for row in rows if row.get("job_id") is not None}
@@ -205,6 +210,13 @@ def merge_not_found(rows, jobs):
             collapsed.add(name)
             summary = _NOWHERE.format(count=misses[name], regex=regex.get(name, name))
             merged.append(dict(row, workspace_id=None, workspace_name=None, environment=None, error_summary=summary))
+    seen = {row["job_name"] for row in merged}
+    nowhere = Target(None, None, None, None)
+    for job in jobs:
+        if job.job_name not in seen:
+            merged.append(_row(nowhere, job, None, "not_found", "UNKNOWN", error_summary=(
+                f"No workspace checked has {job.job_name} switched on: it is switched off in their environments, "
+                "or no workspace could be checked.")))
     return merged
 
 
@@ -223,8 +235,8 @@ def _job_rows(client, target, job, job_id, now):
     ]
     if job.max_runtime_minutes is not None:
         rows.append(_live_long_runtime(target, job, job_id, run, now))
-    if job.max_retries is not None:
-        rows.append(_retry_loop(target, job, job_id, run, latest))
+    if job.max_retries is not None or job.min_attempt_minutes is not None:
+        rows.append(_retry_loop(target, job, job_id, run, latest, tasks))
     return rows, run
 
 
@@ -348,14 +360,41 @@ def _live_long_runtime(target, job, job_id, run, now):
     return _row(target, job, job_id, "live_long_runtime", "HEALTHY", run=run, error_summary=summary)
 
 
-def _retry_loop(target, job, job_id, run, latest):
-    limit = job.max_retries
-    over = sorted(key for key, task in latest.items() if _attempt(task) > limit)
-    if over:
-        return _row(target, job, job_id, "retry_loop", "WARNING", run=run, failed_task_keys=over,
-                    error_summary=f"Retried more than {limit} time(s) in the newest run: {', '.join(over)}.")
-    return _row(target, job, job_id, "retry_loop", "HEALTHY", run=run,
-                error_summary=f"No task retried more than {limit} time(s) in the newest run.")
+def _retry_loop(target, job, job_id, run, latest, tasks):
+    """Too many retries, or a retry after an attempt shorter than min_attempt_minutes."""
+    limit, shortest = job.max_retries, job.min_attempt_minutes
+    over = sorted(key for key, task in latest.items() if limit is not None and _attempt(task) > limit)
+    quick = sorted(_quick_retries(tasks, shortest)) if shortest is not None else []
+    if over or quick:
+        parts = []
+        if over:
+            parts.append(f"Retried more than {limit} time(s) in the newest run: {', '.join(over)}.")
+        if quick:
+            parts.append(f"Retried after an attempt shorter than {shortest} minutes: {', '.join(quick)}.")
+        return _row(target, job, job_id, "retry_loop", "WARNING", run=run, failed_task_keys=sorted(set(over) | set(quick)),
+                    error_summary=" ".join(parts))
+    parts = []
+    if limit is not None:
+        parts.append(f"No task retried more than {limit} time(s) in the newest run.")
+    if shortest is not None:
+        parts.append(f"No retry after an attempt shorter than {shortest} minutes.")
+    return _row(target, job, job_id, "retry_loop", "HEALTHY", run=run, error_summary=" ".join(parts))
+
+
+def _quick_retries(tasks, minutes):
+    """Task keys with an attempt that ended in under this many minutes and was then retried."""
+    newest = {}
+    for task in tasks:
+        key = getattr(task, "task_key", None) or "unnamed_task"
+        newest[key] = max(newest.get(key, 0), _attempt(task))
+    quick = set()
+    for task in tasks:
+        key = getattr(task, "task_key", None) or "unnamed_task"
+        start, end = getattr(task, "start_time", None), getattr(task, "end_time", None)
+        retried = _attempt(task) < newest[key]
+        if retried and start and end and end - start < minutes * 60000:
+            quick.add(key)
+    return quick
 
 
 def _task_error(client, task):
@@ -413,7 +452,7 @@ def _row(target, job, job_id, check_id, status, run=None, termination_type=None,
          error_summary=None):
     run_id = getattr(run, "run_id", None)
     return {
-        "workspace_id": str(target.workspace_id),
+        "workspace_id": None if target.workspace_id is None else str(target.workspace_id),
         "workspace_name": target.workspace_name,
         "job_id": None if job_id is None else str(job_id),
         "job_name": job.job_name,
