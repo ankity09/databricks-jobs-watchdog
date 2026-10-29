@@ -1,0 +1,91 @@
+# Example monitored-jobs file.
+#
+# Copy this file somewhere outside the Git folder (your workspace home folder or
+# a Unity Catalog volume), replace the examples with your own jobs, and point
+# scan.monitored_jobs_path (or the notebook's monitored_jobs_path widget) at it.
+#
+# job_name          a short logical name used in findings and alerts
+# job_name_regex    matches the job's real name in each workspace, for example
+#                   ^orders_ingest_(dev|prod)$ when environments add a suffix
+# schedule_type     continuous or scheduled
+# max_gap_minutes   scheduled jobs: longest allowed gap between run starts
+# max_runtime_minutes  longest allowed run before a warning
+# max_retries       more task attempts than this is a retry loop
+# severity          CRITICAL or WARNING, used when the job is not healthy
+# owner             team or person to route findings to
+# enabled           false keeps the entry without checking it
+
+jobs:
+  # The two demo jobs are created by the bundle's demo target, so a new
+  # deployment shows one healthy and one failing job straight away.
+  - job_name: watchdog_demo_succeeds
+    job_name_regex: "watchdog_demo_succeeds"
+    schedule_type: scheduled
+    max_gap_minutes: 1440
+    max_runtime_minutes: 30
+    max_retries: 1
+    severity: WARNING
+    owner: platform-team
+    enabled: true
+    notes: Sample job from the demo target; succeeds every run.
+
+  - job_name: watchdog_demo_fails
+    job_name_regex: "watchdog_demo_fails"
+    schedule_type: scheduled
+    max_gap_minutes: 1440
+    max_runtime_minutes: 30
+    max_retries: 1
+    severity: CRITICAL
+    owner: platform-team
+    enabled: true
+    notes: Sample job from the demo target; fails on purpose.
+
+  # Illustrative entries showing a small pipeline. Enable and edit them, or
+  # replace them with your own jobs.
+  - job_name: orders_ingest
+    job_name_regex: "^orders_ingest(_[a-z0-9]+)?$"
+    schedule_type: continuous
+    max_runtime_minutes: 60
+    max_retries: 3
+    severity: CRITICAL
+    owner: ingestion-team
+    enabled: false
+    notes: Continuous ingestion; everything downstream depends on it.
+
+  - job_name: orders_enrich
+    job_name_regex: "^orders_enrich(_[a-z0-9]+)?$"
+    schedule_type: scheduled
+    max_gap_minutes: 90
+    max_runtime_minutes: 45
+    max_retries: 2
+    severity: WARNING
+    owner: ingestion-team
+    enabled: false
+    notes: Runs hourly.
+
+  - job_name: daily_revenue_report
+    job_name_regex: "^daily_revenue_report(_[a-z0-9]+)?$"
+    schedule_type: scheduled
+    max_gap_minutes: 1500
+    max_runtime_minutes: 120
+    max_retries: 1
+    severity: WARNING
+    owner: analytics-team
+    enabled: false
+    notes: Runs once a day.
+
+dependencies:
+  - job_name: orders_enrich
+    depends_on: orders_ingest
+    dependency_type: job
+  - job_name: daily_revenue_report
+    depends_on: orders_enrich
+    dependency_type: job
+  - job_name: orders_ingest
+    depends_on: kafka
+    dependency_type: service
+    notes: Reads events from Kafka.
+  - job_name: orders_enrich
+    depends_on: config_api
+    dependency_type: service
+    notes: Looks up customer settings from a config service.

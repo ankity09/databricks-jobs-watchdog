@@ -1,0 +1,40 @@
+# accelerator.yaml: the one file you review before anything is created.
+#
+# Fill in the empty values, or let Genie Code interview you (see DEPLOY.md).
+# Keep a filled-in copy as accelerator.local.yaml (git-ignored) so pulls from
+# this repo never conflict with your values.
+
+metadata:
+  name: databricks-jobs-watchdog
+  title: "Watchdog: multi-workspace job monitoring for Databricks"
+  customer: ""                  # optional, filled at deploy time
+  owner: ankity09
+
+target:
+  catalog: ""                   # required: catalog that will hold the Watchdog schema
+  schema: watchdog              # schema created for the three Watchdog tables
+  region: ""                    # required: cloud region of this metastore, for example us-east-2
+  warehouse_id: ""              # optional: SQL warehouse for the SQL editor and later alerts
+
+auth:
+  mode: current_workspace       # current_workspace: check only this workspace, as you
+                                # service_principal: check every workspace in the region
+  secret_scope: ""              # service_principal mode: scope holding the OAuth secret
+  client_id_key: client_id      # key in that scope holding the service principal's application ID
+  client_secret_key: client_secret  # key in that scope holding its OAuth secret
+
+scan:
+  lookback_hours: 48            # how far back the system-table checks look
+  monitored_jobs_path: ../config/monitored_jobs.example.yml
+                                # point this at your own copy, kept outside the Git folder
+
+resources: {}                   # nothing extra is needed in Phase 1
+
+features:
+  required:
+    - unity_catalog
+    - system_tables
+    - jobs
+    - serverless
+  optional:
+    - service_principal_oauth   # needed only for the every-workspace mode
