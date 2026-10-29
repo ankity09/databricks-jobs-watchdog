@@ -214,7 +214,7 @@ The dashboard has three pages:
 
 The environment and job filters narrow Now and Versions and runs. History shows every environment. Now and Versions and runs read `findings_latest`. History reads `findings`, because it needs every scan.
 
-The dashboard shows error text, so share it with the people who may read `findings`. If the folder already holds two dashboards with this name, notebook 08 stops and names them: trash all but one, then run it again. The teardown script does not remove the dashboard, so delete it in the workspace when you no longer need it.
+The dashboard is published without embedded credentials, so each viewer's queries run with their own permissions: a viewer needs `USE CATALOG`, `USE SCHEMA` and `SELECT` on `findings` and `findings_latest`, and permission to use the SQL warehouse. It shows error text, so share it with the people who may read `findings`. If the folder already holds two dashboards with this name, notebook 08 stops and names them: trash all but one, then run it again. The teardown script does not remove the dashboard, so delete it in the workspace when you no longer need it.
 
 ### Write your own checks (notebook 09)
 

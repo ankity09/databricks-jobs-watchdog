@@ -13,6 +13,8 @@
 # MAGIC - **History**: status per scan over 30 days, and FAILED rows by job over 7 days.
 # MAGIC
 # MAGIC The environment and job filters narrow Now and Versions and runs. History always shows every environment.
+# MAGIC
+# MAGIC The dashboard is published without embedded credentials, so each viewer's queries run with their own permissions: share it with people who can read the findings table and view (`SELECT` on both, and `USE` on the catalog and schema), and use the SQL warehouse.
 
 # COMMAND ----------
 

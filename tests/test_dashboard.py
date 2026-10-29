@@ -9,13 +9,11 @@ import json
 import py_compile
 import re
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 import sqlglot
 from sqlglot import exp
 
-from databricks.sdk.service.dashboards import LifecycleState
 
 from jobs_watchdog.dashboard import create_or_update_dashboard, find_dashboards, render
 
@@ -195,36 +193,37 @@ def test_every_page_uses_grid_v1_and_each_row_fills_twelve_columns():
         assert all(width == 12 for width in widths.values()), (page["displayName"], widths)
 
 
-class FakeLakeview:
-    """Answers like the Lakeview API: list() leaves out the folder (parent_path), get() includes it."""
+BASE = "/api/2.0/lakeview/dashboards"
 
-    def __init__(self, existing=()):
-        self.stored = {dashboard.dashboard_id: dashboard for dashboard in existing}
-        self.created = None
-        self.updated = None
-        self.published = None
 
-    def list(self, *, page_size=None, page_token=None, show_trashed=None, view=None):
-        return iter([
-            SimpleNamespace(dashboard_id=d.dashboard_id, display_name=d.display_name, parent_path=None,
-                            path=None, lifecycle_state=d.lifecycle_state)
-            for d in self.stored.values()
-        ])
+class FakeApi:
+    """Answers like the Lakeview REST API: the list leaves out the folder, get includes it, lists page."""
 
-    def get(self, dashboard_id):
-        return self.stored[dashboard_id]
+    def __init__(self, existing=(), page_size=2):
+        self.stored = {d["dashboard_id"]: d for d in existing}
+        self.page_size = page_size
+        self.created = self.updated = self.published = None
 
-    def create(self, *, dashboard=None):
-        self.created = dashboard
-        return SimpleNamespace(dashboard_id="new-id")
-
-    def update(self, dashboard_id, *, dashboard=None):
-        self.updated = (dashboard_id, dashboard)
-        return SimpleNamespace(dashboard_id=dashboard_id)
-
-    def publish(self, dashboard_id, *, embed_credentials=None, warehouse_id=None):
-        self.published = (dashboard_id, warehouse_id)
-        return SimpleNamespace(dashboard_id=dashboard_id)
+    def do(self, method, path, query=None, body=None, **kwargs):
+        if method == "GET" and path == BASE:
+            ids = list(self.stored)
+            start = int((query or {}).get("page_token") or 0)
+            page = ids[start:start + self.page_size]
+            listed = [{k: v for k, v in self.stored[i].items() if k != "parent_path"} for i in page]
+            more = start + self.page_size < len(ids)
+            return {"dashboards": listed, **({"next_page_token": str(start + self.page_size)} if more else {})}
+        if method == "GET" and path.startswith(BASE + "/"):
+            return self.stored[path.rsplit("/", 1)[1]]
+        if method == "POST" and path == BASE:
+            self.created = body
+            return {"dashboard_id": "new-id"}
+        if method == "PATCH":
+            self.updated = (path.rsplit("/", 1)[1], body)
+            return {}
+        if method == "POST" and path.endswith("/published"):
+            self.published = (path.split("/")[-2], body)
+            return {}
+        raise AssertionError(f"unexpected call {method} {path}")
 
 
 class FakeWorkspace:
@@ -236,13 +235,13 @@ class FakeWorkspace:
 
 
 class FakeClient:
-    def __init__(self, existing=()):
-        self.lakeview = FakeLakeview(existing)
+    def __init__(self, existing=(), page_size=2):
+        self.api_client = FakeApi(existing, page_size)
         self.workspace = FakeWorkspace()
 
 
-def existing(dashboard_id, name=NAME, folder=FOLDER, state=LifecycleState.ACTIVE):
-    return SimpleNamespace(dashboard_id=dashboard_id, display_name=name, parent_path=folder, lifecycle_state=state)
+def existing(dashboard_id, name=NAME, folder=FOLDER, state="ACTIVE"):
+    return {"dashboard_id": dashboard_id, "display_name": name, "parent_path": folder, "lifecycle_state": state}
 
 
 def deploy(client):
@@ -250,26 +249,37 @@ def deploy(client):
         client, display_name=NAME, parent_path=FOLDER, serialized_dashboard=SERIALIZED, warehouse_id="wh-1")
 
 
+def test_the_module_works_on_any_sdk_version():
+    # older serverless runtimes ship an SDK without the dashboards dataclasses, so only REST calls are used
+    assert "databricks.sdk.service.dashboards" not in (Path(__file__).resolve().parents[1] /
+                                                         "jobs_watchdog" / "dashboard.py").read_text()
+
+
 def test_find_dashboards_matches_name_and_folder_and_skips_trashed():
     client = FakeClient([
         existing("match"),
         existing("other-name", name="Something else"),
         existing("other-folder", folder="/Workspace/Users/other@example.com"),
-        existing("trashed", state=LifecycleState.TRASHED),
+        existing("trashed", state="TRASHED"),
     ])
-    assert [d.dashboard_id for d in find_dashboards(client.lakeview, NAME, FOLDER)] == ["match"]
+    assert [d["dashboard_id"] for d in find_dashboards(client, NAME, FOLDER)] == ["match"]
+
+
+def test_find_dashboards_follows_every_page():
+    client = FakeClient([existing(f"other-{i}", name="Something else") for i in range(5)] + [existing("last")],
+                        page_size=2)
+    assert [d["dashboard_id"] for d in find_dashboards(client, NAME, FOLDER)] == ["last"]
 
 
 def test_existing_dashboard_in_the_folder_is_updated_and_published():
     client = FakeClient([existing("d-1")])
     path = deploy(client)
-    assert client.lakeview.created is None
-    dashboard_id, dashboard = client.lakeview.updated
+    api = client.api_client
+    assert api.created is None
+    dashboard_id, body = api.updated
     assert dashboard_id == "d-1"
-    assert dashboard.display_name == NAME
-    assert dashboard.serialized_dashboard == SERIALIZED
-    assert dashboard.warehouse_id == "wh-1"
-    assert client.lakeview.published == ("d-1", "wh-1")
+    assert body == {"display_name": NAME, "serialized_dashboard": SERIALIZED, "warehouse_id": "wh-1"}
+    assert api.published == ("d-1", {"warehouse_id": "wh-1", "embed_credentials": False})
     assert client.workspace.made == []
     assert path == "/sql/dashboardsv3/d-1/published"
 
@@ -277,33 +287,31 @@ def test_existing_dashboard_in_the_folder_is_updated_and_published():
 def test_folder_with_a_trailing_slash_still_matches_the_existing_dashboard():
     client = FakeClient([existing("d-2", folder=FOLDER + "/")])
     deploy(client)
-    assert client.lakeview.updated[0] == "d-2"
-    assert client.lakeview.created is None
+    assert client.api_client.updated[0] == "d-2"
+    assert client.api_client.created is None
 
 
 def test_listed_folder_without_the_workspace_prefix_still_matches():
     # The Lakeview API stores and lists the folder as /Users/..., while the notebook passes /Workspace/Users/...
     client = FakeClient([existing("d-3", folder=FOLDER.removeprefix("/Workspace"))])
     deploy(client)
-    assert client.lakeview.updated[0] == "d-3"
-    assert client.lakeview.created is None
+    assert client.api_client.updated[0] == "d-3"
+    assert client.api_client.created is None
 
 
 def test_missing_dashboard_is_created_in_the_folder_and_published():
     client = FakeClient([
         existing("renamed", name="Something else"),
         existing("elsewhere", folder="/Workspace/Users/other@example.com"),
-        existing("old", state=LifecycleState.TRASHED),
+        existing("old", state="TRASHED"),
     ])
     path = deploy(client)
-    assert client.lakeview.updated is None
-    dashboard = client.lakeview.created
-    assert dashboard.display_name == NAME
-    assert dashboard.parent_path == FOLDER
-    assert dashboard.serialized_dashboard == SERIALIZED
-    assert dashboard.warehouse_id == "wh-1"
+    api = client.api_client
+    assert api.updated is None
+    assert api.created == {"display_name": NAME, "parent_path": FOLDER, "serialized_dashboard": SERIALIZED,
+                           "warehouse_id": "wh-1"}
     assert client.workspace.made == [FOLDER]
-    assert client.lakeview.published == ("new-id", "wh-1")
+    assert api.published == ("new-id", {"warehouse_id": "wh-1", "embed_credentials": False})
     assert path == "/sql/dashboardsv3/new-id/published"
 
 
@@ -311,9 +319,8 @@ def test_two_dashboards_with_the_same_name_in_the_folder_stop_the_deploy():
     client = FakeClient([existing("d-1"), existing("d-2")])
     with pytest.raises(ValueError, match="d-1, d-2"):
         deploy(client)
-    assert client.lakeview.updated is None
-    assert client.lakeview.created is None
-    assert client.lakeview.published is None
+    api = client.api_client
+    assert api.updated is None and api.created is None and api.published is None
 
 
 def test_notebook_compiles(tmp_path):
