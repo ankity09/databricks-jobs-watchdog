@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Databricks bundle state
+.databricks/
+
+# Local-only config (never commit real workspace values)
+accelerator.local.yaml
+config/*.local.yml
+
+# Execution scratch
+.superpowers/
+
+# OS
+.DS_Store
