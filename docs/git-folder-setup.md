@@ -27,7 +27,7 @@ A pull replaces the tracked files: the notebooks, the SQL files and the example 
 
 1. Open `notebooks/00_check_access` in the Git folder.
 2. Attach it to **Serverless** compute.
-3. Check the widgets at the top, then run all cells.
+3. Run the first two code cells. The input boxes (widgets) appear at the top of the notebook; check them, then run all cells.
 4. Continue with `01_create_tables` through `07_validate_phase_1`, in order.
 
 The notebooks find the repo root by looking upward from their own folder, so open them where they are. A notebook copied elsewhere cannot import `jobs_watchdog`.

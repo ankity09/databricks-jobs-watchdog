@@ -10,7 +10,7 @@
 # MAGIC
 # MAGIC Nothing is created or changed.
 # MAGIC
-# MAGIC **Inputs (widgets).** `lookback_hours`, `auth_mode`, and for service principal mode `secret_scope`, `client_id_key`, `client_secret_key`.
+# MAGIC **Inputs (widgets).** `lookback_hours`, `auth_mode`, and for service principal mode `secret_scope`, `client_id_key`, `client_secret_key`. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
 # MAGIC **What to look for.** Every line says PASS. A FAIL line names what is missing; `docs/phase-1-runbook.md` lists the grant or setting that fixes it. The notebook fails at the end if a required check failed. In service principal mode, a workspace the service principal cannot reach shows as a WARN line here, and as `api_unreachable` rows in notebook 06; the notebook fails only if it reaches none of them.
 
@@ -20,8 +20,12 @@
 
 # COMMAND ----------
 
+# Shows the input boxes (widgets) at the top of the notebook. Fill them in, then run the cells below.
 NAMES = ("lookback_hours", "auth_mode", "secret_scope", "client_id_key", "client_secret_key")
 define_widgets(*NAMES)
+
+# COMMAND ----------
+
 s = settings(*NAMES)
 required_failures = []
 

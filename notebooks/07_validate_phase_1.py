@@ -10,7 +10,7 @@
 # MAGIC 4. every enabled job got at least one finding from each source;
 # MAGIC 5. no findings key appears twice.
 # MAGIC
-# MAGIC **Inputs (widgets).** `catalog`, `schema`, `scan_id`. With `scan_id` empty, it checks each source's newest scan, which is what you want after running notebooks 05 and 06 by hand.
+# MAGIC **Inputs (widgets).** `catalog`, `schema`, `scan_id`. With `scan_id` empty, it checks each source's newest scan, which is what you want after running notebooks 05 and 06 by hand. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
 # MAGIC **What to look for.** Five PASS lines. The notebook fails if any check fails, so a job run of the Watchdog shows red.
 
@@ -20,7 +20,11 @@
 
 # COMMAND ----------
 
+# Shows the input boxes (widgets) at the top of the notebook. Fill them in, then run the cells below.
 define_widgets("catalog", "schema", "scan_id")
+
+# COMMAND ----------
+
 s = settings("catalog", "schema", "scan_id")
 
 # COMMAND ----------

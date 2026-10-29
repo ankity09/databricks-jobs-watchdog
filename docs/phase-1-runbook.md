@@ -188,7 +188,7 @@ databricks bundle run watchdog_phase_1 -t demo --profile <profile>
 | `WARN  service principal on <workspace>: the URL answered as workspace <id>` | the URL in the workspaces table points at another workspace | check `system.access.workspaces_latest` for that workspace |
 | `WARN  service principal on <workspace>: no URL in system.access.workspaces_latest` | the workspaces table has no URL for it | check the table; that workspace is skipped and gets `api_unreachable` rows |
 | `FAIL  service principal reaches none of the <n> workspaces tried` (or `reaches no workspaces`) | every workspace failed, or the region lists none | fix the WARN lines above it; check the secrets and that the service principal is in at least one workspace |
-| `catalog is empty: set target.catalog in accelerator.local.yaml or the catalog widget` | no catalog configured | fill in `accelerator.local.yaml`, or the widget |
+| `catalog is empty: type it in the catalog box at the top of the notebook, or set target.catalog in accelerator.local.yaml` | no catalog configured | type it in the `catalog` box, or fill in `accelerator.local.yaml` |
 | `catalog must be letters, digits or underscores` (or `schema`) | the name has a hyphen, space or quote | use a name with only letters, digits and underscores |
 | `job <name>: scheduled jobs need max_gap_minutes` (or another config error) | the YAML file has a mistake | fix the file; the message names the job and the field |
 | `Cannot find the repo root above ...` | the notebook is not in the repo's `notebooks` folder | open the notebooks from the Git folder (or the deployed bundle) |

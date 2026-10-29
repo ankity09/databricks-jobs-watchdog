@@ -4,7 +4,7 @@
 # MAGIC
 # MAGIC **What it does.** Reads your monitored-jobs YAML file, checks it, and replaces the rows of `monitored_jobs` and `job_dependencies` with its contents. Then it shows which real jobs each monitored job matches.
 # MAGIC
-# MAGIC **Inputs (widgets).** `catalog`, `schema`, `monitored_jobs_path`. Keep your own copy of the file outside the Git folder (your workspace home folder, or a Unity Catalog volume such as `/Volumes/<catalog>/<schema>/<volume>/monitored_jobs.yml`) so a pull never conflicts with your edits. Relative paths start at the repo root.
+# MAGIC **Inputs (widgets).** `catalog`, `schema`, `monitored_jobs_path`. Keep your own copy of the file outside the Git folder (your workspace home folder, or a Unity Catalog volume such as `/Volumes/<catalog>/<schema>/<volume>/monitored_jobs.yml`) so a pull never conflicts with your edits. Relative paths start at the repo root. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
 # MAGIC **What to look for.** Every enabled job matches at least one real job in the last table. A monitored job with an empty `workspace_id` matches nothing: fix its `job_name_regex`. A job created in the last hour may not match yet, because system tables run about an hour behind; notebook 06 matches through the Jobs API and finds it straight away.
 
@@ -14,7 +14,11 @@
 
 # COMMAND ----------
 
+# Shows the input boxes (widgets) at the top of the notebook. Fill them in, then run the cells below.
 define_widgets("catalog", "schema", "monitored_jobs_path")
+
+# COMMAND ----------
+
 s = settings("catalog", "schema", "monitored_jobs_path")
 
 # COMMAND ----------

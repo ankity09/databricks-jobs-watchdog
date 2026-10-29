@@ -58,7 +58,8 @@ def read_settings(values, repo_root):
     for key in ("catalog", "schema"):
         if key in settings:
             if not settings[key]:
-                raise ValueError(f"{key} is empty: set target.{key} in accelerator.local.yaml or the {key} widget")
+                raise ValueError(f"{key} is empty: type it in the {key} box at the top of the notebook, "
+                                 f"or set target.{key} in accelerator.local.yaml")
             validate_identifier(settings[key], key)
     if "lookback_hours" in settings:
         hours = settings["lookback_hours"]

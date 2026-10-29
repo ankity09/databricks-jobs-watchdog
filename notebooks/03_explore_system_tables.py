@@ -4,7 +4,7 @@
 # MAGIC
 # MAGIC **What it does.** Runs each read-only query in `sql/explore`, with a note on what it answers. These are the same tables the system table scan (notebook 05) reads, so this is the place to see the raw data behind a finding. Nothing is written.
 # MAGIC
-# MAGIC **Inputs (widgets).** `lookback_hours` (how far back to look).
+# MAGIC **Inputs (widgets).** `lookback_hours` (how far back to look). The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
 # MAGIC **What to look for.** Your jobs and runs appear as you expect. System tables run about an hour behind, so very recent runs are missing until they land. Every query also runs in the SQL editor, which shows a field for each `:parameter`.
 # MAGIC
@@ -16,7 +16,11 @@
 
 # COMMAND ----------
 
+# Shows the input boxes (widgets) at the top of the notebook. Fill them in, then run the cells below.
 define_widgets("lookback_hours")
+
+# COMMAND ----------
+
 s = settings("lookback_hours")
 
 from jobs_watchdog.sqlfiles import run_sql

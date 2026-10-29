@@ -10,7 +10,7 @@
 # MAGIC
 # MAGIC Unlike system tables, the Jobs API is live: a run that started a minute ago is already here.
 # MAGIC
-# MAGIC **Inputs (widgets).** `catalog`, `schema` (to read your monitored jobs), and `job_id`. With `job_id` empty, the notebook uses the first enabled monitored job it finds in this workspace.
+# MAGIC **Inputs (widgets).** `catalog`, `schema` (to read your monitored jobs), and `job_id`. With `job_id` empty, the notebook uses the first enabled monitored job it finds in this workspace. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
 # MAGIC **What to look for.** The newest run's states, its tasks, and for a failed task, the error text the Watchdog writes to `error_summary`.
 
@@ -20,8 +20,12 @@
 
 # COMMAND ----------
 
+# Shows the input boxes (widgets) at the top of the notebook. Fill them in, then run the cells below.
 define_widgets("catalog", "schema")
 dbutils.widgets.text("job_id", "", "job_id")
+
+# COMMAND ----------
+
 s = settings("catalog", "schema")
 
 # COMMAND ----------

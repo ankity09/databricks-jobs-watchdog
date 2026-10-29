@@ -4,7 +4,7 @@
 # MAGIC
 # MAGIC **What it does.** Runs the files in `sql/setup` in order: it creates the schema, then the two config tables (`monitored_jobs`, `job_dependencies`) and the one `findings` table. Every statement is `IF NOT EXISTS`, so re-running changes nothing.
 # MAGIC
-# MAGIC **Inputs (widgets).** `catalog`, `schema`.
+# MAGIC **Inputs (widgets).** `catalog`, `schema`. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
 # MAGIC **What to look for.** Three `exists: True` lines. Creating the schema needs `USE CATALOG` and `CREATE SCHEMA` on the catalog (see the runbook).
 
@@ -14,7 +14,11 @@
 
 # COMMAND ----------
 
+# Shows the input boxes (widgets) at the top of the notebook. Fill them in, then run the cells below.
 define_widgets("catalog", "schema")
+
+# COMMAND ----------
+
 s = settings("catalog", "schema")
 
 # COMMAND ----------

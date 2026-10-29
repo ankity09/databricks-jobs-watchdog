@@ -87,7 +87,7 @@ Both paths use the same notebooks. Settings come from `accelerator.yaml`: copy i
 | `06_scan_jobs_api` | writes the Jobs API findings |
 | `07_validate_phase_1` | prints PASS or FAIL for each Phase 1 check |
 
-Each notebook takes its inputs from widgets at the top, with defaults from `accelerator.local.yaml` (or `accelerator.yaml`). Give notebooks 05 and 06 the same `scan_id` to make one scan across both sources, or leave it empty in both: notebook 07 then checks each source's newest scan.
+Each notebook takes its inputs from widgets (input boxes) at the top, which appear once you run its first two code cells, with defaults from `accelerator.local.yaml` (or `accelerator.yaml`). Give notebooks 05 and 06 the same `scan_id` to make one scan across both sources, or leave it empty in both: notebook 07 then checks each source's newest scan.
 
 ### As a job, with the bundle
 
