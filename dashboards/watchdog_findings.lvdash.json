@@ -1,0 +1,1117 @@
+{
+  "datasets": [
+    {
+      "name": "ds_now",
+      "displayName": "Latest findings",
+      "queryLines": [
+        "SELECT\n",
+        "  environment, job_name, check_id, status, owner,\n",
+        "  CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END AS is_failed,\n",
+        "  CASE WHEN status = 'WARNING' THEN 1 ELSE 0 END AS is_warning,\n",
+        "  CASE WHEN status = 'UNKNOWN' THEN 1 ELSE 0 END AS is_unknown,\n",
+        "  CASE WHEN status = 'HEALTHY' THEN 1 ELSE 0 END AS is_healthy,\n",
+        "  CASE WHEN status <> 'HEALTHY' THEN 1 ELSE 0 END AS is_problem,\n",
+        "  element_at(array('HEALTHY', 'WARNING', 'UNKNOWN', 'FAILED'),\n",
+        "    MAX(CASE status WHEN 'HEALTHY' THEN 1 WHEN 'WARNING' THEN 2 WHEN 'UNKNOWN' THEN 3 WHEN 'FAILED' THEN 4 ELSE 3 END) OVER (PARTITION BY job_name, environment)) AS job_worst_status,\n",
+        "  MAX(CASE status WHEN 'HEALTHY' THEN 1 WHEN 'WARNING' THEN 2 WHEN 'UNKNOWN' THEN 3 WHEN 'FAILED' THEN 4 ELSE 3 END) OVER (PARTITION BY job_name, environment) AS job_worst_rank\n",
+        "FROM {{catalog}}.{{schema}}.findings_latest\n"
+      ]
+    },
+    {
+      "name": "ds_problems",
+      "displayName": "Problems (not HEALTHY)",
+      "queryLines": [
+        "SELECT\n",
+        "  observed_at, environment, workspace_name, job_name, check_id, status, severity, error_summary,\n",
+        "  array_join(affected_jobs, ', ') AS affected_jobs_text, code_version, run_page_url,\n",
+        "  CASE status WHEN 'FAILED' THEN 1 WHEN 'UNKNOWN' THEN 2 WHEN 'WARNING' THEN 3 ELSE 4 END AS status_order,\n",
+        "  CASE WHEN severity = 'CRITICAL' THEN 1 ELSE 2 END AS severity_order\n",
+        "FROM {{catalog}}.{{schema}}.findings_latest\n",
+        "WHERE status <> 'HEALTHY'\n",
+        "ORDER BY status_order, severity_order, environment, job_name, check_id\n"
+      ]
+    },
+    {
+      "name": "ds_runs",
+      "displayName": "Latest run per job and workspace",
+      "queryLines": [
+        "SELECT\n",
+        "  job_name, workspace_name, environment, code_version, trigger_type, triggered_by,\n",
+        "  run_start_time, run_end_time,\n",
+        "  ROUND(CASE\n",
+        "          WHEN run_start_time IS NOT NULL AND run_end_time IS NOT NULL\n",
+        "            THEN (unix_timestamp(run_end_time) - unix_timestamp(run_start_time)) / 60.0\n",
+        "          ELSE run_duration_seconds / 60.0\n",
+        "        END, 1) AS duration_minutes,\n",
+        "  status\n",
+        "FROM {{catalog}}.{{schema}}.findings_latest\n",
+        "WHERE check_id IN ('live_run_status', 'last_run_result')\n",
+        "QUALIFY ROW_NUMBER() OVER (\n",
+        "  PARTITION BY job_name, workspace_id, job_id\n",
+        "  ORDER BY CASE WHEN check_id = 'live_run_status' THEN 1 ELSE 2 END) = 1\n",
+        "ORDER BY job_name, workspace_name\n"
+      ]
+    },
+    {
+      "name": "ds_scans",
+      "displayName": "Status per scan (30 days)",
+      "queryLines": [
+        "SELECT s.scan_time, f.status, COUNT(*) AS findings\n",
+        "FROM {{catalog}}.{{schema}}.findings AS f\n",
+        "JOIN (\n",
+        "  SELECT scan_id, MIN(observed_at) AS scan_time\n",
+        "  FROM {{catalog}}.{{schema}}.findings\n",
+        "  WHERE observed_at >= date_sub(current_date(), 30)\n",
+        "  GROUP BY scan_id\n",
+        ") AS s\n",
+        "  ON f.scan_id = s.scan_id\n",
+        "WHERE f.observed_at >= date_sub(current_date(), 30)\n",
+        "GROUP BY s.scan_time, f.status\n",
+        "ORDER BY s.scan_time, f.status\n"
+      ]
+    },
+    {
+      "name": "ds_failed",
+      "displayName": "FAILED rows by job (7 days)",
+      "queryLines": [
+        "SELECT job_name, environment, COUNT(*) AS failed_findings\n",
+        "FROM {{catalog}}.{{schema}}.findings\n",
+        "WHERE status = 'FAILED' AND observed_at >= date_sub(current_date(), 7)\n",
+        "GROUP BY job_name, environment\n",
+        "ORDER BY failed_findings DESC, job_name\n",
+        "LIMIT 25\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "now",
+      "displayName": "Now",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "header-now",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Watchdog findings: now\n",
+                "\n",
+                "Newest scan of each source. Problems are listed worst first: FAILED, then UNKNOWN (a coverage gap), then WARNING."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "filter-environment-now",
+            "queries": [
+              {
+                "name": "env_now",
+                "query": {
+                  "datasetName": "ds_now",
+                  "fields": [
+                    {
+                      "name": "environment",
+                      "expression": "`environment`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "env_problems",
+                "query": {
+                  "datasetName": "ds_problems",
+                  "fields": [
+                    {
+                      "name": "environment",
+                      "expression": "`environment`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "environment",
+                    "displayName": "Environment",
+                    "queryName": "env_now"
+                  },
+                  {
+                    "fieldName": "environment",
+                    "displayName": "Environment",
+                    "queryName": "env_problems"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Environment"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "filter-job-now",
+            "queries": [
+              {
+                "name": "job_now",
+                "query": {
+                  "datasetName": "ds_now",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "job_problems",
+                "query": {
+                  "datasetName": "ds_problems",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "Job",
+                    "queryName": "job_now"
+                  },
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "Job",
+                    "queryName": "job_problems"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Job"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 2,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "counter-failed",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_now",
+                  "fields": [
+                    {
+                      "name": "sum(is_failed)",
+                      "expression": "SUM(`is_failed`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(is_failed)",
+                  "displayName": "FAILED"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "FAILED",
+                "showDescription": true,
+                "description": "Latest rows with status FAILED. One row per job, check and source."
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "counter-warning",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_now",
+                  "fields": [
+                    {
+                      "name": "sum(is_warning)",
+                      "expression": "SUM(`is_warning`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(is_warning)",
+                  "displayName": "WARNING"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "WARNING",
+                "showDescription": true,
+                "description": "Latest rows with status WARNING. The job did not fail."
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 4,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "counter-unknown",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_now",
+                  "fields": [
+                    {
+                      "name": "sum(is_unknown)",
+                      "expression": "SUM(`is_unknown`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(is_unknown)",
+                  "displayName": "UNKNOWN"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "UNKNOWN",
+                "showDescription": true,
+                "description": "Latest rows the Watchdog could not judge: a coverage gap."
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 4,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "counter-healthy",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_now",
+                  "fields": [
+                    {
+                      "name": "sum(is_healthy)",
+                      "expression": "SUM(`is_healthy`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(is_healthy)",
+                  "displayName": "HEALTHY"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "HEALTHY",
+                "showDescription": true,
+                "description": "Latest rows whose check passed."
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 4,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "section-problems",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Problems, worst first\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 7,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "table-problems",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_problems",
+                  "fields": [
+                    {
+                      "name": "environment",
+                      "expression": "`environment`"
+                    },
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "check_id",
+                      "expression": "`check_id`"
+                    },
+                    {
+                      "name": "status",
+                      "expression": "`status`"
+                    },
+                    {
+                      "name": "severity",
+                      "expression": "`severity`"
+                    },
+                    {
+                      "name": "error_summary",
+                      "expression": "`error_summary`"
+                    },
+                    {
+                      "name": "affected_jobs_text",
+                      "expression": "`affected_jobs_text`"
+                    },
+                    {
+                      "name": "code_version",
+                      "expression": "`code_version`"
+                    },
+                    {
+                      "name": "run_page_url",
+                      "expression": "`run_page_url`"
+                    },
+                    {
+                      "name": "observed_at",
+                      "expression": "`observed_at`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "environment",
+                    "displayName": "Environment"
+                  },
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "Workspace"
+                  },
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "Job"
+                  },
+                  {
+                    "fieldName": "check_id",
+                    "displayName": "Check"
+                  },
+                  {
+                    "fieldName": "status",
+                    "displayName": "Status"
+                  },
+                  {
+                    "fieldName": "severity",
+                    "displayName": "Severity"
+                  },
+                  {
+                    "fieldName": "error_summary",
+                    "displayName": "Error summary"
+                  },
+                  {
+                    "fieldName": "affected_jobs_text",
+                    "displayName": "Affected jobs"
+                  },
+                  {
+                    "fieldName": "code_version",
+                    "displayName": "Code version"
+                  },
+                  {
+                    "fieldName": "run_page_url",
+                    "displayName": "Run",
+                    "link": {
+                      "templatedURL": "{{@}}"
+                    }
+                  },
+                  {
+                    "fieldName": "observed_at",
+                    "displayName": "Observed"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Every problem in the latest scans",
+                "showDescription": true,
+                "description": "Sorted by status, then severity. The Run link opens the job run."
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 12,
+            "height": 9
+          }
+        },
+        {
+          "widget": {
+            "name": "section-jobs",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Job status: worst across checks and sources\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 17,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "table-jobs",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_now",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "environment",
+                      "expression": "`environment`"
+                    },
+                    {
+                      "name": "max(job_worst_status)",
+                      "expression": "MAX(`job_worst_status`)"
+                    },
+                    {
+                      "name": "max(job_worst_rank)",
+                      "expression": "MAX(`job_worst_rank`)"
+                    },
+                    {
+                      "name": "count(check_id)",
+                      "expression": "COUNT(`check_id`)"
+                    },
+                    {
+                      "name": "sum(is_problem)",
+                      "expression": "SUM(`is_problem`)"
+                    },
+                    {
+                      "name": "max(owner)",
+                      "expression": "MAX(`owner`)"
+                    }
+                  ],
+                  "disaggregated": false,
+                  "orders": [
+                    {
+                      "direction": "DESC",
+                      "expression": "MAX(`job_worst_rank`)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "Job"
+                  },
+                  {
+                    "fieldName": "environment",
+                    "displayName": "Environment"
+                  },
+                  {
+                    "fieldName": "max(job_worst_status)",
+                    "displayName": "Worst status"
+                  },
+                  {
+                    "fieldName": "count(check_id)",
+                    "displayName": "Checks"
+                  },
+                  {
+                    "fieldName": "sum(is_problem)",
+                    "displayName": "Not healthy"
+                  },
+                  {
+                    "fieldName": "max(owner)",
+                    "displayName": "Owner"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Per job and environment",
+                "showDescription": true,
+                "description": "Worst status across every check and source, worst first."
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 18,
+            "width": 12,
+            "height": 8
+          }
+        }
+      ]
+    },
+    {
+      "name": "versions",
+      "displayName": "Versions and runs",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "header-versions",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Versions and runs\n",
+                "\n",
+                "The latest run of each job in each workspace. Jobs API rows come first. Where the Jobs API has not run for a job, the newest system table run is shown."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "filter-environment-versions",
+            "queries": [
+              {
+                "name": "env_runs",
+                "query": {
+                  "datasetName": "ds_runs",
+                  "fields": [
+                    {
+                      "name": "environment",
+                      "expression": "`environment`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "environment",
+                    "displayName": "Environment",
+                    "queryName": "env_runs"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Environment"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "filter-job-versions",
+            "queries": [
+              {
+                "name": "job_runs",
+                "query": {
+                  "datasetName": "ds_runs",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "Job",
+                    "queryName": "job_runs"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Job"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 2,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "table-runs",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_runs",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "environment",
+                      "expression": "`environment`"
+                    },
+                    {
+                      "name": "code_version",
+                      "expression": "`code_version`"
+                    },
+                    {
+                      "name": "trigger_type",
+                      "expression": "`trigger_type`"
+                    },
+                    {
+                      "name": "triggered_by",
+                      "expression": "`triggered_by`"
+                    },
+                    {
+                      "name": "run_start_time",
+                      "expression": "`run_start_time`"
+                    },
+                    {
+                      "name": "run_end_time",
+                      "expression": "`run_end_time`"
+                    },
+                    {
+                      "name": "duration_minutes",
+                      "expression": "`duration_minutes`"
+                    },
+                    {
+                      "name": "status",
+                      "expression": "`status`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "Job"
+                  },
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "Workspace"
+                  },
+                  {
+                    "fieldName": "environment",
+                    "displayName": "Environment"
+                  },
+                  {
+                    "fieldName": "code_version",
+                    "displayName": "Code version"
+                  },
+                  {
+                    "fieldName": "trigger_type",
+                    "displayName": "Trigger"
+                  },
+                  {
+                    "fieldName": "triggered_by",
+                    "displayName": "Triggered by"
+                  },
+                  {
+                    "fieldName": "run_start_time",
+                    "displayName": "Started"
+                  },
+                  {
+                    "fieldName": "run_end_time",
+                    "displayName": "Ended"
+                  },
+                  {
+                    "fieldName": "duration_minutes",
+                    "displayName": "Duration (min)",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 1
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "status",
+                    "displayName": "Status"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Latest run per job and workspace",
+                "showDescription": true,
+                "description": "Duration is the run end minus the run start."
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 12,
+            "height": 12
+          }
+        }
+      ]
+    },
+    {
+      "name": "history",
+      "displayName": "History",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "header-history",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## History\n",
+                "\n",
+                "Every scan kept in findings. Counts are rows: one per check, source and job in each scan. The filters on the other pages do not apply here."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "chart-scans",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scans",
+                  "fields": [
+                    {
+                      "name": "scan_time",
+                      "expression": "`scan_time`"
+                    },
+                    {
+                      "name": "status",
+                      "expression": "`status`"
+                    },
+                    {
+                      "name": "sum(findings)",
+                      "expression": "SUM(`findings`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "scan_time",
+                  "displayName": "Scan",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(findings)",
+                  "displayName": "Rows",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "status",
+                  "displayName": "Status",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "FAILED",
+                        "color": "#E5484D"
+                      },
+                      {
+                        "value": "UNKNOWN",
+                        "color": "#8A94A6"
+                      },
+                      {
+                        "value": "WARNING",
+                        "color": "#FFA600"
+                      },
+                      {
+                        "value": "HEALTHY",
+                        "color": "#99DDB4"
+                      }
+                    ]
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Status per scan, last 30 days",
+                "showDescription": true,
+                "description": "One bar per scan. Each segment counts rows with that status."
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 12,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "chart-failed-jobs",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_failed",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "environment",
+                      "expression": "`environment`"
+                    },
+                    {
+                      "name": "sum(failed_findings)",
+                      "expression": "SUM(`failed_findings`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "y": {
+                  "fieldName": "job_name",
+                  "displayName": "Job",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "value"
+                    }
+                  }
+                },
+                "x": {
+                  "fieldName": "sum(failed_findings)",
+                  "displayName": "FAILED rows",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "environment",
+                  "displayName": "Environment",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "production",
+                        "color": "#DE5582"
+                      },
+                      {
+                        "value": "lower",
+                        "color": "#4E5185"
+                      }
+                    ]
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "FAILED rows by job, last 7 days (top 25)",
+                "showDescription": true,
+                "description": "One FAILED row per check, source and scan."
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 12,
+            "height": 9
+          }
+        }
+      ]
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": {
+        "light": "#FCFCFC",
+        "dark": "#1F272D"
+      },
+      "widgetBackgroundColor": {
+        "light": "#FFFFFF",
+        "dark": "#11171C"
+      },
+      "widgetBorderColor": {
+        "light": "#FFFFFF",
+        "dark": "#11171C"
+      },
+      "fontColor": {
+        "light": "#11171C",
+        "dark": "#E8ECF0"
+      },
+      "selectionColor": {
+        "light": "#2272B4",
+        "dark": "#8ACAFF"
+      },
+      "visualizationColors": [
+        "#FFA600",
+        "#FF7054",
+        "#DE5582",
+        "#995495",
+        "#4E5185",
+        "#1D425C",
+        "#99DDB4"
+      ],
+      "widgetHeaderAlignment": "LEFT"
+    }
+  }
+}
