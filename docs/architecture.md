@@ -1,6 +1,8 @@
 # Architecture
 
-The Watchdog is a job that runs in one Unity Catalog workspace per cloud region. Each scan reads two sources, checks them against your list of monitored jobs, and writes the results into one table, `findings`. This page walks through the two diagrams and the timing details that shape the checks.
+The Watchdog is a job that runs in one Unity Catalog workspace per cloud region. Each scan reads two sources, checks them against your list of monitored jobs, and writes the results into one table, `findings`. A scheduled scan runs every 20 minutes by default, and it starts paused. Each scheduled run first brings the tables and the view up to date. A dashboard reads the view `findings_latest`, which holds the newest scan from each source, judged by the time each scan first wrote. This page walks through the two diagrams and the timing details that shape the checks.
+
+> **The diagrams predate Phase 1.1.** The second diagram shows the first 19 of the 28 findings columns, and its labels place the schedule in Phase 2. The text on this page and in [data-model.md](data-model.md) is current.
 
 ## Diagram 1: Unity Catalog, system tables and the Watchdog identity
 
@@ -25,6 +27,8 @@ They cover every workspace in the same account and region, including workspaces 
 2. calls the Jobs API of each workspace for live detail;
 3. writes findings to one Unity Catalog table.
 
+Phase 1.1 runs these steps on a schedule, through the `watchdog_scan` job described below.
+
 **The identity.** The Jobs API answers for one workspace at a time, and only for jobs the caller may view. There are two modes:
 
 - `current_workspace`: the identity running the notebook or the job reads the Jobs API of its own workspace only.
@@ -43,16 +47,45 @@ Either identity needs `CAN VIEW` on each monitored job, access to the system tab
 **Step 2: call the Jobs API.** For each monitored job in each workspace, the Watchdog makes three calls:
 
 1. `list_runs(job_id, limit=2)`: the two newest runs;
-2. `get_run(run_id)`: the newest run with every task, its state and its retry attempt;
+2. `get_run(run_id)`: the newest run with every task, its state, its retry attempt, its trigger and its start and end times;
 3. `get_run_output(task_run_id)`: the error text of each failed task.
 
 This is the best source for live checks: a task that failed inside a run that is still going, a run that has been going too long, and retry loops. The Jobs API spells states differently from system tables (SUCCESS versus SUCCEEDED, for example), so the Watchdog maps both onto the same four statuses. See [jobs-api.md](jobs-api.md).
 
-**Step 3: check and write.** The checks compare both sources with your config: the jobs to watch, their limits, their owners and the dependency map. Each check writes one row to `findings` for each job it applies to, including HEALTHY rows, so you can see that a check ran and passed. The diagram's column list matches the real table, and its example rows are illustrative; [data-model.md](data-model.md) explains each column.
+**Step 3: check and write.** The checks compare both sources with your config: the jobs to watch, their limits, their owners, the dependency map and the environment labels. Each check writes one row to `findings` for each job it applies to, including HEALTHY rows, so you can see that a check ran and passed. [data-model.md](data-model.md) explains each column.
 
 **Alerts and the app.** Phases 3 and 4 add Databricks SQL alerts and a Databricks App, both reading `findings`. See [roadmap.md](roadmap.md).
 
+**Your own checks.** Notebook 09 adds rows the same way, with `source` = `CUSTOM`. See [The dashboard and your own checks](#the-dashboard-and-your-own-checks).
+
+## The scheduled scan
+
+The `watchdog_scan` job runs every 20 minutes in UTC, and it starts paused. Each run has four tasks, in order:
+
+1. `create_tables` (notebook 01) creates what is missing, adds new columns after an upgrade, and makes the view `findings_latest` current. Tables and views that are already current are left alone.
+2. `load_config` (notebook 02) reloads your monitored-jobs file into the config tables.
+3. `scan_system_tables` (notebook 05) writes the system table findings.
+4. `scan_jobs_api` (notebook 06) writes the Jobs API findings.
+
+Both scans run even if an earlier task failed (`run_if: ALL_DONE`), and each one checks the tables and the view before it writes. A bad config file therefore leaves the scans running on the config loaded last time, and the run shows as failed. Both scans use the run's ID as their `scan_id`, so one run is one scan across both sources. The job allows one run at a time, so runs never overlap.
+
+Because every run brings the tables up to date, a deploy that adds columns needs no manual step. The identity that runs the job needs `CREATE TABLE` and `MODIFY` on the Watchdog schema for that step. Run `watchdog_phase_1` once before you unpause the schedule, to check access and validate the setup.
+
+## Latest and history
+
+`findings` keeps every scan, so the table is the history. It is what change-only alerts and trends read.
+
+`findings_latest` shows only the newest scan from each source, so it is the current picture. A source's newest scan is the one that first wrote rows, so re-running an old `scan_id` never brings it back as the newest. The dashboard reads the view. The view and its rules are in [data-model.md](data-model.md#the-findings_latest-view).
+
+## The dashboard and your own checks
+
+Notebook 08 creates the "Watchdog findings" dashboard in your folder, or updates it, and publishes it. The dashboard has three pages. Now and Versions and runs read `findings_latest`. History reads `findings`, because it needs every scan. The notebook needs a SQL warehouse, and it is not part of the bundle, so you run it by hand.
+
+Notebook 09 is a template for checks of your own. It writes rows with `source` = `CUSTOM`. The example probes service endpoints, and a failed probe lists the jobs that depend on that service. Serverless compute cannot reach private endpoints, so run it on a job cluster whose network can reach the services. The scan job has a commented task that does this.
+
 ## Region scoping
+
+> **Check the region first.** System tables cover one account and one region. A Watchdog sees only the workspaces in its own region, and workspace names often carry a region suffix. Check the workspaces that notebook 00 lists, and run one Watchdog per region you need to cover.
 
 - The `system.lakeflow` tables are regional: they hold the account's jobs in this metastore's region.
 - `system.access.workspaces_latest` (Public Preview) is account-wide. The Watchdog reads it only for workspace names and URLs.
@@ -73,13 +106,15 @@ Each source covers the other's blind spot. A job created ten minutes ago is miss
 
 ## How data flows
 
-1. You keep a monitored-jobs YAML file outside the Git folder: the jobs to watch, a name pattern (`job_name_regex`) for each, limits, severity, owner and dependencies.
-2. Notebook `02_load_config` checks the file and loads it into `monitored_jobs` and `job_dependencies` through two temp views and the files in `sql/config`. Both scans read these tables, so they always use the same config.
-3. Notebook `05_scan_system_tables` runs `sql/scan/21_system_table_findings.sql`. The query reads the config tables, the system tables, and the temp view `watchdog_workspace_names` (workspace names and URLs). Its rows go into the temp view `watchdog_new_findings`, and `sql/scan/30_merge_findings.sql` adds them to `findings`.
+1. You keep a monitored-jobs YAML file outside the Git folder: the jobs to watch, a name pattern (`job_name_regex`) for each, an optional exclusion pattern, limits, severity, owner and dependencies, plus an optional `workspaces` section that labels each workspace with an environment.
+2. Notebook `02_load_config` checks the file and loads it into `monitored_jobs`, `job_dependencies` and `monitored_workspaces` through three temp views and the files in `sql/config`. Both scans read these tables, so they always use the same config.
+3. Notebook `05_scan_system_tables` runs `sql/scan/21_system_table_findings.sql`. The query reads the config tables, the system tables, and the temp view `watchdog_workspace_names` (workspace names and URLs). It also takes each workspace's environment label from `monitored_workspaces`. Its rows go into the temp view `watchdog_new_findings`, and `sql/scan/30_merge_findings.sql` adds them to `findings`.
 4. Notebook `06_scan_jobs_api` reads the config tables, chooses the workspaces to visit, and calls the Jobs API through `jobs_watchdog/jobs_api.py`. `jobs_watchdog/findings.py` fills the columns that are the same for the whole scan (scan ID, time, region, account), plus severity, owner and affected jobs. The rows go through the same temp view and merge file.
 5. Notebook `07_validate_phase_1` checks the result.
 
-**Re-runs never duplicate rows.** The merge adds a row only when its key is new: `scan_id`, `workspace_id`, `job_id`, `job_name`, `check_id` and `source`. Running a scan again with the same `scan_id` adds nothing. The bundle job passes its run ID as `scan_id` to both scans, so one job run is one scan across both sources.
+The scheduled scan (`watchdog_scan`) first runs notebook 01, then steps 2, 3 and 4 every 20 minutes, in that order, with the same `scan_id` for both scans. Notebook 08 reads the result.
+
+**Re-runs never duplicate rows.** The merge adds a row only when its key is new: `scan_id`, `workspace_id`, `job_id`, `job_name`, `check_id` and `source`. Running a scan again with the same `scan_id` adds nothing.
 
 ## Timing details
 
@@ -88,7 +123,7 @@ Each source covers the other's blind spot. A job created ten minutes ago is miss
   - `schedule_gap` allows 60 extra minutes before it reports a missed schedule;
   - very recent runs appear only in the Jobs API findings.
 - **Long runs are split into hourly rows** in `job_run_timeline` and `job_task_run_timeline`, and only the last row of a run carries its result. The Watchdog folds the rows of each run together and takes the result from the newest row. An empty result means the run is still going.
-- **Durations come from timestamps.** The `run_duration_seconds` column is 0 for multi-task jobs, so the Watchdog measures from a run's first row to its newest row, even for a run still going, so a finished run whose last row is late never looks long. A run that began before the lookback window counts from the window's first row, so its time is a lower bound.
+- **Durations come from timestamps.** The `run_duration_seconds` column of the system tables is 0 for multi-task jobs, so the Watchdog measures from a run's first row to its newest row. When a run's first hourly row falls in the lookback window's first hour, the run may have begun before the window, so its start and duration are left empty on system table rows. Jobs API rows always have the real start. The rules for both sources are in [data-model.md](data-model.md#run-timing).
 - **The lookback window** (`lookback_hours`, default 48) limits how far back the system table checks look. History is kept for 365 days. If no run started in the window and a job's `max_gap_minutes` plus 60 is longer than the window, `schedule_gap` reports UNKNOWN and asks for a longer window.
 - **The Jobs API is live.** It shows a run the moment it starts.
 
@@ -98,5 +133,4 @@ Each source covers the other's blind spot. A job created ten minutes ago is miss
 - `severity`: CRITICAL or WARNING from your config, on rows that are not HEALTHY.
 - `failure_category`: FUNCTIONAL (the code or its inputs), INFRASTRUCTURE (the platform or cloud), SLA_EXCEEDED, SCHEDULE_GAP, RETRY_LOOP, COVERAGE, or NONE for healthy rows.
 - `affected_jobs`: on FAILED rows, the jobs that depend directly on this one.
-
-[data-model.md](data-model.md) has the full rules.
+- `environment`, `trigger_type`, `code_version` and the run timing columns say where and how the run happened. [data-model.md](data-model.md) has the full rules.

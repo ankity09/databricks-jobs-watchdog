@@ -44,13 +44,19 @@ plus one per failed task.
 The second run is read only for context: when the newest run is still going, the summary adds how
 the run before it ended.
 
+Notebook 04 shows the same rule for `started_by`: the creator is listed only for one-time runs.
+
 ### From get_run (the newest run)
 
 | Field | Used for |
 |---|---|
 | `state.life_cycle_state`, `state.result_state`, `state.state_message` | `live_run_status` |
 | `status.termination_details.type` | `failure_category` (CLIENT_ERROR, INTERNAL_ERROR, CLOUD_FAILURE, SUCCESS) |
-| `start_time` | `live_long_runtime` |
+| `start_time` | `run_start_time`, `run_duration_seconds`, and `live_long_runtime` |
+| `end_time` | `run_end_time`; empty while the run is still going |
+| `trigger` | `trigger_type` (see [trigger_type](data-model.md#trigger_type)) |
+| `creator_user_name` | `triggered_by`, on ONE_TIME runs only |
+| `git_source.git_snapshot.used_commit` | `code_version` on a job without the code version tag: the commit of the run the row judged |
 | `run_page_url` | the link on every row about this run |
 | `tasks[]` | the task checks below |
 | `next_page_token` | the next page of tasks, when there is one |
@@ -75,6 +81,27 @@ For each task in `tasks[]`:
 For a multi-task job, `get_run_output` takes the task's run ID, not the job run's ID. Reading output
 needs the same permission as reading the run. If the call fails, the task's `state_message` is used
 instead, and the task still counts as failed.
+
+### From jobs.list (each job)
+
+| Field | Used for |
+|---|---|
+| `settings.name` | the name each monitored job's regex is searched in |
+| `settings.tags` | `job_tags`, and the value of the tag named by `code_version_tag` |
+
+The scan lists the jobs once per workspace, so the tags come from that listing. The tag is read from the job's current definition, so every row shows the version deployed now, including rows about older runs. For a job without the tag, each row shows the git commit of the run it judged, when that run came from a Git source.
+
+## Run timing
+
+`run_start_time` and `run_end_time` are the run's `start_time` and `end_time`, in UTC. How
+`run_duration_seconds` is computed depends on whether the run is still going:
+
+- **Finished:** `end_time` minus `start_time`.
+- **Still going:** the time from `start_time` to the scan's own clock. It grows with each scan.
+- **Finished without an `end_time`:** no duration. A duration is never negative.
+
+`live_long_runtime` uses the same clock. For the newest run, while it is in progress, it counts whole
+minutes since `start_time`.
 
 ## From states to statuses
 
@@ -141,8 +168,8 @@ gives RETRY_LOOP, and every UNKNOWN row gives COVERAGE. HEALTHY rows give NONE.
 | `live_run_status` | The newest run's state, mapped as above. A job with no runs is UNKNOWN, and gets no other Jobs API rows. |
 | `live_task_failures` | A task fails when its newest attempt ended FAILED or TIMEDOUT, or its life cycle is INTERNAL_ERROR. Any failed task makes the row FAILED, even while the run continues. `failed_task_keys` lists them, and `error_summary` holds `<task_key>: <error>` for each, separated by vertical bars. |
 | `live_long_runtime` | When `max_runtime_minutes` is set: WARNING if the newest run is still in progress and has been going longer than the limit, in whole minutes since `start_time`. |
-| `retry_loop` | When `max_retries` is set: WARNING if any task's newest attempt has an `attempt_number` above `max_retries`. With `max_retries: 1`, a task on its third try (attempt 2) is a retry loop. |
-| `not_found` | No job this identity can see matches the regex. |
+| `retry_loop` | When `max_retries` is set: WARNING if any task's newest attempt has an `attempt_number` above `max_retries`. With `max_retries: 1`, a task on its third try (attempt 2) is a retry loop. Set `max_retries` below the job's own task retry limit: a job never retries past its own limit, so an equal value never fires. |
+| `not_found` | No job this identity can see matches the regex. With several workspaces, a job found in any of them gets no row, and the row counts only the workspaces that answered. |
 | `api_unreachable` | The workspace or the job could not be read. |
 
 Two details:
@@ -192,6 +219,9 @@ that host. Findings are never written under the wrong workspace.
 In service principal mode, a job found in any of the workspaces gets no `not_found` row, and a job
 found in none gets one `not_found` row with no workspace. Service principal mode is covered by unit
 tests; run notebook 00 in that mode before you rely on it.
+
+Each workspace's rows carry its environment label, from the `workspaces` section of your config. See
+[monitored_workspaces](data-model.md#monitored_workspaces).
 
 ## Permissions
 

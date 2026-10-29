@@ -20,7 +20,7 @@ A pull replaces the tracked files: the notebooks, the SQL files and the example 
   - your home folder: `/Workspace/Users/<you>/watchdog/monitored_jobs.yml`
   - a Unity Catalog volume: `/Volumes/<catalog>/<schema>/<volume>/monitored_jobs.yml`
 
-  Then set `scan.monitored_jobs_path` in `accelerator.local.yaml`, or the `monitored_jobs_path` widget in notebook 02, to that path. A volume suits a team, because access follows Unity Catalog grants.
+  Then set `scan.monitored_jobs_path` in `accelerator.local.yaml`, or the `monitored_jobs_path` widget in notebook 02, to that path. A volume suits a team, because access follows Unity Catalog grants. The same file can hold the optional `workspaces` section, which labels each workspace with an environment.
 - **Do not edit tracked files** in the Git folder. A change there makes a later pull conflict. If you want to change a notebook or a query, copy it to your home folder first.
 
 ## Run the notebooks
@@ -28,7 +28,7 @@ A pull replaces the tracked files: the notebooks, the SQL files and the example 
 1. Open `notebooks/00_check_access` in the Git folder.
 2. Attach it to **Serverless** compute.
 3. Run the first two code cells. The input boxes (widgets) appear at the top of the notebook; check them, then run all cells.
-4. Continue with `01_create_tables` through `07_validate_phase_1`, in order.
+4. Continue with `01_create_tables` through `07_validate_phase_1`, in order. `08_create_dashboard` and `09_custom_check_example` are optional.
 
 The notebooks find the repo root by looking upward from their own folder, so open them where they are. A notebook copied elsewhere cannot import `jobs_watchdog`.
 
@@ -37,7 +37,8 @@ The notebooks find the repo root by looking upward from their own folder, so ope
 1. Open the Git folder and select the branch name (`main`) to open the Git dialog.
 2. Choose **Pull**.
 3. **Restart Python** in any notebook that is open: run `dbutils.library.restartPython()` in a cell, or detach and reattach the notebook. Python keeps `jobs_watchdog` loaded until it restarts, so without this the notebook keeps running the old code.
-4. Read what changed in the repo's commit history on GitHub before you run a scan.
+4. **Run notebook 01 again** (`01_create_tables`). It adds any new columns to your existing tables, keeps every row, and creates the `findings_latest` view, or replaces it when its columns changed. Each scheduled run runs notebook 01 first, so the next scheduled run does this too. Run it yourself to check the upgrade right away.
+5. Read what changed in the repo's commit history on GitHub before you run a scan.
 
 ## Troubleshooting
 
@@ -47,3 +48,5 @@ The notebooks find the repo root by looking upward from their own folder, so ope
 | `ModuleNotFoundError: No module named 'jobs_watchdog'` | Same cause, or Python started before the folder was complete. Open the notebook from the Git folder and restart Python. |
 | Old behavior after a pull | Restart Python (step 3 above). |
 | The pull reports a conflict | A tracked file was edited in the Git folder. Copy your edits somewhere safe, discard the local changes in the Git dialog, and pull again. |
+| `... is missing columns ...` or `... is missing or unreadable ... Run notebook 01 first.` | The tables were made by an older version of the repo. Run `01_create_tables`; it keeps your rows. A scheduled run does the same. |
+| `findings_latest ... is missing or out of date` | The view is missing, or its columns differ from `findings`. Run `01_create_tables`. If it fails on the view, the view's owner has to run it. |
