@@ -6,10 +6,10 @@
 # MAGIC
 # MAGIC | check_id | What it checks |
 # MAGIC |---|---|
-# MAGIC | `last_run_result` | the newest finished run in the window |
-# MAGIC | `task_failures` | tasks that failed since the job's newest successful run |
+# MAGIC | `last_run_result` | scheduled jobs: the newest finished run in the window; continuous jobs: the newest run, even while it is still going |
+# MAGIC | `task_failures` | tasks whose newest attempt failed, in the job's newest run |
 # MAGIC | `schedule_gap` | scheduled jobs: no run started within `max_gap_minutes` (plus 60 for system table lag) |
-# MAGIC | `long_runtime` | the newest finished run, or a run still going, over `max_runtime_minutes` |
+# MAGIC | `long_runtime` | the newest finished run, or a run still going, over `max_runtime_minutes`, measured up to its newest system table record |
 # MAGIC | `not_found` | the job's regex matches no job in this region |
 # MAGIC
 # MAGIC **Inputs (widgets).** `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`. With `scan_id` empty, a new one is made from the current UTC time. Re-running with the same `scan_id` adds nothing.

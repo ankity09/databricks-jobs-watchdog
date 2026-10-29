@@ -84,3 +84,12 @@ def test_unknown_auth_mode_is_rejected(tmp_path):
 def test_values_are_trimmed(tmp_path):
     settings = read_settings({"catalog": " main ", "scan_id": " 123 "}, tmp_path)
     assert (settings.catalog, settings.scan_id) == ("main", "123")
+
+
+def test_a_broken_accelerator_file_is_an_error_not_a_silent_fallback(tmp_path):
+    from jobs_watchdog.config import ConfigError
+
+    write(tmp_path, "accelerator.yaml", ACCELERATOR)
+    write(tmp_path, "accelerator.local.yaml", "target:\n  catalog: main\n schema: broken-indent\n")
+    with pytest.raises(ConfigError, match="accelerator.local.yaml"):
+        widget_defaults(tmp_path)

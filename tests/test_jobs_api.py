@@ -224,7 +224,9 @@ def test_no_regex_match_is_not_found():
     client = FakeClient(jobs=[(1, "billing")])
     rows = collect_target(client, TARGET, [monitored("orders", "^orders$")], NOW)
     assert [(r["check_id"], r["status"], r["job_id"]) for r in rows] == [("not_found", "UNKNOWN", None)]
-    assert "^orders$" in rows[0]["error_summary"]
+    assert rows[0]["error_summary"] == (
+        "No job that this identity can see in this workspace matches ^orders$. "
+        "Check the regex, and that the identity has CAN VIEW on the job.")
 
 
 def test_workspace_id_mismatch_is_unreachable():
@@ -281,7 +283,9 @@ def test_merge_not_found_collapses_jobs_found_nowhere():
                            [monitored("orders", "^orders$")], workspaces_checked=2)
     assert len(rows) == 1
     assert rows[0]["workspace_id"] is None
-    assert rows[0]["error_summary"] == "No job in any of the 2 workspaces checked matches ^orders$."
+    assert rows[0]["error_summary"] == (
+        "No job that this identity can see in any of the 2 workspaces checked matches ^orders$. "
+        "Check the regex, and CAN VIEW on the job.")
 
 
 def test_merge_not_found_keeps_a_single_workspace_row():

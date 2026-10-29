@@ -11,6 +11,8 @@
 # (monitored_jobs, job_dependencies, findings). The bundle does not own the
 # schema, because notebook 01 creates it, so it survives a plain teardown and
 # keeps your findings history. You type the schema name to confirm unless -y.
+# If the schema holds any other table, teardown stops before changing
+# anything, even with -y, so a schema shared with other work is never dropped.
 #
 # Nothing else is created outside the bundle in Phase 1. If you set up a
 # service principal, a secret scope, or grants on system tables for the
@@ -35,14 +37,32 @@ while [[ $# -gt 0 ]]; do
 done
 
 cd "$(dirname "$0")"
-eval "$(python3 scripts/bundle_vars.py --export)"
+vars="$(python3 scripts/bundle_vars.py --export)" || exit 2
+eval "$vars"
+schema_name="${BUNDLE_VAR_catalog}.${BUNDLE_VAR_schema}"
+
+if $drop_schema; then
+  listing="$(databricks tables list "$BUNDLE_VAR_catalog" "$BUNDLE_VAR_schema" --include-browse -o json \
+    ${profile_args[@]+"${profile_args[@]}"})"
+  extra="$(printf '%s' "$listing" | python3 -c '
+import json, sys
+text = sys.stdin.read().strip()
+data = json.loads(text) if text else []
+tables = data.get("tables", []) if isinstance(data, dict) else (data or [])
+names = sorted({table.get("name", "") for table in tables} - {"monitored_jobs", "job_dependencies", "findings"})
+print(" ".join(names))
+')"
+  if [[ -n "$extra" ]]; then
+    echo "teardown.sh: ${schema_name} also holds other tables (${extra}); not dropping it, and nothing was changed." >&2
+    exit 1
+  fi
+fi
 
 destroy_args=(bundle destroy -t "$target")
 if $assume_yes; then destroy_args+=(--auto-approve); fi
 databricks "${destroy_args[@]}" ${profile_args[@]+"${profile_args[@]}"}
 
 if $drop_schema; then
-  schema_name="${BUNDLE_VAR_catalog}.${BUNDLE_VAR_schema}"
   if ! $assume_yes; then
     read -r -p "Drop ${schema_name} and every table in it? Type ${schema_name} to confirm: " answer
     if [[ "$answer" != "$schema_name" ]]; then

@@ -137,16 +137,18 @@ Task runs that ended FAILED, ERROR or TIMED_OUT in the window.
   `result_state`, `termination_code`, `termination_type`.
 - **Read it:** a task can fail inside a run that keeps going, for example in a continuous job, so
   this catches failures the run level misses. This lists every failure in the window; the scan's
-  `task_failures` check only counts failures after the job's newest successful run.
+  `task_failures` check only counts tasks whose newest attempt failed, in the job's newest run.
 
 ### 16_long_runs.sql
 
 The 50 longest runs in the window, finished or still going.
 
-- **Columns:** `workspace_id`, `job_id`, `run_id`, `run_start`, `result_state`, `still_running`,
-  `minutes`.
-- **Read it:** a finished run counts from its first row's start to its last row's end; a run still
-  going counts up to now. Compare with your `max_runtime_minutes` values.
+- **Columns:** `workspace_id`, `job_id`, `run_id`, `run_start`, `last_seen`, `result_state`,
+  `still_running`, `minutes`.
+- **Read it:** every run counts from its first row's start to its newest row's end (`last_seen`).
+  For a run still going, that is a lower bound: the newest hour has not landed yet. Measuring to
+  now instead would make a finished run whose last row is late look long. Compare with your
+  `max_runtime_minutes` values.
 
 ### 17_last_run_per_job.sql
 
@@ -180,13 +182,15 @@ The system table checks, shaped as findings rows. Notebook 05 runs it, saves the
 - **Columns:** the 19 `findings` columns, in table order, with `source` = `SYSTEM_TABLES`.
 - **Read it:** one row per check for each workspace job a monitored job matches, plus one
   `not_found` row for each enabled job that matches nothing:
-  - `last_run_result`: the newest finished run in the window;
-  - `task_failures`: tasks that failed after the job's newest successful run in the window;
+  - `last_run_result`: for scheduled jobs, the newest finished run in the window; for continuous
+    jobs, the newest run, even while it runs (a healthy stream never finishes, so its last finished
+    run is usually an old restart);
+  - `task_failures`: tasks whose newest attempt failed, in the job's newest run;
   - `schedule_gap` (scheduled jobs): minutes since the newest run started, against
     `max_gap_minutes` plus 60 for system table lag; UNKNOWN when no run is in the window and the
     limit is longer than the window; the summary says so when the job is paused;
   - `long_runtime` (when `max_runtime_minutes` is set): runs still going and the newest finished
-    run, against the limit;
+    run, measured up to their newest system table record, against the limit;
   - `not_found`: no job in the region matches the regex.
 
   [data-model.md](data-model.md#checks) lists the status each check gives.

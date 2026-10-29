@@ -108,3 +108,35 @@ def test_run_sql_passes_only_used_parameters():
     text, args = spark.calls[0]
     assert args == {"catalog": "main", "schema": "watchdog"}
     assert "CREATE SCHEMA" in text
+
+
+def _scan_ctes():
+    sqlglot = pytest.importorskip("sqlglot")
+    from sqlglot import exp
+
+    tree = sqlglot.parse_one(for_parsing(load_sql("sql/scan/21_system_table_findings.sql")), read="databricks")
+    return exp, {cte.alias: cte.this for cte in tree.find_all(exp.CTE)}
+
+
+def test_task_failures_judge_each_tasks_newest_attempt_in_the_newest_run():
+    exp, ctes = _scan_ctes()
+    windows = list(ctes["task_attempts"].find_all(exp.Window))
+    partitions = [{column.name for column in window.args.get("partition_by") or []} for window in windows]
+    assert {"workspace_id", "job_id", "job_run_id", "task_key"} in partitions
+    joined = {table.name for table in ctes["failed_tasks"].find_all(exp.Table)}
+    assert {"task_attempts", "newest_run"} <= joined
+
+
+def test_continuous_jobs_are_judged_by_their_newest_run():
+    exp, ctes = _scan_ctes()
+    comparisons = [
+        node for node in ctes["last_runs"].find_all(exp.EQ)
+        if node.this.name == "schedule_type" and node.expression.name == "continuous"
+    ]
+    assert comparisons
+    assert "newest_run" in {table.name for table in ctes["last_runs"].find_all(exp.Table)}
+
+
+def test_open_runs_are_measured_to_their_newest_system_table_record():
+    exp, ctes = _scan_ctes()
+    assert ctes["over_limit"].find(exp.CurrentTimestamp) is None

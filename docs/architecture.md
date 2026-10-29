@@ -88,7 +88,7 @@ Each source covers the other's blind spot. A job created ten minutes ago is miss
   - `schedule_gap` allows 60 extra minutes before it reports a missed schedule;
   - very recent runs appear only in the Jobs API findings.
 - **Long runs are split into hourly rows** in `job_run_timeline` and `job_task_run_timeline`, and only the last row of a run carries its result. The Watchdog folds the rows of each run together and takes the result from the newest row. An empty result means the run is still going.
-- **Durations come from timestamps.** The `run_duration_seconds` column is 0 for multi-task jobs, so the Watchdog measures from a run's first row to its last row, or to now for a run still going. A run that began before the lookback window counts from the window's first row, so its time is a lower bound.
+- **Durations come from timestamps.** The `run_duration_seconds` column is 0 for multi-task jobs, so the Watchdog measures from a run's first row to its newest row, even for a run still going, so a finished run whose last row is late never looks long. A run that began before the lookback window counts from the window's first row, so its time is a lower bound.
 - **The lookback window** (`lookback_hours`, default 48) limits how far back the system table checks look. History is kept for 365 days. If no run started in the window and a job's `max_gap_minutes` plus 60 is longer than the window, `schedule_gap` reports UNKNOWN and asks for a longer window.
 - **The Jobs API is live.** It shows a run the moment it starts.
 

@@ -63,10 +63,14 @@ resources:
         - task_key: scan_jobs_api
           depends_on:
             - task_key: scan_system_tables
+          # live state still matters when the system table scan fails
+          run_if: ALL_DONE
           notebook_task:
             notebook_path: ../notebooks/06_scan_jobs_api.py
         - task_key: validate_phase_1
           depends_on:
             - task_key: scan_jobs_api
+          # report what is missing even when a scan failed
+          run_if: ALL_DONE
           notebook_task:
             notebook_path: ../notebooks/07_validate_phase_1.py

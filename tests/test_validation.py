@@ -40,3 +40,33 @@ def test_jobs_without_findings_fail_and_are_listed():
 def test_duplicates_fail():
     dup = [{"scan_id": "9", "job_name": "orders", "check_id": "live_run_status", "source": "JOBS_API", "copies": 2}]
     assert not outcome(duplicates=dup)["no duplicate keys"][0]
+
+
+def test_one_reachable_workspace_is_enough_and_the_rest_are_warnings():
+    from jobs_watchdog.validation import service_principal_verdict
+
+    required, warnings = service_principal_verdict([
+        ("analytics (1001)", True, "reached"),
+        ("sandbox (2002)", False, "PermissionDenied: not a workspace user"),
+    ])
+    assert required == []
+    assert warnings == ["service principal on sandbox (2002): PermissionDenied: not a workspace user"]
+
+
+def test_no_reachable_workspace_is_a_required_failure():
+    from jobs_watchdog.validation import service_principal_verdict
+
+    required, warnings = service_principal_verdict([
+        ("analytics (1001)", False, "timeout"),
+        ("sandbox (2002)", False, "no URL in system.access.workspaces_latest"),
+    ])
+    assert len(required) == 1 and "2 workspaces" in required[0]
+    assert len(warnings) == 2
+
+
+def test_no_workspaces_to_try_is_a_required_failure():
+    from jobs_watchdog.validation import service_principal_verdict
+
+    required, warnings = service_principal_verdict([])
+    assert len(required) == 1 and "no workspaces" in required[0]
+    assert warnings == []

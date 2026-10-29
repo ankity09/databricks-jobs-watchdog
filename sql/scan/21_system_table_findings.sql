@@ -9,10 +9,12 @@
 --
 -- For each workspace job that a monitored job's regex matches, it returns one
 -- row per check:
---   last_run_result  the newest finished run in the window
---   task_failures    tasks that failed since the job's newest successful run
+--   last_run_result  scheduled jobs: the newest finished run in the window;
+--                    continuous jobs: the newest run, even while it runs
+--   task_failures    tasks whose newest attempt failed, in the newest run
 --   schedule_gap     scheduled jobs: time since the newest run started
---   long_runtime     the newest finished run, and any run still going
+--   long_runtime     the newest finished run, and any run still going,
+--                    measured up to its newest system table record
 -- A monitored job that matches no job in the region gets one not_found row.
 -- System tables run about an hour behind, so a job created in the last hour
 -- is not_found here while the Jobs API scan (notebook 06) already sees it.
@@ -65,43 +67,68 @@ runs AS (
   WHERE period_start_time >= timestampadd(HOUR, -CAST(:lookback_hours AS INT), current_timestamp())
   GROUP BY workspace_id, job_id, run_id
 ),
+newest_run AS (
+  -- each job's newest run in the window, finished or still going
+  SELECT *
+  FROM runs
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY workspace_id, job_id ORDER BY run_start DESC) = 1
+),
 newest_finished AS (
   SELECT *
   FROM runs
   WHERE result_state IS NOT NULL
   QUALIFY ROW_NUMBER() OVER (PARTITION BY workspace_id, job_id ORDER BY last_seen DESC) = 1
 ),
-newest_start AS (
-  SELECT workspace_id, job_id, MAX(run_start) AS last_start
-  FROM runs
-  GROUP BY workspace_id, job_id
+last_runs AS (
+  -- what last_run_result judges: a scheduled job's newest finished run, or a
+  -- continuous job's newest run while it is still going (a healthy stream
+  -- never finishes, so its last finished run is usually an old restart)
+  SELECT
+    mt.job_name,
+    mt.account_id,
+    mt.workspace_id,
+    mt.job_id,
+    mt.schedule_type = 'continuous' AND n.run_id IS NOT NULL AND n.result_state IS NULL AS running,
+    n.run_id AS newest_run_id,
+    n.last_seen AS newest_seen,
+    f.run_id,
+    f.result_state,
+    f.termination_code,
+    f.termination_type,
+    f.last_seen
+  FROM matched mt
+  LEFT JOIN newest_run n ON n.workspace_id = mt.workspace_id AND n.job_id = mt.job_id
+  LEFT JOIN newest_finished f ON f.workspace_id = mt.workspace_id AND f.job_id = mt.job_id
 ),
-newest_success AS (
-  SELECT workspace_id, job_id, MAX(last_seen) AS succeeded_at
-  FROM runs
-  WHERE result_state = 'SUCCEEDED'
-  GROUP BY workspace_id, job_id
+task_attempts AS (
+  -- the newest row of each task in each run: a retried task counts by its
+  -- newest attempt, and a task still running (no result yet) is not failed
+  SELECT workspace_id, job_id, job_run_id, task_key, period_end_time, result_state, termination_code, termination_type
+  FROM system.lakeflow.job_task_run_timeline
+  WHERE period_start_time >= timestampadd(HOUR, -CAST(:lookback_hours AS INT), current_timestamp())
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY workspace_id, job_id, job_run_id, task_key ORDER BY period_end_time DESC) = 1
 ),
 failed_tasks AS (
-  -- failures already followed by a successful run of the job are left out
+  -- tasks whose newest attempt failed, in the job's newest run; failures in
+  -- older runs are settled by the newer run
   SELECT
     t.workspace_id,
     t.job_id,
     sort_array(collect_set(t.task_key)) AS failed_task_keys,
-    COUNT(*) AS failed_task_runs,
-    MAX_BY(t.job_run_id, t.period_end_time) AS run_id,
+    MAX(t.job_run_id) AS run_id,
     MAX_BY(t.termination_code, t.period_end_time) AS termination_code,
     MAX_BY(t.termination_type, t.period_end_time) AS termination_type
-  FROM system.lakeflow.job_task_run_timeline t
-  LEFT JOIN newest_success s ON s.workspace_id = t.workspace_id AND s.job_id = t.job_id
-  WHERE t.period_start_time >= timestampadd(HOUR, -CAST(:lookback_hours AS INT), current_timestamp())
-    AND t.result_state IN ('FAILED', 'ERROR', 'TIMED_OUT')
-    AND (s.succeeded_at IS NULL OR t.period_end_time > s.succeeded_at)
+  FROM task_attempts t
+  JOIN newest_run n ON n.workspace_id = t.workspace_id AND n.job_id = t.job_id AND n.run_id = t.job_run_id
+  WHERE t.result_state IN ('FAILED', 'ERROR', 'TIMED_OUT')
   GROUP BY t.workspace_id, t.job_id
 ),
 over_limit AS (
   -- the longest run over max_runtime_minutes, among runs still going and the
-  -- newest finished run
+  -- newest finished run. Runs are measured up to their newest system table
+  -- record, not to now: a finished run whose last hourly row has not landed
+  -- yet would otherwise look like it is still going
   SELECT
     mt.job_name,
     mt.workspace_id,
@@ -116,7 +143,7 @@ over_limit AS (
       job_id,
       run_id,
       TRUE AS still_running,
-      timestampdiff(MINUTE, run_start, current_timestamp()) AS minutes
+      timestampdiff(MINUTE, run_start, last_seen) AS minutes
     FROM runs
     WHERE result_state IS NULL
     UNION ALL
@@ -128,32 +155,37 @@ over_limit AS (
 ),
 checks AS (
   SELECT
-    mt.job_name,
-    mt.account_id,
-    mt.workspace_id,
-    mt.job_id,
+    l.job_name,
+    l.account_id,
+    l.workspace_id,
+    l.job_id,
     'last_run_result' AS check_id,
     CASE
-      WHEN f.run_id IS NULL THEN 'UNKNOWN'
-      WHEN f.result_state = 'SUCCEEDED' THEN 'HEALTHY'
-      WHEN f.result_state IN ('FAILED', 'ERROR', 'TIMED_OUT') THEN 'FAILED'
-      WHEN f.result_state IN ('CANCELLED', 'SKIPPED', 'BLOCKED') THEN 'WARNING'
+      WHEN l.running THEN 'HEALTHY'
+      WHEN l.run_id IS NULL THEN 'UNKNOWN'
+      WHEN l.result_state = 'SUCCEEDED' THEN 'HEALTHY'
+      WHEN l.result_state IN ('FAILED', 'ERROR', 'TIMED_OUT') THEN 'FAILED'
+      WHEN l.result_state IN ('CANCELLED', 'SKIPPED', 'BLOCKED') THEN 'WARNING'
       ELSE 'UNKNOWN'
     END AS status,
-    f.termination_type,
-    f.run_id,
+    CASE WHEN l.running THEN NULL ELSE l.termination_type END AS termination_type,
+    CASE WHEN l.running THEN l.newest_run_id ELSE l.run_id END AS run_id,
     CAST(NULL AS ARRAY<STRING>) AS failed_task_keys,
     CASE
-      WHEN f.run_id IS NULL
+      WHEN l.running THEN concat(
+        format_string(
+          'Continuous job: the newest run is still going (newest system table record %d minutes old).',
+          timestampdiff(MINUTE, l.newest_seen, current_timestamp())),
+        CASE WHEN l.result_state IS NULL THEN '' ELSE concat(' The newest finished run ended ', l.result_state, '.') END)
+      WHEN l.run_id IS NULL
         THEN format_string('No finished run in the last %d hours.', CAST(:lookback_hours AS INT))
       ELSE format_string(
         'Newest finished run ended %s%s, %d minutes ago.',
-        f.result_state,
-        coalesce(concat(' (', f.termination_code, ')'), ''),
-        timestampdiff(MINUTE, f.last_seen, current_timestamp()))
+        l.result_state,
+        coalesce(concat(' (', l.termination_code, ')'), ''),
+        timestampdiff(MINUTE, l.last_seen, current_timestamp()))
     END AS error_summary
-  FROM matched mt
-  LEFT JOIN newest_finished f ON f.workspace_id = mt.workspace_id AND f.job_id = mt.job_id
+  FROM last_runs l
 
   UNION ALL
 
@@ -168,10 +200,10 @@ checks AS (
     t.run_id,
     t.failed_task_keys,
     CASE
-      WHEN t.run_id IS NULL THEN 'No failed tasks since the newest successful run in the window.'
+      WHEN t.run_id IS NULL THEN 'No failed tasks in the newest run.'
       ELSE format_string(
-        '%d task run(s) failed since the newest successful run in the window. Newest termination code: %s.',
-        t.failed_task_runs,
+        '%d task(s) failed in the newest run, judged by the newest attempt of each task. Newest termination code: %s.',
+        size(t.failed_task_keys),
         coalesce(t.termination_code, 'none'))
     END
   FROM matched mt
@@ -186,10 +218,10 @@ checks AS (
     mt.job_id,
     'schedule_gap',
     CASE
-      WHEN s.last_start IS NOT NULL
-        AND timestampdiff(MINUTE, s.last_start, current_timestamp()) <= mt.max_gap_minutes + 60
+      WHEN s.run_start IS NOT NULL
+        AND timestampdiff(MINUTE, s.run_start, current_timestamp()) <= mt.max_gap_minutes + 60
         THEN 'HEALTHY'
-      WHEN s.last_start IS NULL AND mt.max_gap_minutes + 60 > CAST(:lookback_hours AS INT) * 60
+      WHEN s.run_start IS NULL AND mt.max_gap_minutes + 60 > CAST(:lookback_hours AS INT) * 60
         THEN 'UNKNOWN'
       WHEN mt.severity = 'CRITICAL' THEN 'FAILED'
       ELSE 'WARNING'
@@ -199,19 +231,19 @@ checks AS (
     CAST(NULL AS ARRAY<STRING>),
     concat(
       CASE
-        WHEN s.last_start IS NOT NULL
-          THEN format_string('Newest run started %d minutes ago', timestampdiff(MINUTE, s.last_start, current_timestamp()))
+        WHEN s.run_start IS NOT NULL
+          THEN format_string('Newest run started %d minutes ago', timestampdiff(MINUTE, s.run_start, current_timestamp()))
         ELSE format_string('No run started in the last %d hours', CAST(:lookback_hours AS INT))
       END,
       format_string('. The limit is %d minutes, plus 60 for system table lag.', mt.max_gap_minutes),
       CASE
-        WHEN s.last_start IS NULL AND mt.max_gap_minutes + 60 > CAST(:lookback_hours AS INT) * 60
+        WHEN s.run_start IS NULL AND mt.max_gap_minutes + 60 > CAST(:lookback_hours AS INT) * 60
           THEN ' The window is shorter than the limit, so raise lookback_hours to check this job.'
         ELSE ''
       END,
       CASE WHEN mt.paused THEN ' The job is paused.' ELSE '' END)
   FROM matched mt
-  LEFT JOIN newest_start s ON s.workspace_id = mt.workspace_id AND s.job_id = mt.job_id
+  LEFT JOIN newest_run s ON s.workspace_id = mt.workspace_id AND s.job_id = mt.job_id
   WHERE mt.schedule_type = 'scheduled' AND mt.max_gap_minutes IS NOT NULL
 
   UNION ALL
@@ -230,7 +262,9 @@ checks AS (
       WHEN o.run_id IS NULL
         THEN format_string('No run over the %d-minute limit (newest finished run and runs still going).', mt.max_runtime_minutes)
       WHEN o.still_running
-        THEN format_string('A run has been going for %d minutes. The limit is %d.', o.minutes, mt.max_runtime_minutes)
+        THEN format_string(
+          'A run still going had run %d minutes by its newest system table record. The limit is %d.',
+          o.minutes, mt.max_runtime_minutes)
       ELSE format_string('The newest finished run took %d minutes. The limit is %d.', o.minutes, mt.max_runtime_minutes)
     END
   FROM matched mt

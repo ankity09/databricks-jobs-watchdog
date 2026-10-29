@@ -24,7 +24,7 @@ One row per job you want checked.
 | `schedule_type` | STRING, required | `scheduled` or `continuous`. Only scheduled jobs get the `schedule_gap` check. |
 | `max_gap_minutes` | INT | Scheduled jobs: the longest allowed time between run starts. Required for scheduled jobs. |
 | `max_runtime_minutes` | INT | The longest allowed run. Empty turns off `long_runtime` and `live_long_runtime`. |
-| `max_retries` | INT | A task retried more times than this is a retry loop. Empty turns off `retry_loop`. |
+| `max_retries` | INT | A task retried more times than this is a retry loop. Empty turns off `retry_loop`. Set it below the job's own task retry limit: a job never retries past its own limit, so an equal value never fires. |
 | `severity` | STRING, required | `CRITICAL` or `WARNING`. Copied to every finding about this job that is not HEALTHY. |
 | `owner` | STRING | Team or person to route findings to. Copied to every finding. |
 | `enabled` | BOOLEAN, required | `false` keeps the entry in the table without checking it. |
@@ -168,15 +168,16 @@ System tables cover every workspace in the account and region, and run about an 
 
 | check_id | What it checks | Status | Written when |
 |---|---|---|---|
-| `last_run_result` | The newest finished run in the lookback window. | SUCCEEDED is HEALTHY. FAILED, ERROR or TIMED_OUT is FAILED. CANCELLED, SKIPPED or BLOCKED is WARNING. No finished run is UNKNOWN. | always |
-| `task_failures` | Tasks that ended FAILED, ERROR or TIMED_OUT in the window, after the job's newest successful run. A job that has recovered is HEALTHY again. | FAILED, with `failed_task_keys` | always |
+| `last_run_result` | Scheduled jobs: the newest finished run in the lookback window. Continuous jobs: the newest run, so a stream that restarted and is running again is HEALTHY. | A continuous job's run still going is HEALTHY. SUCCEEDED is HEALTHY. FAILED, ERROR or TIMED_OUT is FAILED. CANCELLED, SKIPPED or BLOCKED is WARNING. No finished run is UNKNOWN. | always |
+| `task_failures` | Tasks in the job's newest run whose newest attempt ended FAILED, ERROR or TIMED_OUT. A task retried to success is not counted, and a newer run settles failures in older runs. | FAILED, with `failed_task_keys` | always |
 | `schedule_gap` | Minutes since the newest run started, against `max_gap_minutes` plus 60 minutes of allowance for system table lag. | FAILED for CRITICAL jobs, WARNING for WARNING jobs. UNKNOWN when no run is in the window and the limit is longer than the window. | scheduled jobs only |
-| `long_runtime` | Runs still going, plus the newest finished run, against `max_runtime_minutes`. | WARNING | `max_runtime_minutes` is set |
+| `long_runtime` | Runs still going, plus the newest finished run, against `max_runtime_minutes`, each measured up to its newest system table record. | WARNING | `max_runtime_minutes` is set |
 | `not_found` | The regex matches no job in the region. | UNKNOWN, with no workspace or job ID | once per unmatched job |
 
 Run lengths come from the timeline rows (first row's start to last row's end), not from the
 `run_duration_seconds` column, which is 0 for multi-task jobs. A run that started before the lookback
-window counts from the window's first row, so its length is a lower bound.
+window counts from the window's first row, and a run still going counts up to its newest row, so both
+lengths are lower bounds. That keeps a finished run whose last hourly row is late from looking long.
 
 ### From the Jobs API (notebook 06, source `JOBS_API`)
 
@@ -216,7 +217,7 @@ Illustrative values, one row per source.
 | `run_id` | 456 | 789 |
 | `run_page_url` | https://&lt;workspace-host&gt;/jobs/123/runs/456 | https://&lt;workspace-host&gt;/jobs/123/runs/789 |
 | `failed_task_keys` | [load] | [load] |
-| `error_summary` | 1 task run(s) failed since the newest successful run in the window. Newest termination code: RUN_EXECUTION_ERROR. | load: ValueError: order_id must not be null |
+| `error_summary` | 1 task(s) failed in the newest run, judged by the newest attempt of each task. Newest termination code: RUN_EXECUTION_ERROR. | load: ValueError: order_id must not be null |
 | `affected_jobs` | [daily_revenue_report, orders_enrich] | [daily_revenue_report, orders_enrich] |
 | `owner` | ingestion-team | ingestion-team |
 | `source` | SYSTEM_TABLES | JOBS_API |

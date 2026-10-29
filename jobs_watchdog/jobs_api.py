@@ -21,8 +21,14 @@ from jobs_watchdog.states import API_FAILED_RESULTS, API_IN_PROGRESS, as_text, f
 SOURCE = "JOBS_API"
 SUMMARY_CHARS = 1000
 _TASK_MESSAGE_CHARS = 400
-_NOT_HERE = "No job in this workspace matches {regex}."
-_NOWHERE = "No job in any of the {count} workspaces checked matches {regex}."
+_NOT_HERE = (
+    "No job that this identity can see in this workspace matches {regex}. "
+    "Check the regex, and that the identity has CAN VIEW on the job."
+)
+_NOWHERE = (
+    "No job that this identity can see in any of the {count} workspaces checked matches {regex}. "
+    "Check the regex, and CAN VIEW on the job."
+)
 
 
 @dataclass(frozen=True)

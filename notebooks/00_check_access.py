@@ -12,7 +12,7 @@
 # MAGIC
 # MAGIC **Inputs (widgets).** `lookback_hours`, `auth_mode`, and for service principal mode `secret_scope`, `client_id_key`, `client_secret_key`.
 # MAGIC
-# MAGIC **What to look for.** Every line says PASS. A FAIL line names what is missing; `docs/phase-1-runbook.md` lists the grant or setting that fixes it. The notebook fails at the end if a required check failed.
+# MAGIC **What to look for.** Every line says PASS. A FAIL line names what is missing; `docs/phase-1-runbook.md` lists the grant or setting that fixes it. The notebook fails at the end if a required check failed. In service principal mode, a workspace the service principal cannot reach shows as a WARN line here, and as `api_unreachable` rows in notebook 06; the notebook fails only if it reaches none of them.
 
 # COMMAND ----------
 
@@ -107,30 +107,48 @@ except Exception as err:
 if s.auth_mode == "service_principal" and not system_tables_readable:
     print("Skipped the service principal checks: they need the system.lakeflow tables to list workspaces.")
 elif s.auth_mode == "service_principal":
-    client_id = dbutils.secrets.get(s.secret_scope, s.client_id_key)
-    client_secret = dbutils.secrets.get(s.secret_scope, s.client_secret_key)
-    names, names_error = register_workspace_names(spark)
-    if names_error:
-        print(f"FAIL  workspace URLs from system.access.workspaces_latest: {names_error}")
-    rows = [row.asDict() for row in region_workspaces.collect()]
-    targets, missing = build_targets("service_principal", current_workspace_id, rows, names)
-    for target in targets:
-        label = f"{target.workspace_name or target.workspace_id} ({target.workspace_id})"
+    from jobs_watchdog.validation import service_principal_verdict
+
+    secrets = {}
+    for role, key in (("client_id", s.client_id_key), ("client_secret", s.client_secret_key)):
         try:
-            client = make_client("service_principal", target.host, client_id, client_secret)
-            answered = str(client.get_workspace_id())
-            next(iter(client.jobs.list(limit=1)), None)
-            if answered == target.workspace_id:
-                print(f"PASS  service principal reaches {label}")
-            else:
-                print(f"FAIL  {label}: the URL answered as workspace {answered}")
-                required_failures.append(f"service principal on {target.workspace_id}")
+            secrets[role] = dbutils.secrets.get(s.secret_scope, key)
+            print(f"PASS  read secret {s.secret_scope}/{key}")
         except Exception as err:
-            print(f"FAIL  service principal on {label}: {short_error(err)}")
-            required_failures.append(f"service principal on {target.workspace_id}")
-    for target in missing:
-        print(f"FAIL  {target.workspace_id}: no URL in system.access.workspaces_latest")
-        required_failures.append(f"URL for {target.workspace_id}")
+            print(f"FAIL  read secret {s.secret_scope}/{key}: {short_error(err)}")
+            required_failures.append(f"read secret {s.secret_scope}/{key}: {short_error(err)}")
+    if len(secrets) < 2:
+        print("Skipped the per-workspace checks: they need both secrets.")
+    else:
+        names, names_error = register_workspace_names(spark)
+        if names_error:
+            print(f"WARN  workspace URLs from system.access.workspaces_latest: {names_error}")
+        rows = [row.asDict() for row in region_workspaces.collect()]
+        targets, missing = build_targets("service_principal", current_workspace_id, rows, names)
+        results = []
+        for target in targets:
+            label = f"{target.workspace_name or target.workspace_id} ({target.workspace_id})"
+            try:
+                client = make_client("service_principal", target.host, secrets["client_id"],
+                                     secrets["client_secret"])
+                answered = str(client.get_workspace_id())
+                next(iter(client.jobs.list(limit=1)), None)
+                if answered == target.workspace_id:
+                    results.append((label, True, "reached"))
+                    print(f"PASS  service principal reaches {label}")
+                else:
+                    results.append((label, False, f"the URL answered as workspace {answered}"))
+            except Exception as err:
+                results.append((label, False, short_error(err)))
+        for target in missing:
+            label = f"{target.workspace_name or target.workspace_id} ({target.workspace_id})"
+            results.append((label, False, "no URL in system.access.workspaces_latest"))
+        failures, warnings = service_principal_verdict(results)
+        for warning in warnings:
+            print(f"WARN  {warning}")
+        for failure in failures:
+            print(f"FAIL  {failure}")
+        required_failures.extend(failures)
 
 # COMMAND ----------
 

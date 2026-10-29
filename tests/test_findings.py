@@ -169,3 +169,32 @@ def test_write_findings_with_no_rows_does_nothing():
 def test_empty_region_is_stored_as_null():
     rows = finalize_rows([api_row("orders_ingest", "HEALTHY")], "s", NOW, "", "acct", JOBS, DEPENDENCIES)
     assert rows[0]["region"] is None
+
+
+MERGE_KEY = {"scan_id", "workspace_id", "job_id", "job_name", "check_id", "source"}
+
+
+def _merge_tree():
+    sqlglot = pytest.importorskip("sqlglot")
+    return sqlglot.parse_one(for_parsing(load_sql("sql/scan/30_merge_findings.sql")), read="databricks")
+
+
+def test_merge_key_is_six_null_safe_equalities():
+    from sqlglot import exp
+
+    on = _merge_tree().args["on"]
+    parts = list(on.flatten()) if isinstance(on, exp.And) else [on]
+    assert all(isinstance(part, exp.NullSafeEQ) for part in parts), [part.sql() for part in parts]
+    pairs = {(part.left.table, part.left.name, part.right.table, part.right.name) for part in parts}
+    assert len(parts) == 6
+    assert pairs == {("t", column, "s", column) for column in MERGE_KEY}
+
+
+def test_merge_only_inserts_rows_it_has_not_seen():
+    from sqlglot import exp
+
+    whens = _merge_tree().args["whens"].expressions
+    assert len(whens) == 1
+    assert whens[0].args["matched"] is False
+    assert whens[0].args.get("condition") is None
+    assert isinstance(whens[0].args["then"], exp.Insert)

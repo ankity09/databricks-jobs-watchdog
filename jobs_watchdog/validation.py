@@ -26,3 +26,18 @@ def phase_1_checks(tables, enabled_jobs, by_source, missing, duplicates):
          ", ".join(f"{row['job_name']} ({row['source']})" for row in missing) if missing else "yes"),
         ("no duplicate keys", not duplicates, f"{len(duplicates)} duplicated keys" if duplicates else "none"),
     ]
+
+
+def service_principal_verdict(results):
+    """Split per-workspace service principal checks into (required_failures, warnings).
+
+    results: (label, ok, detail) for each workspace notebook 00 tried. One
+    reachable workspace is enough to go on; the scan writes api_unreachable
+    rows for the others. Every workspace that failed becomes a warning.
+    """
+    warnings = [f"service principal on {label}: {detail}" for label, ok, detail in results if not ok]
+    if not results:
+        return ["service principal reaches no workspaces: no workspaces to try in this region"], warnings
+    if not any(ok for _, ok, _ in results):
+        return [f"service principal reaches none of the {len(results)} workspaces tried"], warnings
+    return [], warnings

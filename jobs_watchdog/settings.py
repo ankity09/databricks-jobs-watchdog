@@ -9,7 +9,7 @@ below. Job parameters override the defaults when the notebooks run as a job.
 from pathlib import Path
 from types import SimpleNamespace
 
-from jobs_watchdog.config import AUTH_MODES, ConfigError, load_accelerator
+from jobs_watchdog.config import AUTH_MODES, load_accelerator
 from jobs_watchdog.identifiers import validate_identifier
 
 # widget name: (accelerator.yaml section, key, built-in default)
@@ -34,11 +34,13 @@ def accelerator_file(repo_root):
 
 
 def widget_defaults(repo_root):
-    """Default text for every widget."""
-    try:
-        data = load_accelerator(accelerator_file(repo_root))
-    except ConfigError:
-        data = {}
+    """Default text for every widget.
+
+    With no accelerator file the built-in defaults apply. A file that exists
+    but cannot be read raises ConfigError, so a typo never goes unnoticed.
+    """
+    path = accelerator_file(repo_root)
+    data = load_accelerator(path) if path.is_file() else {}
     defaults = {}
     for name, (section, key, fallback) in WIDGETS.items():
         value = (data.get(section) or {}).get(key) if section else None

@@ -27,10 +27,10 @@ Inside a scan, step 1 reads the system tables, step 2 calls the Jobs API, and st
 
 | Source | `check_id` | Finds |
 |---|---|---|
-| System tables | `last_run_result` | the result of the newest finished run in the lookback window |
-| | `task_failures` | tasks that failed since the job's newest successful run |
+| System tables | `last_run_result` | scheduled jobs: the newest finished run in the lookback window; continuous jobs: the newest run, even while it runs |
+| | `task_failures` | tasks whose newest attempt failed, in the job's newest run |
 | | `schedule_gap` | a scheduled job with no run started within `max_gap_minutes` (plus 60 minutes for system table lag) |
-| | `long_runtime` | the newest finished run, or a run still going, over `max_runtime_minutes` |
+| | `long_runtime` | the newest finished run, or a run still going, over `max_runtime_minutes`, measured up to its newest system table record |
 | | `not_found` | a monitored job whose name pattern matches no job in the region |
 | Jobs API | `live_run_status` | the state of the newest run, right now |
 | | `live_task_failures` | failed tasks in the newest run, with their error text, even while the run continues |

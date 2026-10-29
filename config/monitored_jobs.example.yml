@@ -10,7 +10,8 @@
 # schedule_type     continuous or scheduled
 # max_gap_minutes   scheduled jobs: longest allowed gap between run starts
 # max_runtime_minutes  longest allowed run before a warning
-# max_retries       a task retried more times than this is a retry loop
+# max_retries       a task retried more times than this is a retry loop; set it
+#                   below the job's own retry limit so you hear before it gives up
 # severity          CRITICAL or WARNING, used when the job is not healthy
 # owner             team or person to route findings to
 # enabled           false keeps the entry without checking it
@@ -45,7 +46,7 @@ jobs:
   - job_name: orders_ingest
     job_name_regex: "^orders_ingest(_[a-z0-9]+)?$"
     schedule_type: continuous
-    max_runtime_minutes: 60
+    # no max_runtime_minutes: a streaming run is meant to keep going
     max_retries: 3
     severity: CRITICAL
     owner: ingestion-team

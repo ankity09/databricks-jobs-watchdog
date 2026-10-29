@@ -64,7 +64,10 @@ of `CREATE SCHEMA` on the catalog.
 Skip this section for `current_workspace` mode.
 
 1. **Create a service principal** in the account console, and note its application ID.
-2. **Add it to every workspace** the Watchdog should check, as a workspace user.
+2. **Add it to every workspace that has monitored jobs**, as a workspace user. Service principal
+   mode visits every workspace in the region that has jobs. A workspace it cannot reach shows as a
+   `WARN` line in notebook 00 and as `api_unreachable` rows in notebook 06; the scan carries on with
+   the rest. Notebook 00 fails only if it reaches none of them.
 3. **Give it CAN VIEW on each monitored job**, in every workspace. Adding it to a group that has CAN
    VIEW works too. It never needs CAN MANAGE RUN.
 4. **Give it the metastore admin's grants** above, if the bundle job will run as this service
@@ -177,12 +180,14 @@ databricks bundle run watchdog_phase_1 -t demo --profile <profile>
 | `FAIL  read system.lakeflow.<table>` with a table, view or schema not found error | the system schema is not turned on, or the workspace is not on Unity Catalog | turn on `lakeflow` (section 1); run the Watchdog from a Unity Catalog workspace |
 | `FAIL  read system.access.workspaces_latest (optional in this mode)` | the Preview table is off or not granted | fine in `current_workspace` mode (no names or links); turn it on and grant it for service principal mode |
 | `FAIL  Jobs API in this workspace` | the identity cannot call the Jobs API here | check the identity's workspace access and entitlements, and any IP access list |
-| `FAIL  workspace URLs from system.access.workspaces_latest` | service principal mode cannot find workspace URLs | turn on and grant `system.access` |
-| `FAIL  service principal on <workspace>` with an authentication error | wrong application ID or secret, or an expired secret | check the two secrets in the scope; create a new OAuth secret if needed |
-| `FAIL  service principal on <workspace>` with a permission or not-a-member error | the service principal is not in that workspace | add it to the workspace (section 2) |
-| `FAIL  service principal on <workspace>` with a connection error or timeout | network rules block the call | see [Networking](#networking) |
-| `FAIL  <workspace>: the URL answered as workspace <id>` | the URL in the workspaces table points at another workspace | check `system.access.workspaces_latest` for that workspace |
-| `FAIL  <workspace-id>: no URL in system.access.workspaces_latest` | the workspaces table has no URL for it | check the table; that workspace is skipped and gets `api_unreachable` rows |
+| `FAIL  read secret <scope>/<key>` | the scope or key does not exist, or the identity cannot read it | create the secret (section 2) and give the identity READ on the scope |
+| `WARN  workspace URLs from system.access.workspaces_latest` | service principal mode cannot find workspace URLs | turn on and grant `system.access`; until then every workspace shows as unreachable |
+| `WARN  service principal on <workspace>` with an authentication error | wrong application ID or secret, or an expired secret | check the two secrets in the scope; create a new OAuth secret if needed |
+| `WARN  service principal on <workspace>` with a permission or not-a-member error | the service principal is not in that workspace | add it to the workspace (section 2), or ignore it if that workspace has no monitored jobs |
+| `WARN  service principal on <workspace>` with a connection error or timeout | network rules block the call | see [Networking](#networking) |
+| `WARN  service principal on <workspace>: the URL answered as workspace <id>` | the URL in the workspaces table points at another workspace | check `system.access.workspaces_latest` for that workspace |
+| `WARN  service principal on <workspace>: no URL in system.access.workspaces_latest` | the workspaces table has no URL for it | check the table; that workspace is skipped and gets `api_unreachable` rows |
+| `FAIL  service principal reaches none of the <n> workspaces tried` (or `reaches no workspaces`) | every workspace failed, or the region lists none | fix the WARN lines above it; check the secrets and that the service principal is in at least one workspace |
 | `catalog is empty: set target.catalog in accelerator.local.yaml or the catalog widget` | no catalog configured | fill in `accelerator.local.yaml`, or the widget |
 | `catalog must be letters, digits or underscores` (or `schema`) | the name has a hyphen, space or quote | use a name with only letters, digits and underscores |
 | `job <name>: scheduled jobs need max_gap_minutes` (or another config error) | the YAML file has a mistake | fix the file; the message names the job and the field |
@@ -193,7 +198,7 @@ databricks bundle run watchdog_phase_1 -t demo --profile <profile>
 | `FAIL  every enabled job has findings: <job> (<source>)` | a scan wrote nothing for that job | re-run that scan and read its output |
 | `FAIL  no duplicate keys` | a key was inserted twice | should not happen; open an issue with the output of query 41 |
 | `not_found` from SYSTEM_TABLES only | the job is new (system tables are about an hour behind), or the regex is wrong | wait an hour; check the regex with notebook 02 |
-| `not_found` from JOBS_API only | the identity cannot see the job (no CAN VIEW), or the job is in another workspace while you run in `current_workspace` mode | grant CAN VIEW; use service principal mode for other workspaces |
+| `not_found` from JOBS_API only: "No job that this identity can see ... matches ..." | the identity cannot see the job (no CAN VIEW), the regex is wrong, or the job is in another workspace while you run in `current_workspace` mode | grant CAN VIEW; check the regex with notebook 02; use service principal mode for other workspaces |
 | `api_unreachable` with a permission error for one job | no CAN VIEW on that job | grant CAN VIEW to the identity |
 
 ## System table lag
