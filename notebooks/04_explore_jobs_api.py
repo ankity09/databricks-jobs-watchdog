@@ -37,7 +37,7 @@ if not job_id:
     jobs, _ = read_config(spark, s.catalog, s.schema)
     found = [hit for hit in resolve_jobs(client, [job for job in jobs if job.enabled]) if hit[1] is not None]
     if not found:
-        raise ValueError("No enabled monitored job matches a job in this workspace. Set the job_id widget.")
+        dbutils.notebook.exit("No enabled monitored job matches a job in this workspace. Set the job_id widget.")
     job, job_id, real_name = found[0]
     print(f"Using monitored job {job.job_name}: job {job_id}, named {real_name!r}")
 explained = explain_job(client, int(job_id))

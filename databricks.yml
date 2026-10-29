@@ -1,0 +1,76 @@
+# The Watchdog bundle. Values come from accelerator.yaml through
+# scripts/bundle_vars.py, for example:
+#
+#   eval "$(python3 scripts/bundle_vars.py --export accelerator.local.yaml)"
+#   databricks bundle deploy -t dev --profile <your-profile>
+#   databricks bundle run watchdog_phase_1 -t dev --profile <your-profile>
+#
+# Targets:
+#   dev   the Phase 1 job (default)
+#   demo  the Phase 1 job plus two sample jobs, one that succeeds and one that
+#         fails, so a fresh workspace has something to watch
+#
+# Both targets use development mode, so deployed names carry a [dev <you>]
+# prefix and nothing is scheduled. Remove everything with ./teardown.sh.
+
+bundle:
+  name: databricks-jobs-watchdog
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Catalog that holds the Watchdog schema (required)
+  schema:
+    description: Schema for the three Watchdog tables
+    default: watchdog
+  region:
+    description: Cloud region of this metastore, recorded on every finding (required)
+  lookback_hours:
+    description: How far back the system table checks look
+    default: "48"
+  auth_mode:
+    description: current_workspace (this workspace, as the job's identity) or service_principal (every workspace in the region)
+    default: current_workspace
+  secret_scope:
+    description: service_principal mode only, the secret scope holding the OAuth credentials
+    default: ""
+  client_id_key:
+    description: Key in the secret scope holding the service principal's application ID
+    default: client_id
+  client_secret_key:
+    description: Key in the secret scope holding the service principal's OAuth secret
+    default: client_secret
+  monitored_jobs_path:
+    description: Monitored-jobs YAML file; relative paths start at the deployed bundle root
+    default: config/monitored_jobs.example.yml
+
+targets:
+  dev:
+    default: true
+    mode: development
+
+  demo:
+    mode: development
+    resources:
+      jobs:
+        watchdog_demo_succeeds:
+          name: watchdog_demo_succeeds
+          description: Sample job for the Watchdog demo. Every run succeeds.
+          tasks:
+            - task_key: succeed
+              notebook_task:
+                notebook_path: ./demo/succeeds.py
+        watchdog_demo_fails:
+          name: watchdog_demo_fails
+          description: Sample job for the Watchdog demo. The load task fails on purpose.
+          tasks:
+            - task_key: extract
+              notebook_task:
+                notebook_path: ./demo/succeeds.py
+            - task_key: load
+              depends_on:
+                - task_key: extract
+              notebook_task:
+                notebook_path: ./demo/fails.py

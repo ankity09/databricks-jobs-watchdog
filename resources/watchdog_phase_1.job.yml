@@ -1,0 +1,72 @@
+# Phase 1, end to end: check access, create the tables, load the config,
+# explore both sources, scan both, and validate. On demand only; Phase 2
+# adds a schedule. Every task runs on serverless compute.
+#
+# The job parameters reach every notebook as widgets. scan_id is the job's
+# run ID, so both scans in one run share one scan_id.
+resources:
+  jobs:
+    watchdog_phase_1:
+      name: watchdog_phase_1
+      description: "Watchdog Phase 1: tables, config, both scans and validation"
+      max_concurrent_runs: 1
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: region
+          default: ${var.region}
+        - name: lookback_hours
+          default: ${var.lookback_hours}
+        - name: scan_id
+          default: "{{job.run_id}}"
+        - name: auth_mode
+          default: ${var.auth_mode}
+        - name: secret_scope
+          default: ${var.secret_scope}
+        - name: client_id_key
+          default: ${var.client_id_key}
+        - name: client_secret_key
+          default: ${var.client_secret_key}
+        - name: monitored_jobs_path
+          default: ${var.monitored_jobs_path}
+      tasks:
+        - task_key: check_access
+          notebook_task:
+            notebook_path: ../notebooks/00_check_access.py
+        - task_key: create_tables
+          depends_on:
+            - task_key: check_access
+          notebook_task:
+            notebook_path: ../notebooks/01_create_tables.py
+        - task_key: load_config
+          depends_on:
+            - task_key: create_tables
+          notebook_task:
+            notebook_path: ../notebooks/02_load_config.py
+        - task_key: explore_system_tables
+          depends_on:
+            - task_key: load_config
+          notebook_task:
+            notebook_path: ../notebooks/03_explore_system_tables.py
+        - task_key: explore_jobs_api
+          depends_on:
+            - task_key: load_config
+          notebook_task:
+            notebook_path: ../notebooks/04_explore_jobs_api.py
+        - task_key: scan_system_tables
+          depends_on:
+            - task_key: load_config
+          notebook_task:
+            notebook_path: ../notebooks/05_scan_system_tables.py
+        - task_key: scan_jobs_api
+          depends_on:
+            - task_key: scan_system_tables
+          notebook_task:
+            notebook_path: ../notebooks/06_scan_jobs_api.py
+        - task_key: validate_phase_1
+          depends_on:
+            - task_key: scan_jobs_api
+          notebook_task:
+            notebook_path: ../notebooks/07_validate_phase_1.py

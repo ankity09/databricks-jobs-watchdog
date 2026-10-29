@@ -1,0 +1,229 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200" viewBox="0 0 1600 1200" font-family="DM Sans, Helvetica Neue, Arial, sans-serif">
+  <defs>
+    <marker id="arrNavy" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1B3139"/></marker>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="1200" fill="#F9F7F4"/>
+
+    <text x="40" y="52" font-size="29" font-weight="700" fill="#1B3139" letter-spacing="-0.5">Inside the Watchdog: three steps, one findings table, alerts and an app</text>
+  <text x="40" y="84" font-size="16" fill="#5A6F77">One job per region, running as you or as a Watchdog service principal. Steps 1 and 2 gather evidence; step 3 writes the one table that alerts (Phase 3) and the app (Phase 4) read.</text>
+
+    <rect x="24" y="108" width="1052" height="1052" rx="20" fill="#F1EFEA" stroke="#D9D6CF" stroke-width="1.5"/>
+  <image x="44" y="122" width="24" height="24" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgdmlld0JveD0iMCAwIDUxMiA1MTIiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxwYXRoIGQ9Ik0yMjAuNDA4IDQwMS4zNDJMMzYyLjc4NSAyNTcuMjQyTDIyMC40MDggMTEzLjE0M0wyMjAuNDA4IDU2TDI5OS41ODIgNTZMMjk5LjU4MiAxMzYuNTQ0TDMxNC4zODcgMTQyLjc5MkwzNzAuMjkxIDg1LjgzNzlMNDI2LjcxMyAxNDMuMzJMMzcwLjgwNyAyMDAuMjc0TDM3Ni45NDEgMjE1LjM1Nkg0NTYuMDAyVjI5Ni42NDRIMzc2Ljk0MUwzNzAuODA3IDMxMS43MjZMNDI2LjcxMyAzNjguNjhMMzcwLjI5MSA0MjYuMTYyTDMxNC4zODUgMzY5LjIwOEwyOTkuNTgyIDM3NS40NTZMMjk5LjU4MiA0NTZIMjIwLjQwOEwyMjAuNDA4IDQwMS4zNDJaIiBmaWxsPSIjRkFCRkJBIi8+CjxwYXRoIGQ9Ik0xNTYuNTg0IDEwMC45ODRWMTAwLjcyMkwzMDguNzggMjU2LjAwMUwxNTYuNTg0IDQxMS4yODFWNDExLjAwNEwxNDEuNzExIDQyNi4xNTlMODUuMjg5NSAzNjguNjc2TDE0MS4xOTYgMzExLjcyMkwxMzUuMDYxIDI5Ni42NDFINTZWMjE1LjM1MkgxMzUuMDYxTDE0MS4xOTYgMjAwLjI3MUw4NS4yODk1IDE0My4zMTdMMTQxLjcxMSA4NS44MzQ1TDE1Ni41ODQgMTAwLjk4NFoiIGZpbGw9IiNGRjVGNDYiLz4KPC9zdmc+Cg=="/>
+  <image x="74" y="122" width="24" height="24" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTUwIiBoZWlnaHQ9IjE1MCIgdmlld0JveD0iMCAwIDE1MCAxNTAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxwYXRoIGQ9Ik02My4zIDQ5LjJMNjYuMiA0OC40TDYzLjEgMzYuOEM2Ni45IDM1LjggNzAuOCAzNS4yIDc0LjkgMzUuMkM3OSAzNS4yIDgzIDM1LjcgODYuOCAzNi44TDgzLjcgNDguNEw4Ni42IDQ5LjJMODkuNiAzNy43Qzk2LjQgNDAgMTAyLjQgNDMuOCAxMDcuNCA0OC43TDk5IDU3LjJMMTAxLjEgNTkuM0wxMDkuNSA1MC44QzExNi43IDU5IDEyMSA2OS42IDEyMSA4MS4yQzEyMSA4NS4zIDEyMC41IDg5LjIgMTE5LjUgOTMuMUwxMDcuOCA5MEwxMDcgOTIuOUwxMTguNiA5NS45QzExNyAxMDAuOCAxMTQuNSAxMDUuNCAxMTEuMiAxMDkuNkwxMTMuNiAxMTEuNUMxMjAuNCAxMDIuOCAxMjQgOTIuNCAxMjQgODEuM0MxMjQgNTQuMyAxMDIgMzIuMyA3NSAzMi4zQzQ4IDMyLjMgMjYgNTQuMyAyNiA4MS4zQzI2IDk0LjggMzEuNiAxMDcuOCA0MS40IDExN0w0Mi41IDExOEw1My4xIDEwNy41TDUxIDEwNS40TDQyLjUgMTEzLjlDMzcuNCAxMDguOCAzMy43IDEwMi44IDMxLjUgOTYuMUw0My4xIDkzLjFMNDIuMiA5MEwzMC41IDkzLjFDMjkuNSA4OS4zIDI5IDg1LjMgMjkgODEuMkMyOSA3OC4xIDI5LjMgNzUuMSAyOS45IDcyLjJMNDEuNCA3NS4zTDQyLjIgNzIuNEwzMC42IDY5LjJDMzIuNSA2Mi4zIDM1LjkgNTYgNDAuNSA1MC44TDQ4LjkgNTkuM0w1MSA1Ny4yTDQyLjUgNDguN0M0Ny40IDQzLjggNTMuNSA0MCA2MC4zIDM3LjdMNjMuMyA0OS4yWiIgZmlsbD0iIzFCMzEzOSIvPgo8cGF0aCBkPSJNMTEzLjQgNzAuNkw4NSA3Ny40QzgzLjQgNzMuNCA3OS41IDcwLjYgNzUgNzAuNkM2OSA3MC42IDY0LjIgNzUuNCA2NC4yIDgxLjRDNjQuMiA4Ny40IDY5IDkyLjIgNzUgOTIuMkM4MSA5Mi4yIDg1LjggODcuNCA4NS44IDgxLjRDODUuOCA4MS4xIDg1LjggODAuNyA4NS43IDgwLjRMMTE0LjEgNzMuNkwxMTMuNCA3MC42Wk04Mi44IDgxLjRDODIuOCA4NS43IDc5LjMgODkuMiA3NSA4OS4yQzcwLjcgODkuMiA2Ny4yIDg1LjcgNjcuMiA4MS40QzY3LjIgNzcuMSA3MC43IDczLjYgNzUgNzMuNkM3OC4xIDczLjYgODAuOCA3NS41IDgyLjEgNzguMkw3NC43IDgwTDc1LjQgODIuOUw4Mi44IDgxLjFDODIuOCA4MS4yIDgyLjggODEuMyA4Mi44IDgxLjRaIiBmaWxsPSIjMUIzMTM5Ii8+CjxwYXRoIGQ9Ik03NSAyMi42QzQyLjcgMjIuNiAxNi40IDQ4LjkgMTYuNCA4MS4yQzE2LjQgOTkuMiAyNC41IDExNS45IDM4LjUgMTI3LjFMMzguOSAxMjcuNEg2MS4zVjExNS4zSDg4LjdWMTI3LjRIMTAyLjlWMTI0LjRIOTEuN1YxMTIuM0g1OC4zVjEyNC40SDQwQzI2LjkgMTEzLjggMTkuNCA5OC4xIDE5LjQgODEuMkMxOS40IDUwLjUgNDQuNCAyNS42IDc1IDI1LjZDMTA1LjcgMjUuNiAxMzAuNyA1MC42IDEzMC43IDgxLjJDMTMwLjcgOTYuMSAxMjQuOSAxMTAgMTE0LjUgMTIwLjVMOTkgMTA1LjJMOTYuOSAxMDcuM0wxMTQuNCAxMjQuNkwxMTUuNSAxMjMuNkMxMjcuMSAxMTIuNiAxMzMuNyA5Ny4xIDEzMy43IDgxLjFDMTMzLjYgNDguOSAxMDcuMyAyMi42IDc1IDIyLjZaIiBmaWxsPSIjMUIzMTM5Ii8+Cjwvc3ZnPgo="/>
+  <text x="108" y="140" font-size="13" font-weight="700" fill="#5A6F77" letter-spacing="1.6">WATCHDOG · ONE JOB PER REGION · ON DEMAND IN PHASE 1, SCHEDULED FROM PHASE 2</text>
+
+    <rect x="44" y="160" width="506" height="520" rx="14" fill="#FFFFFF" stroke="#C4CCD6" stroke-width="1.5"/>
+  <rect x="44" y="160" width="506" height="6" rx="3" fill="#FF3621"/>
+  <circle cx="72" cy="192" r="14" fill="#1B3139"/>
+  <text x="72" y="197" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">1</text>
+  <image x="94" y="177" width="30" height="30" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGcgY2xpcC1wYXRoPSJ1cmwoI2NsaXAwXzIyNDZfMjc0MykiPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTE0IDcuNVYwLjc1QzE0IDAuMzM1Nzg2IDEzLjY2NDIgMCAxMy4yNSAwSDQuNUMzLjExOTI5IDAgMiAxLjExOTI5IDIgMi41VjEzLjI1QzIgMTQuNzY4OCAzLjIzMTIyIDE2IDQuNzUgMTZIOFYxNC41SDQuNzVDNC4wNTk2NCAxNC41IDMuNSAxMy45NDA0IDMuNSAxMy4yNVY0Ljc5MTk4QzMuODA2MjMgNC45MjU3OCA0LjE0NDQ1IDUgNC41IDVIMTIuNVY3LjVIMTRaTTQuNSAzLjVDMy45NDc3MiAzLjUgMy41IDMuMDUyMjggMy41IDIuNUMzLjUgMS45NDc3MiAzLjk0NzcyIDEuNSA0LjUgMS41SDEyLjVWMy41SDQuNVoiIGZpbGw9IiNGRjM2MjEiLz4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0xMy4xMjUgMTAuMDgxQzEzLjM2NjkgMTAuMTU1OSAxMy41OTMzIDEwLjI2NjEgMTMuNzk4MSAxMC40MDU1TDE0LjY3ODUgOS43MDMyNEwxNS42MTM5IDEwLjg3NThMMTQuNzMzOSAxMS41Nzc5QzE0LjgyMzMgMTEuODA2NSAxNC44ODA1IDEyLjA1MTQgMTQuODk5OCAxMi4zMDY4TDE1Ljk5NzkgMTIuNTU3M0wxNS42NjQzIDE0LjAxOTdMMTQuNTY2NSAxMy43NjkzQzE0LjQ0MDQgMTMuOTg2NiAxNC4yODI5IDE0LjE4MzMgMTQuMTAwMyAxNC4zNTM1TDE0LjU4OTEgMTUuMzY4M0wxMy4yMzc3IDE2LjAxOTJMMTIuNzQ5IDE1LjAwNDdDMTIuNjI3IDE1LjAyMjggMTIuNTAyMSAxNS4wMzIyIDEyLjM3NSAxNS4wMzIyQzEyLjI0ODEgMTUuMDMyMiAxMi4xMjM0IDE1LjAyMjggMTIuMDAxNSAxNS4wMDQ4TDExLjUxMyAxNi4wMTk0TDEwLjE2MTUgMTUuMzY4N0wxMC42NTAxIDE0LjM1MzhDMTAuNDY3NSAxNC4xODM3IDEwLjMwOTkgMTMuOTg2OSAxMC4xODM4IDEzLjc2OTdMOS4wODYwNSAxNC4wMjAzTDguNzUyMiAxMi41NTc5TDkuODUwMjUgMTIuMzA3MkM5Ljg2OTQ5IDEyLjA1MTggOS45MjY2NCAxMS44MDY5IDEwLjAxNjEgMTEuNTc4Mkw5LjEzNTk2IDEwLjg3NjNMMTAuMDcxMiA5LjcwMzU4TDEwLjk1MTcgMTAuNDA1N0MxMS4xNTY2IDEwLjI2NjIgMTEuMzgzMSAxMC4xNTYgMTEuNjI1IDEwLjA4MVY4Ljk1NTI5SDEzLjEyNVYxMC4wODFaTTEzLjM4NzggMTIuNTAwMUMxMy4zODc4IDEzLjA1OTUgMTIuOTM0NCAxMy41MTMgMTIuMzc1IDEzLjUxM0MxMS44MTU2IDEzLjUxMyAxMS4zNjIyIDEzLjA1OTUgMTEuMzYyMiAxMi41MDAxQzExLjM2MjIgMTEuOTQwOCAxMS44MTU2IDExLjQ4NzMgMTIuMzc1IDExLjQ4NzNDMTIuOTM0NCAxMS40ODczIDEzLjM4NzggMTEuOTQwOCAxMy4zODc4IDEyLjUwMDFaIiBmaWxsPSIjRkYzNjIxIi8+CjwvZz4KPGRlZnM+CjxjbGlwUGF0aCBpZD0iY2xpcDBfMjI0Nl8yNzQzIj4KPHJlY3Qgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2IiBmaWxsPSJ3aGl0ZSIvPgo8L2NsaXBQYXRoPgo8L2RlZnM+Cjwvc3ZnPgo="/>
+  <text x="134" y="190" font-size="18" font-weight="700" fill="#1B3139">Read system tables</text>
+  <text x="134" y="209" font-size="13" fill="#5A6F77">one SQL query covers every workspace in the region</text>
+  <rect x="60" y="226" width="474" height="232" rx="10" fill="#1B3139"/>
+  <g font-family="DM Mono, Menlo, monospace" font-size="11.5" fill="#F9F7F4" xml:space="preserve">
+    <text x="76" y="248" fill="#9FB3BA">-- latest definition of each job</text>
+    <text x="76" y="263">WITH jobs AS (</text>
+    <text x="76" y="278">  SELECT workspace_id, job_id, name</text>
+    <text x="76" y="293">  FROM system.lakeflow.jobs</text>
+    <text x="76" y="308">  QUALIFY ROW_NUMBER() OVER (</text>
+    <text x="76" y="323">    PARTITION BY workspace_id, job_id</text>
+    <text x="76" y="338">    ORDER BY change_time DESC) = 1)</text>
+    <text x="76" y="353">SELECT r.workspace_id, r.job_id, j.name,</text>
+    <text x="76" y="368">  r.run_id, r.result_state, r.termination_code,</text>
+    <text x="76" y="383">  r.period_start_time, r.period_end_time</text>
+    <text x="76" y="398">FROM system.lakeflow.job_run_timeline r</text>
+    <text x="76" y="413">JOIN jobs j USING (workspace_id, job_id)</text>
+    <text x="76" y="428">WHERE r.period_start_time &gt;=</text>
+    <text x="76" y="443">  current_timestamp() - INTERVAL 48 HOURS</text>
+  </g>
+  <text x="60" y="484" font-size="11" font-weight="700" fill="#5A6F77" letter-spacing="1.4">WHAT YOU GET</text>
+  <g font-size="13" fill="#1B3139">
+    <text x="60" y="504">• every job and run, in every workspace of the region</text>
+    <text x="60" y="523">• result_state: SUCCEEDED, FAILED, CANCELLED, TIMED_OUT</text>
+    <text x="60" y="542">• termination_code, durations, trigger type, run_as</text>
+    <text x="60" y="561">• each task's result (job_task_run_timeline, by task_key)</text>
+    <text x="60" y="580">• task wiring inside a job (job_tasks.depends_on_keys)</text>
+  </g>
+  <text x="60" y="606" font-size="11" font-weight="700" fill="#5A6F77" letter-spacing="1.4">BEST FOR</text>
+  <text x="60" y="625" font-size="13" font-weight="600" fill="#1B3139">coverage, missed schedules, history and trends</text>
+  <text x="60" y="652" font-size="12" fill="#5A6F77">About an hour behind. Runs over an hour are split into hourly rows,</text>
+  <text x="60" y="668" font-size="12" fill="#5A6F77">and result_state is only on the last row.</text>
+
+    <rect x="570" y="160" width="486" height="520" rx="14" fill="#FFFFFF" stroke="#C4CCD6" stroke-width="1.5"/>
+  <rect x="570" y="160" width="486" height="6" rx="3" fill="#2272B4"/>
+  <circle cx="598" cy="192" r="14" fill="#2272B4"/>
+  <text x="598" y="197" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">2</text>
+  <image x="620" y="177" width="30" height="30" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTUwIiBoZWlnaHQ9IjE1MCIgdmlld0JveD0iMCAwIDE1MCAxNTAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxwYXRoIGQ9Ik0xMjkuMiA2OC4wOTk5VjQ0Ljc5OTlMNzUgMTYuN0wyMC44IDQ0Ljc5OTlWNjguMDk5OUw3NSA5Ni4yTDExMi43IDc2LjY5OTlMMTI2LjIgODMuN1YxMDMuNEw3NSAxMjkuOUwyMy44IDEwMy40Vjg1LjNMNzUgMTExLjhMMTIwLjUgODguMlY4NC44TDc1IDEwOC40TDI1LjUgODIuOEwzMyA3OC45TDI5LjcgNzcuMTk5OUwyMC44IDgxLjg5OTlWMTA1LjJMNzUgMTMzLjNMMTI5LjIgMTA1LjJWODEuODk5OUwxMTIuNyA3My4zTDc1IDkyLjhMMjMuOCA2Ni4zVjQ2LjU5OTlMNzUgMjAuMUwxMjQuNSA0NS43TDc1IDcxLjRMMjkuNSA0Ny43OTk5VjUxLjJMNzUgNzQuNjk5OUwxMjYuMiA0OC4yVjY2LjNMMTE4LjEgNzAuNUwxMjEuMyA3Mi4xOTk5TDEyOS4yIDY4LjA5OTlaIiBmaWxsPSIjMUIzMTM5Ii8+CjxwYXRoIGQ9Ik0xMjAuNSA5OC40Vjk1TDk4LjMgMTA2LjVWMTA5LjlMMTIwLjUgOTguNFoiIGZpbGw9IiMxQjMxMzkiLz4KPHBhdGggZD0iTTk4LjMgNjkuNTk5OVY3Mi45OTk5TDEyMC41IDYxLjQ5OTlWNTguMDk5OUw5OC4zIDY5LjU5OTlaIiBmaWxsPSIjMUIzMTM5Ii8+CjxwYXRoIGQ9Ik05MC4zIDExMS4zQzkwLjMgMTEyLjUgOTEuMiAxMTMuNCA5Mi40IDExMy40QzkzLjYgMTEzLjQgOTQuNSAxMTIuNSA5NC41IDExMS4zQzk0LjUgMTEwLjEgOTMuNiAxMDkuMiA5Mi40IDEwOS4yQzkxLjMgMTA5LjEgOTAuMyAxMTAuMSA5MC4zIDExMS4zWiIgZmlsbD0iIzFCMzEzOSIvPgo8cGF0aCBkPSJNOTAuMyA3My42OTk5QzkwLjMgNzQuODk5OSA5MS4yIDc1Ljc5OTkgOTIuNCA3NS43OTk5QzkzLjYgNzUuNzk5OSA5NC41IDc0Ljg5OTkgOTQuNSA3My42OTk5Qzk0LjUgNzIuNDk5OSA5My42IDcxLjU5OTkgOTIuNCA3MS41OTk5QzkxLjMgNzEuNTk5OSA5MC4zIDcyLjU5OTkgOTAuMyA3My42OTk5WiIgZmlsbD0iIzFCMzEzOSIvPgo8L3N2Zz4K"/>
+  <text x="660" y="190" font-size="18" font-weight="700" fill="#1B3139">Call each workspace's Jobs API</text>
+  <text x="660" y="209" font-size="13" fill="#5A6F77">live detail, one call per workspace host</text>
+  <rect x="586" y="226" width="454" height="134" rx="10" fill="#1B3139"/>
+  <g font-family="DM Mono, Menlo, monospace" font-size="11.5" fill="#F9F7F4" xml:space="preserve">
+    <text x="600" y="248" fill="#9FB3BA"># every monitored job, in every workspace host</text>
+    <text x="600" y="264">newest = next(w.jobs.list_runs(job_id=job_id, limit=2))</text>
+    <text x="600" y="280">run = w.jobs.get_run(run_id=newest.run_id)</text>
+    <text x="600" y="296">for task in run.tasks:</text>
+    <text x="600" y="312">    if task.state.result_state in FAILED_STATES:</text>
+    <text x="600" y="328">        out = w.jobs.get_run_output(run_id=task.run_id)</text>
+    <text x="600" y="344">        record(task.task_key, out.error)</text>
+  </g>
+  <text x="586" y="378" font-size="11" font-family="DM Mono, Menlo, monospace" fill="#5A6F77">REST: jobs/runs/list · jobs/runs/get · jobs/runs/get-output</text>
+  <text x="586" y="404" font-size="11" font-weight="700" fill="#5A6F77" letter-spacing="1.4">WHAT YOU GET</text>
+  <g font-size="13" fill="#1B3139">
+    <text x="586" y="424">• the run right now: life_cycle_state (QUEUED, RUNNING,</text>
+    <text x="598" y="441">TERMINATED) and result_state (SUCCESS, FAILED, TIMEDOUT)</text>
+    <text x="586" y="461">• start and end time, so how long it has been running</text>
+    <text x="586" y="480">• every task: task_key, state, and attempt for retries</text>
+    <text x="586" y="499">• the real error for a failed task: message and stack trace</text>
+    <text x="586" y="518">• run_page_url, a direct link for the alert</text>
+  </g>
+  <text x="586" y="544" font-size="11" font-weight="700" fill="#5A6F77" letter-spacing="1.4">BEST FOR</text>
+  <text x="586" y="563" font-size="13" font-weight="600" fill="#1B3139">live checks: failed tasks, even inside a</text>
+  <text x="586" y="580" font-size="13" font-weight="600" fill="#1B3139">running job, long runs, retry loops</text>
+  <text x="586" y="606" font-size="12" fill="#5A6F77">Needs CAN VIEW on each job, for you or the service principal.</text>
+  <text x="586" y="622" font-size="12" fill="#5A6F77">API states differ from system tables (SUCCESS vs SUCCEEDED),</text>
+  <text x="586" y="638" font-size="12" fill="#5A6F77">so the Watchdog normalizes them before writing.</text>
+
+    <line x1="297" y1="682" x2="297" y2="708" stroke="#1B3139" stroke-width="2.2" marker-end="url(#arrNavy)"/>
+  <line x1="813" y1="682" x2="813" y2="708" stroke="#1B3139" stroke-width="2.2" marker-end="url(#arrNavy)"/>
+
+    <rect x="44" y="712" width="1012" height="430" rx="14" fill="#FFFFFF" stroke="#C4CCD6" stroke-width="1.5"/>
+  <rect x="44" y="712" width="1012" height="6" rx="3" fill="#FF3621"/>
+  <circle cx="72" cy="744" r="14" fill="#1B3139"/>
+  <text x="72" y="749" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">3</text>
+  <image x="94" y="729" width="30" height="30" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTUwIiBoZWlnaHQ9IjE1MCIgdmlld0JveD0iMCAwIDE1MCAxNTAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxwYXRoIGQ9Ik0xMjYuNzcgMjUuMTEwMUgyMy4yM0MyMS4yODY4IDI1LjExMjggMTkuNDIzOSAyNS44ODU5IDE4LjA0OTggMjcuMjU5OUMxNi42NzU4IDI4LjYzNCAxNS45MDI2IDMwLjQ5NjkgMTUuOSAzMi40NDAxVjQ3LjAwMDFIMTIyLjQ1VjQ0LjAwMDFIMTguOVYzMi40NDAxQzE4LjkgMzEuMjkxNyAxOS4zNTYyIDMwLjE5MDQgMjAuMTY4MiAyOS4zNzgzQzIwLjk4MDMgMjguNTY2MyAyMi4wODE2IDI4LjExMDEgMjMuMjMgMjguMTEwMUgxMjYuNzdDMTI3LjkxOCAyOC4xMTAxIDEyOS4wMiAyOC41NjYzIDEyOS44MzIgMjkuMzc4M0MxMzAuNjQ0IDMwLjE5MDQgMTMxLjEgMzEuMjkxNyAxMzEuMSAzMi40NDAxVjExNy41NkMxMzEuMSAxMTguNzA4IDEzMC42NDQgMTE5LjgxIDEyOS44MzIgMTIwLjYyMkMxMjkuMDIgMTIxLjQzNCAxMjcuOTE4IDEyMS44OSAxMjYuNzcgMTIxLjg5SDIzLjIzQzIyLjA4MTYgMTIxLjg5IDIwLjk4MDMgMTIxLjQzNCAyMC4xNjgyIDEyMC42MjJDMTkuMzU2MiAxMTkuODEgMTguOSAxMTguNzA4IDE4LjkgMTE3LjU2VjU4LjI2MDFIMTUuOVYxMTcuNTZDMTUuOTAyNiAxMTkuNTAzIDE2LjY3NTggMTIxLjM2NiAxOC4wNDk4IDEyMi43NEMxOS40MjM5IDEyNC4xMTQgMjEuMjg2OCAxMjQuODg3IDIzLjIzIDEyNC44OUgxMjYuNzdDMTI4LjcxMyAxMjQuODg3IDEzMC41NzYgMTI0LjExNCAxMzEuOTUgMTIyLjc0QzEzMy4zMjQgMTIxLjM2NiAxMzQuMDk3IDExOS41MDMgMTM0LjEgMTE3LjU2VjMyLjQ0MDFDMTM0LjA5NyAzMC40OTY5IDEzMy4zMjQgMjguNjM0IDEzMS45NSAyNy4yNTk5QzEzMC41NzYgMjUuODg1OSAxMjguNzEzIDI1LjExMjggMTI2Ljc3IDI1LjExMDFWMjUuMTEwMVoiIGZpbGw9IiMxQjMxMzkiLz4KPHBhdGggZD0iTTI1LjYgMzYuMTgwMUMyNS42MDIgMzYuNjM2NiAyNS43MzkxIDM3LjA4MjIgMjUuOTk0MiAzNy40NjA3QzI2LjI0OTIgMzcuODM5MyAyNi42MTA2IDM4LjEzMzggMjcuMDMyOSAzOC4zMDcxQzI3LjQ1NTIgMzguNDgwNCAyNy45MTkzIDM4LjUyNDggMjguMzY2OCAzOC40MzQ1QzI4LjgxNDIgMzguMzQ0MiAyOS4yMjQ5IDM4LjEyMzQgMjkuNTQ2OSAzNy44QzI5Ljg2OSAzNy40NzY1IDMwLjA4OCAzNy4wNjQ5IDMwLjE3NjMgMzYuNjE3MUMzMC4yNjQ2IDM2LjE2OTMgMzAuMjE4MyAzNS43MDUzIDMwLjA0MzIgMzUuMjgzOEMyOS44NjgxIDM0Ljg2MjMgMjkuNTcyIDM0LjUwMjEgMjkuMTkyMyAzNC4yNDg3QzI4LjgxMjcgMzMuOTk1MyAyOC4zNjY0IDMzLjg2MDEgMjcuOTEgMzMuODYwMUMyNy42MDU4IDMzLjg2MDEgMjcuMzA0NiAzMy45MjAyIDI3LjAyMzcgMzQuMDM2OUMyNi43NDI4IDM0LjE1MzYgMjYuNDg3NyAzNC4zMjQ3IDI2LjI3MyAzNC41NDAyQzI2LjA1ODQgMzQuNzU1OCAyNS44ODg1IDM1LjAxMTYgMjUuNzczIDM1LjI5M0MyNS42NTc1IDM1LjU3NDUgMjUuNTk4NyAzNS44NzU5IDI1LjYgMzYuMTgwMVYzNi4xODAxWiIgZmlsbD0iIzFCMzEzOSIvPgo8cGF0aCBkPSJNMzQuNTEgMzYuMTgwMUMzNC41MSAzNi42MzkgMzQuNjQ2MSAzNy4wODc1IDM0LjkwMSAzNy40NjlDMzUuMTU1OSAzNy44NTA2IDM1LjUxODMgMzguMTQ3OSAzNS45NDIyIDM4LjMyMzVDMzYuMzY2MSAzOC40OTkxIDM2LjgzMjYgMzguNTQ1IDM3LjI4MjYgMzguNDU1NUMzNy43MzI3IDM4LjM2NiAzOC4xNDYgMzguMTQ1MSAzOC40NzA1IDM3LjgyMDZDMzguNzk1IDM3LjQ5NjEgMzkuMDE1OSAzNy4wODI4IDM5LjEwNTQgMzYuNjMyN0MzOS4xOTUgMzYuMTgyNyAzOS4xNDkgMzUuNzE2MiAzOC45NzM0IDM1LjI5MjNDMzguNzk3OCAzNC44Njg0IDM4LjUwMDUgMzQuNTA2IDM4LjExODkgMzQuMjUxMUMzNy43Mzc0IDMzLjk5NjIgMzcuMjg4OSAzMy44NjAxIDM2LjgzIDMzLjg2MDFDMzYuMjE0NyAzMy44NjAxIDM1LjYyNDYgMzQuMTA0NSAzNS4xODk1IDM0LjUzOTZDMzQuNzU0NCAzNC45NzQ3IDM0LjUxIDM1LjU2NDggMzQuNTEgMzYuMTgwMVoiIGZpbGw9IiMxQjMxMzkiLz4KPHBhdGggZD0iTTQzLjQzIDM2LjE3OTlDNDMuNDMgMzYuNjM5MiA0My41NjYzIDM3LjA4ODEgNDMuODIxNyAzNy40Njk4QzQ0LjA3NzEgMzcuODUxNiA0NC40NCAzOC4xNDg5IDQ0Ljg2NDUgMzguMzI0MkM0NS4yODkgMzguNDk5NSA0NS43NTYgMzguNTQ0OSA0Ni4yMDYzIDM4LjQ1NDVDNDYuNjU2NiAzOC4zNjQyIDQ3LjA3IDM4LjE0MjMgNDcuMzk0IDM3LjgxNjhDNDcuNzE4MSAzNy40OTEzIDQ3LjkzODIgMzcuMDc3IDQ4LjAyNjYgMzYuNjI2M0M0OC4xMTUgMzYuMTc1NiA0OC4wNjc2IDM1LjcwODkgNDcuODkwNSAzNS4yODUxQzQ3LjcxMzQgMzQuODYxNCA0Ny40MTQ1IDM0LjQ5OTcgNDcuMDMxNiAzNC4yNDZDNDYuNjQ4OCAzMy45OTIzIDQ2LjE5OTMgMzMuODU3OSA0NS43NCAzMy44NTk5QzQ1LjEyNjQgMzMuODYyNSA0NC41Mzg5IDM0LjEwODEgNDQuMTA2IDM0LjU0MjlDNDMuNjczIDM0Ljk3NzcgNDMuNDMgMzUuNTY2MyA0My40MyAzNi4xNzk5VjM2LjE3OTlaIiBmaWxsPSIjMUIzMTM5Ii8+CjxwYXRoIGQ9Ik0xMjIuOTMgMTEyLjU4VjU4LjI0SDI3LjA3VjExMi41OEgzMC4wN1Y5Ni40N0g0NS42NFYxMTIuNThINDguNjRWOTYuNDdINjQuMjJWMTEyLjU4SDY3LjIyVjk2LjQ3SDgyLjc5VjExMi41OEg4NS43OVY5Ni40N0gxMDEuMzZWMTEyLjU4SDEwNC4zNlY5Ni40N0gxMTkuOTNWMTEyLjU4SDEyMi45M1pNMTE5LjkzIDc1Ljg1SDEwNC4zNlY2MS4yNEgxMTkuOTNWNzUuODVaTTY3LjIyIDYxLjI0SDgyLjc5Vjc1Ljg1SDY3LjIyVjYxLjI0Wk02NC4yMiA3NS44NUg0OC42NFY2MS4yNEg2NC4yMlY3NS44NVpNODUuNzkgNjEuMjRIMTAxLjM2Vjc1Ljg1SDg1Ljc5VjYxLjI0Wk00NS42NCA2MS4yNFY3NS44NUgzMC4wN1Y2MS4yNEg0NS42NFpNMzAuMDcgOTMuNDdWNzguODVINDUuNjRWOTMuNDdIMzAuMDdaTTQ4LjY0IDkzLjQ3Vjc4Ljg1SDY0LjIyVjkzLjQ3SDQ4LjY0Wk02Ny4yMiA5My40N1Y3OC44NUg4Mi43OVY5My40N0g2Ny4yMlpNODUuNzkgOTMuNDdWNzguODVIMTAxLjM2VjkzLjQ3SDg1Ljc5Wk0xMDQuMzYgOTMuNDdWNzguODVIMTE5LjkzVjkzLjQ3SDEwNC4zNloiIGZpbGw9IiMxQjMxMzkiLz4KPC9zdmc+Cg=="/>
+  <text x="134" y="742" font-size="18" font-weight="700" fill="#1B3139">Check, then write findings to one UC table</text>
+  <text x="134" y="761" font-size="13" fill="#5A6F77"><tspan font-family="DM Mono, Menlo, monospace">&lt;catalog&gt;.watchdog.findings</tspan> · one row per job and check, every scan</text>
+
+    <text x="60" y="792" font-size="11" font-weight="700" fill="#5A6F77" letter-spacing="1.4">CHECKS</text>
+  <text x="60" y="810" font-size="12" fill="#5A6F77">config: your job list, owners and dependency map</text>
+  <g font-size="13" fill="#1B3139">
+    <text x="60" y="834">• task failed, even inside a running job</text>
+    <text x="60" y="854">• ran past its time limit (SLA)</text>
+    <text x="60" y="874">• missed its schedule (no run in the window)</text>
+    <text x="60" y="894">• retry loop (more retries than allowed)</text>
+    <text x="60" y="914">• later: stuck batch or no new data (Phase 2)</text>
+    <text x="60" y="934">• later: service probes, such as Kafka (Phase 2)</text>
+    <text x="60" y="954">• upstream impact: list the downstream jobs</text>
+    <text x="60" y="974">• could not check: unknown coverage</text>
+  </g>
+  <text x="60" y="1006" font-size="13" font-weight="700" fill="#1B3139">Writes safely</text>
+  <text x="60" y="1024" font-size="13" fill="#1B3139">appends every scan, keyed by scan, job and check,</text>
+  <text x="60" y="1042" font-size="13" fill="#1B3139">so a re-run never duplicates rows</text>
+  <line x1="420" y1="782" x2="420" y2="1126" stroke="#E2E0DA" stroke-width="1"/>
+
+    <text x="440" y="792" font-size="11" font-weight="700" fill="#5A6F77" letter-spacing="1.4">FINDINGS TABLE COLUMNS</text>
+  <g font-size="12" font-family="DM Mono, Menlo, monospace" fill="#1B3139">
+    <text x="440" y="814">observed_at</text><text x="440" y="832">scan_id</text><text x="440" y="850">account_id</text><text x="440" y="868">region</text><text x="440" y="886">workspace_id</text>
+    <text x="575" y="814">workspace_name</text><text x="575" y="832">job_id</text><text x="575" y="850">job_name</text><text x="575" y="868">check_id</text><text x="575" y="886">status</text>
+    <text x="710" y="814">severity</text><text x="710" y="832">failure_category</text><text x="710" y="850">run_id</text><text x="710" y="868">run_page_url</text><text x="710" y="886">failed_task_keys</text>
+    <text x="845" y="814">error_summary</text><text x="845" y="832" fill="#FF3621">affected_jobs</text><text x="845" y="850">owner</text><text x="845" y="868">source</text>
+  </g>
+  <text x="440" y="924" font-size="11" fill="#5A6F77" xml:space="preserve">status: HEALTHY · WARNING · FAILED · UNKNOWN   ·   source: SYSTEM_TABLES or JOBS_API</text>
+  <text x="947" y="832" font-size="11" fill="#FF3621">← dependency map</text>
+
+    <text x="440" y="948" font-size="11" font-weight="700" fill="#5A6F77" letter-spacing="1.4">EXAMPLE ROWS (ILLUSTRATIVE)</text>
+  <rect x="440" y="956" width="600" height="22" rx="4" fill="#EEEDE9"/>
+  <g font-size="11.5" font-weight="700" fill="#5A6F77">
+    <text x="448" y="971">workspace · job</text><text x="586" y="971">check</text><text x="678" y="971">status</text><text x="750" y="971">detail</text><text x="920" y="971">affected_jobs</text>
+  </g>
+  <g font-size="11.5" fill="#1B3139">
+    <text x="448" y="998">ws-a · orders_ingest</text><text x="586" y="998" font-family="DM Mono, Menlo, monospace" font-size="11">task_failures</text>
+    <rect x="676" y="986" width="60" height="17" rx="8" fill="#F6E3E6"/><text x="706" y="998" font-size="10.5" font-weight="700" fill="#98102A" text-anchor="middle">FAILED</text>
+    <text x="750" y="998">load task failed + error</text><text x="920" y="998">orders_enrich, +1</text>
+    <line x1="440" y1="1008" x2="1040" y2="1008" stroke="#EEEDE9" stroke-width="1"/>
+
+    <text x="448" y="1026">ws-b · orders_enrich</text><text x="586" y="1026" font-family="DM Mono, Menlo, monospace" font-size="11">long_runtime</text>
+    <rect x="676" y="1014" width="60" height="17" rx="8" fill="#FFF4D6"/><text x="706" y="1026" font-size="10.5" font-weight="700" fill="#7A5200" text-anchor="middle">WARNING</text>
+    <text x="750" y="1026">running 2h 40m, limit 2h</text><text x="920" y="1026">none</text>
+    <line x1="440" y1="1036" x2="1040" y2="1036" stroke="#EEEDE9" stroke-width="1"/>
+
+    <text x="448" y="1054">ws-a · daily_report</text><text x="586" y="1054" font-family="DM Mono, Menlo, monospace" font-size="11">schedule_gap</text>
+    <rect x="676" y="1042" width="60" height="17" rx="8" fill="#F6E3E6"/><text x="706" y="1054" font-size="10.5" font-weight="700" fill="#98102A" text-anchor="middle">FAILED</text>
+    <text x="750" y="1054">no run in 26 hours</text><text x="920" y="1054">revenue_dashboard</text>
+    <line x1="440" y1="1064" x2="1040" y2="1064" stroke="#EEEDE9" stroke-width="1"/>
+
+    <text x="448" y="1082">ws-c · features</text><text x="586" y="1082" font-family="DM Mono, Menlo, monospace" font-size="11">retry_loop</text>
+    <rect x="676" y="1070" width="60" height="17" rx="8" fill="#E0F5EC"/><text x="706" y="1082" font-size="10.5" font-weight="700" fill="#00704C" text-anchor="middle">HEALTHY</text>
+    <text x="750" y="1082">no task retried twice</text><text x="920" y="1082">none</text>
+    <line x1="440" y1="1092" x2="1040" y2="1092" stroke="#EEEDE9" stroke-width="1"/>
+
+    <text x="448" y="1110">(none) · orders_audit</text><text x="586" y="1110" font-family="DM Mono, Menlo, monospace" font-size="11">not_found</text>
+    <rect x="676" y="1098" width="60" height="17" rx="8" fill="#E8ECEE"/><text x="706" y="1110" font-size="10.5" font-weight="700" fill="#5A6F77" text-anchor="middle">UNKNOWN</text>
+    <text x="750" y="1110">no job matches its regex</text><text x="920" y="1110">fix the regex</text>
+  </g>
+  <text x="440" y="1134" font-size="11" fill="#5A6F77">observed_at, scan_id, job_name, check_id, status and source are on every row.</text>
+
+    <rect x="1096" y="108" width="480" height="640" rx="16" fill="#FFFFFF" stroke="#C4CCD6" stroke-width="1.5"/>
+  <rect x="1096" y="108" width="480" height="6" rx="3" fill="#FF3621"/>
+  <image x="1114" y="128" width="28" height="28" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgdmlld0JveD0iMCAwIDUxMiA1MTIiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNMTUyIDQ0OEw0NDggNDQ4VjI3MkwxNTIgMjcyQzEwMy4zOTkgMjcyIDY0IDMxMS4zOTkgNjQgMzYwQzY0IDQwOC42MDEgMTAzLjM5OSA0NDggMTUyIDQ0OFpNMTUyIDQwMEMxNzQuMDkxIDQwMCAxOTIgMzgyLjA5MSAxOTIgMzYwQzE5MiAzMzcuOTA5IDE3NC4wOTEgMzIwIDE1MiAzMjBDMTI5LjkwOSAzMjAgMTEyIDMzNy45MDkgMTEyIDM2MEMxMTIgMzgyLjA5MSAxMjkuOTA5IDQwMCAxNTIgNDAwWiIgZmlsbD0iI0ZGNUY0NiIvPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTM2MCAyNDBDNDA4LjYwMSAyNDAgNDQ4IDIwMC42MDEgNDQ4IDE1MkM0NDggMTAzLjM5OSA0MDguNjAxIDY0IDM2MCA2NEw2NCA2NFYyNDBMMzYwIDI0MFpNMzYwIDE5MkMzODIuMDkxIDE5MiA0MDAgMTc0LjA5MSA0MDAgMTUyQzQwMCAxMjkuOTA5IDM4Mi4wOTEgMTEyIDM2MCAxMTJDMzM3LjkwOSAxMTIgMzIwIDEyOS45MDkgMzIwIDE1MkMzMjAgMTc0LjA5MSAzMzcuOTA5IDE5MiAzNjAgMTkyWiIgZmlsbD0iI0ZBQkZCQSIvPgo8L3N2Zz4K"/>
+  <image x="1148" y="128" width="28" height="28" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik04IDFDNS4yMzg1OCAxIDMgMy4yMzg1OCAzIDZWNy45OTAzOEMzIDguNjYzNjQgMi44MDA3MSA5LjMyMTg1IDIuNDI3MjUgOS44ODIwNEwxLjEyNTk2IDExLjgzNEMwLjk3MjUzNSAxMi4wNjQxIDAuOTU4MjMxIDEyLjM2IDEuMDg4NzUgMTIuNjAzOUMxLjIxOTI2IDEyLjg0NzggMS40NzM0IDEzIDEuNzUgMTNINS4yNVYxMy4yNUM1LjI1IDE0Ljc2ODggNi40ODEyMiAxNiA4IDE2QzkuNTE4NzggMTYgMTAuNzUgMTQuNzY4OCAxMC43NSAxMy4yNVYxM0gxNC4yNUMxNC41MjY2IDEzIDE0Ljc4MDcgMTIuODQ3OCAxNC45MTEzIDEyLjYwMzlDMTUuMDQxOCAxMi4zNiAxNS4wMjc1IDEyLjA2NDEgMTQuODc0IDExLjgzNEwxMy41NzI4IDkuODgyMDRDMTMuMTk5MyA5LjMyMTg1IDEzIDguNjYzNjQgMTMgNy45OTAzOFY2QzEzIDMuMjM4NTggMTAuNzYxNCAxIDggMVpNOS4yNSAxM0g2Ljc1VjEzLjI1QzYuNzUgMTMuOTQwNCA3LjMwOTY0IDE0LjUgOCAxNC41QzguNjkwMzYgMTQuNSA5LjI1IDEzLjk0MDQgOS4yNSAxMy4yNVYxM1pNNC41IDZDNC41IDQuMDY3IDYuMDY3IDIuNSA4IDIuNUM5LjkzMyAyLjUgMTEuNSA0LjA2NyAxMS41IDZWNy45OTAzOEMxMS41IDguOTU5NzggMTEuNzg2OSA5LjkwNzUgMTIuMzI0NyAxMC43MTQxTDEyLjg0ODYgMTEuNUgzLjE1MTM5TDMuNjc1MzMgMTAuNzE0MUM0LjIxMzA2IDkuOTA3NSA0LjUgOC45NTk3OCA0LjUgNy45OTAzOFY2WiIgZmlsbD0iI0ZGMzYyMSIvPgo8L3N2Zz4K"/>
+  <text x="1186" y="148" font-size="18" font-weight="700" fill="#1B3139">Alerts from the findings table · Phase 3</text>
+  <text x="1114" y="178" font-size="13" fill="#5A6F77">Databricks SQL alerts run a query on a schedule and notify</text>
+  <text x="1114" y="195" font-size="13" fill="#5A6F77">Slack, email, Teams, PagerDuty or a webhook.</text>
+
+  <g font-size="14" font-weight="700" fill="#1B3139">
+    <rect x="1114" y="214" width="78" height="20" rx="10" fill="#F6E3E6"/><text x="1153" y="228" font-size="10.5" fill="#98102A" text-anchor="middle">CRITICAL</text>
+    <text x="1202" y="229">Upstream failure</text>
+    <rect x="1114" y="264" width="78" height="20" rx="10" fill="#F6E3E6"/><text x="1153" y="278" font-size="10.5" fill="#98102A" text-anchor="middle">CRITICAL</text>
+    <text x="1202" y="279">Stuck batch</text>
+    <rect x="1114" y="314" width="78" height="20" rx="10" fill="#EEEDE9"/><text x="1153" y="328" font-size="10.5" fill="#1B3139" text-anchor="middle">PER JOB</text>
+    <text x="1202" y="329">New task failure</text>
+    <rect x="1114" y="364" width="78" height="20" rx="10" fill="#FFF4D6"/><text x="1153" y="378" font-size="10.5" fill="#7A5200" text-anchor="middle">WARNING</text>
+    <text x="1202" y="379">Long run</text>
+    <rect x="1114" y="414" width="78" height="20" rx="10" fill="#FFF4D6"/><text x="1153" y="428" font-size="10.5" fill="#7A5200" text-anchor="middle">WARNING</text>
+    <text x="1202" y="429">Missed schedule</text>
+    <rect x="1114" y="464" width="78" height="20" rx="10" fill="#FFF4D6"/><text x="1153" y="478" font-size="10.5" fill="#7A5200" text-anchor="middle">WARNING</text>
+    <text x="1202" y="479">Service down</text>
+    <rect x="1114" y="514" width="78" height="20" rx="10" fill="#FFF4D6"/><text x="1153" y="528" font-size="10.5" fill="#7A5200" text-anchor="middle">WARNING</text>
+    <text x="1202" y="529">Coverage gap</text>
+    <rect x="1114" y="564" width="78" height="20" rx="10" fill="#E0F5EC"/><text x="1153" y="578" font-size="10.5" fill="#00704C" text-anchor="middle">INFO</text>
+    <text x="1202" y="579">Recovery</text>
+  </g>
+  <g font-size="12.5" fill="#5A6F77">
+    <text x="1202" y="247">orders_ingest fails: one alert naming the jobs it breaks</text>
+    <text x="1202" y="297">a continuous job stays on one batch ID with no new data</text>
+    <text x="1202" y="347">fails since the last scan: error text and run link</text>
+    <text x="1202" y="397">orders_enrich past its 2-hour limit</text>
+    <text x="1202" y="447">no run in the expected window</text>
+    <text x="1202" y="497">Kafka or an API down; names the jobs using it</text>
+    <text x="1202" y="547">the Watchdog could not check a job (UNKNOWN)</text>
+    <text x="1202" y="597">back to HEALTHY: one closing message</text>
+  </g>
+  <line x1="1114" y1="616" x2="1558" y2="616" stroke="#E2E0DA" stroke-width="1"/>
+  <text x="1114" y="638" font-size="11" font-weight="700" fill="#5A6F77" letter-spacing="1.4">ROUTING</text>
+  <text x="1114" y="658" font-size="13" fill="#1B3139">Critical → PagerDuty · Warning → Slack, tagged to</text>
+  <text x="1114" y="675" font-size="13" fill="#1B3139">the job owner · Recovery → a closing message</text>
+  <text x="1114" y="700" font-size="13" font-weight="700" fill="#1B3139">Alert on changes only:</text>
+  <text x="1264" y="700" font-size="13" fill="#1B3139">compare each finding with the</text>
+  <text x="1114" y="717" font-size="13" fill="#1B3139">previous one for the same job and check, so a failure alerts once.</text>
+  <text x="1114" y="737" font-size="12" fill="#5A6F77">A workspace admin sets up the notification destinations.</text>
+
+    <rect x="1096" y="768" width="480" height="392" rx="16" fill="#FFFFFF" stroke="#C4CCD6" stroke-width="1.5"/>
+  <rect x="1096" y="768" width="480" height="6" rx="3" fill="#FF3621"/>
+  <image x="1114" y="788" width="30" height="30" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgdmlld0JveD0iMCAwIDUxMiA1MTIiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxwYXRoIGQ9Ik02NCA2NEgyMjRWMjI0SDY0VjY0WiIgZmlsbD0iI0ZBQkZCQSIvPgo8cGF0aCBkPSJNNDQwIDQ0OEwyODAgNDQ4TDI4MCAzNTJDMjgwIDMxNi42NTQgMzA4LjY1NCAyODggMzQ0IDI4OEwzNzYgMjg4QzQxMS4zNDYgMjg4IDQ0MCAzMTYuNjU0IDQ0MCAzNTJMNDQwIDQ0OFoiIGZpbGw9IiNGQUJGQkEiLz4KPHBhdGggZD0iTTE1MiAyODhMMjQwIDQ0OEg2NEwxNTIgMjg4WiIgZmlsbD0iI0ZGNUY0NiIvPgo8cGF0aCBkPSJNMjgwIDE0OEMyODAgMTAxLjYwOCAzMTcuNjA4IDY0IDM2NCA2NFY2NEM0MTAuMzkyIDY0IDQ0OCAxMDEuNjA4IDQ0OCAxNDhWMTQ4QzQ0OCAxOTQuMzkyIDQxMC4zOTIgMjMyIDM2NCAyMzJWMjMyQzMxNy42MDggMjMyIDI4MCAxOTQuMzkyIDI4MCAxNDhWMTQ4WiIgZmlsbD0iI0ZGNUY0NiIvPgo8L3N2Zz4K"/>
+  <text x="1156" y="808" font-size="18" font-weight="700" fill="#1B3139">Watchdog app · Phase 4</text>
+  <text x="1156" y="827" font-size="13" fill="#5A6F77">a Databricks App that reads the same findings table</text>
+  <g font-size="13.5" fill="#1B3139">
+    <text x="1114" y="860">• <tspan font-weight="700">Health now:</tspan> every workspace and job, green, amber or red</text>
+    <text x="1114" y="886">• <tspan font-weight="700">Incidents:</tspan> open and resolved, with task drill-down,</text>
+    <text x="1126" y="903">error text and the run link</text>
+    <text x="1114" y="929">• <tspan font-weight="700">Impact:</tspan> what else breaks when orders_ingest fails</text>
+    <text x="1114" y="955">• <tspan font-weight="700">Coverage:</tspan> which jobs are watched, last scan, gaps</text>
+    <text x="1114" y="981">• <tspan font-weight="700">Summary:</tspan> last 12 or 24 hours, on demand</text>
+    <text x="1114" y="1007">• <tspan font-weight="700">Across workspaces:</tspan> spot the same failure everywhere</text>
+    <text x="1114" y="1033">• <tspan font-weight="700">Later:</tspan> acknowledge, add triage notes, and ask</text>
+    <text x="1126" y="1050">questions in plain language</text>
+  </g>
+  <text x="1114" y="1088" font-size="12" fill="#5A6F77">Planned for Phase 4. A good first version shows</text>
+  <text x="1114" y="1104" font-size="12" fill="#5A6F77">health, incidents and the summary.</text>
+
+    <line x1="1058" y1="730" x2="1092" y2="730" stroke="#1B3139" stroke-width="2.2" marker-end="url(#arrNavy)"/>
+  <rect x="1060" y="709" width="32" height="14" rx="4" fill="#F9F7F4"/>
+  <text x="1076" y="720" font-size="10.5" font-weight="700" fill="#1B3139" text-anchor="middle">query</text>
+  <line x1="1058" y1="950" x2="1092" y2="950" stroke="#1B3139" stroke-width="2.2" marker-end="url(#arrNavy)"/>
+  <rect x="1060" y="929" width="32" height="14" rx="4" fill="#F9F7F4"/>
+  <text x="1076" y="940" font-size="10.5" font-weight="700" fill="#1B3139" text-anchor="middle">reads</text>
+
+    <text x="40" y="1186" font-size="12" fill="#5A6F77">Sources, checked 2026-10-28: Databricks docs for Jobs system tables (columns and states), the Jobs API, job permissions and notification destinations. Example rows are illustrative.</text>
+</svg>

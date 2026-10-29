@@ -22,8 +22,13 @@ s = settings("lookback_hours")
 from jobs_watchdog.sqlfiles import run_sql
 
 
-def show(relpath):
-    display(run_sql(spark, relpath, lookback_hours=s.lookback_hours))
+def show(relpath, optional=False):
+    try:
+        display(run_sql(spark, relpath, lookback_hours=s.lookback_hours))
+    except Exception as err:
+        if not optional:
+            raise
+        print(f"Skipped {relpath}: {short_error(err)}")
 
 # COMMAND ----------
 
@@ -43,7 +48,7 @@ show("sql/explore/10_workspaces_in_region.sql")
 
 # COMMAND ----------
 
-show("sql/explore/11_workspace_names.sql")
+show("sql/explore/11_workspace_names.sql", optional=True)
 
 # COMMAND ----------
 
