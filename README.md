@@ -61,7 +61,7 @@ Phase 1 creates no clusters, SQL warehouses, apps, alerts or secrets.
 - **System tables**: the `system.lakeflow` schema (jobs, runs and task runs). `system.access.workspaces_latest` (Public Preview) adds workspace names and run links; it is optional in `current_workspace` mode and required in `service_principal` mode. An account admin enables system schemas if they are not on yet.
 - **Grants for the identity that runs the notebooks or the job** (a metastore admin grants these):
   - `USE CATALOG` on `system`, plus `USE SCHEMA` and `SELECT` on `system.lakeflow` and `system.access`;
-  - `USE CATALOG` and `CREATE SCHEMA` on the catalog that holds the Watchdog schema.
+  - `USE CATALOG` and `CREATE SCHEMA` on the catalog that holds the Watchdog schema. If you create the schema yourself first, `USE CATALOG` on the catalog plus `USE SCHEMA`, `CREATE TABLE`, `SELECT` and `MODIFY` on the schema instead.
 - **Job permissions**: `CAN VIEW` on each job you monitor, to read its runs and error output. Phase 1 never needs `CAN MANAGE RUN`.
 - **Every-workspace mode only** (`auth_mode: service_principal`): a service principal with an OAuth secret, added to each workspace it monitors, with `CAN VIEW` on the monitored jobs. Store its application ID and secret in a secret scope that only you and the job's identity can read. If your workspaces use IP access lists or private networking, the job must be able to reach each workspace's address.
 

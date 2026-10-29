@@ -17,7 +17,7 @@ Read these files before doing anything else:
 
 Ask for each value **one at a time**. Offer the default where there is one, and say why the value matters.
 
-1. **catalog** (required): the catalog that will hold the Watchdog schema. The operator needs `USE CATALOG` and `CREATE SCHEMA` on it.
+1. **catalog** (required): the catalog that will hold the Watchdog schema. The operator needs `USE CATALOG` and `CREATE SCHEMA` on it, or, when the schema already exists, `USE CATALOG` on the catalog plus `USE SCHEMA`, `CREATE TABLE`, `SELECT` and `MODIFY` on the schema.
 2. **schema** (default `watchdog`): the schema for the three Watchdog tables.
 3. **region** (required): the cloud region of this workspace's metastore, for example `us-east-2`. `SELECT current_metastore()` usually shows it in the form `<cloud>:<region>:<id>`. It is recorded on every finding.
 4. **auth mode** (default `current_workspace`):
