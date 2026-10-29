@@ -1,6 +1,6 @@
 # Changelog
 
-What changed, for people who already run the Watchdog. After every pull: restart Python on any open notebook, then run notebook 01 once. It creates any new table, adds any new columns to your existing tables (your rows stay) and brings the view up to date. Each scheduled run of `watchdog_scan` does this too.
+What changed, for people who already run the Watchdog. After every pull: restart Python on any open notebook, then run notebook 01 once. It creates any new table, adds any new columns to your existing tables (your rows stay) and brings the view up to date. If you deployed the jobs with the bundle, deploy it again right after the pull, so the jobs run the new code; each scheduled run of `watchdog_scan` then runs notebook 01 too.
 
 ## Phase 1.2 (2026-10-29)
 
@@ -36,11 +36,12 @@ One entry in the job list covers a job everywhere it runs: its `job_name_regex` 
 ### How to upgrade from Phase 1 or 1.1
 
 1. In the Git folder, click Pull.
-2. Restart Python on any open notebook (detach and reattach).
-3. Run notebook 01. It creates the tables that are new since your version, such as `monitored_job_environments`, adds the new columns (for example `min_attempt_minutes`, and `pipeline_url` if you do not have it yet), and prints `view findings_latest:` followed by created, replaced or current. Your rows stay.
-4. Run notebook 02 with your job list. If it stops on a key it does not know, fix that key (the message names it) and run it again.
-5. Optional: move shared settings into `defaults`, and add `environments` and `min_attempt_minutes` where you need them. Then run notebook 02 again.
-6. Run notebooks 05 and 06, and check that notebook 07 prints only PASS lines.
+2. If you deployed the jobs with the bundle, deploy it again from your updated clone (the `eval` line, then `databricks bundle deploy`). The jobs run their own copy of the code, and an older copy cannot load the job list once notebook 01 has added a column: notebook 02 stops with `DELTA_INSERT_COLUMN_ARITY_MISMATCH`.
+3. Restart Python on any open notebook (detach and reattach).
+4. Run notebook 01. It creates the tables that are new since your version, such as `monitored_job_environments`, adds the new columns (for example `min_attempt_minutes`, and `pipeline_url` if you do not have it yet), and prints `view findings_latest:` followed by created, replaced or current. Your rows stay.
+5. Run notebook 02 with your job list. If it stops on a key it does not know, fix that key (the message names it) and run it again.
+6. Optional: move shared settings into `defaults`, and add `environments` and `min_attempt_minutes` where you need them. Then run notebook 02 again.
+7. Run notebooks 05 and 06, and check that notebook 07 prints only PASS lines.
 
 From Phase 1, also read the Phase 1.1 section below: it lists the columns, options and jobs that release added.
 

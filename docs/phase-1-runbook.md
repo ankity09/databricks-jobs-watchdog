@@ -90,17 +90,18 @@ Then put the scope and key names in `accelerator.local.yaml` (`auth.secret_scope
 
 Clone this repo into a Git folder in the Watchdog workspace. [git-folder-setup.md](git-folder-setup.md) has the steps, and how to pull updates.
 
-After every pull, restart Python on any notebook you have open, so it loads the new code. Then run notebook 01, which upgrades the existing tables and makes the view current. Each scheduled run runs notebook 01 too, so the next scheduled run upgrades them. Run `watchdog_phase_1` once before you turn the schedule on, to check access and validate the setup.
+After every pull, restart Python on any notebook you have open, so it loads the new code. Then run notebook 01, which upgrades the existing tables and makes the view current. If you deployed the jobs with the bundle, deploy it again too, so the jobs run the new code; each scheduled run then runs notebook 01 as well. Run `watchdog_phase_1` once before you turn the schedule on, to check access and validate the setup.
 
 ### Upgrade after a pull
 
 [CHANGELOG.md](../CHANGELOG.md) lists what each release changed. To move to a new release:
 
 1. In the Git folder, click Pull.
-2. Restart Python on any open notebook (detach and reattach).
-3. Run notebook 01. It prints the columns it added to each table, and `view findings_latest:` followed by created, replaced or current. Your existing rows stay.
-4. If the release adds options you want, add them to your job list file, then run notebook 02. Notebook 02 stops on any setting it does not know and names it, so a misspelled key is caught here.
-5. Run notebooks 05 and 06, and check notebook 07 still prints only PASS lines.
+2. If you deployed the jobs with the bundle, deploy it again from your updated clone (the `eval` line, then `databricks bundle deploy`). The jobs run their own copy of the code, and an older copy cannot load the job list once notebook 01 has added a column: notebook 02 stops with `DELTA_INSERT_COLUMN_ARITY_MISMATCH`.
+3. Restart Python on any open notebook (detach and reattach).
+4. Run notebook 01. It prints the columns it added to each table, and `view findings_latest:` followed by created, replaced or current. Your existing rows stay.
+5. If the release adds options you want, add them to your job list file, then run notebook 02. Notebook 02 stops on any setting it does not know and names it, so a misspelled key is caught here.
+6. Run notebooks 05 and 06, and check notebook 07 still prints only PASS lines.
 
 ### Write your config
 
