@@ -92,6 +92,16 @@ Clone this repo into a Git folder in the Watchdog workspace. [git-folder-setup.m
 
 After every pull, restart Python on any notebook you have open, so it loads the new code. Then run notebook 01, which upgrades the existing tables and makes the view current. Each scheduled run runs notebook 01 too, so the next scheduled run upgrades them. Run `watchdog_phase_1` once before you turn the schedule on, to check access and validate the setup.
 
+### Upgrade after a pull
+
+[CHANGELOG.md](../CHANGELOG.md) lists what each release changed. To move to a new release:
+
+1. In the Git folder, click Pull.
+2. Restart Python on any open notebook (detach and reattach).
+3. Run notebook 01. It prints the columns it added to each table, and `view findings_latest:` followed by created, replaced or current. Your existing rows stay.
+4. If the release adds options you want, add them to your job list file, then run notebook 02.
+5. Run notebooks 05 and 06, and check notebook 07 still prints only PASS lines.
+
 ### Write your config
 
 1. **The job list.** Copy `config/monitored_jobs.example.yml` somewhere outside the Git folder: your workspace home folder, or a Unity Catalog volume such as `/Volumes/<catalog>/<schema>/<volume>/monitored_jobs.yml`. Edits there never conflict with pulls. Replace the examples with your jobs and dependencies. The file's comments explain every field, and [data-model.md](data-model.md) explains how each is used.
@@ -233,6 +243,30 @@ To add your own checks, build rows with the keys `job_name`, `check_id`, `status
 - `findings_latest` returns the newest scan of each source, judged by when each scan first wrote.
 - With the demo target: `watchdog_demo_succeeds` is HEALTHY, and `watchdog_demo_fails` is FAILED with `load` in `failed_task_keys` and the error text in `error_summary`. The example config is set so that `watchdog_demo_slow` warns for `long_runtime` and `watchdog_demo_retries` warns for `retry_loop`. The FAILED row for `watchdog_demo_fails` lists `watchdog_demo_succeeds` in `affected_jobs`. The system table rows for the demo jobs can say `not_found` or UNKNOWN for about an hour, until the system tables catch up. Run the job again later to see them.
 - If you built the dashboard, each of its three pages shows rows.
+
+## Reading the results: `findings` and `findings_latest`
+
+`findings` is the history. It keeps every scan, one row per job, check and source, and nothing is overwritten. `findings_latest` is a view of the newest scan from each source: the current status of every job. A view stores no data of its own, so it is always as current as the last scan.
+
+What is wrong right now:
+
+```sql
+SELECT environment, workspace_name, job_name, check_id, status, severity, error_summary, run_page_url
+FROM <catalog>.<schema>.findings_latest
+WHERE status <> 'HEALTHY'
+ORDER BY status, job_name
+```
+
+How one job has looked over the last day:
+
+```sql
+SELECT observed_at, source, check_id, status, error_summary
+FROM <catalog>.<schema>.findings
+WHERE job_name = 'orders_ingest' AND observed_at >= current_timestamp() - INTERVAL 1 DAY
+ORDER BY observed_at DESC
+```
+
+The history is what lets the alerts in Phase 3 fire once when a job breaks and once when it recovers, instead of on every scan.
 
 ## Troubleshooting
 

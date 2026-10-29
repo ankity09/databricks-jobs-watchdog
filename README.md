@@ -2,6 +2,8 @@
 
 Watchdog checks your Databricks jobs in every workspace of a cloud region and writes what it finds into one Unity Catalog table. It is built in phases. **Phase 1.1**, in this repo today, creates the tables, loads your list of jobs to watch, runs the scans on a schedule (paused until you turn it on), and adds a first dashboard.
 
+> **Already running the first release?** [CHANGELOG.md](CHANGELOG.md) lists everything that changed and how to upgrade: pull, restart Python on open notebooks, then run notebook 01 once.
+
 ## Why
 
 A platform team often runs hundreds of jobs spread over many workspaces. When an upstream job fails, the jobs that depend on it fail or go stale too, and often nobody notices until a report is wrong. The Jobs page in each workspace shows that workspace only, so answering "is everything healthy right now?" means opening each one.
@@ -46,13 +48,22 @@ Inside a scan, step 1 reads the system tables, step 2 calls the Jobs API, and st
 
 Each row names the job, the check, its status and severity, and the run the row is about: when it started and ended, how long it took, how it was triggered, and the code version and environment label where they are known. Failed rows also list the jobs that depend on the failed one. [docs/data-model.md](docs/data-model.md) describes every column.
 
+### History and current status: `findings` and `findings_latest`
+
+The Watchdog keeps two views of the same results:
+
+- **`findings` is the history, like a logbook.** It is a table that keeps every scan. Each scan adds rows, one per job, check and source, and nothing is overwritten. Re-running a scan never adds duplicates.
+- **`findings_latest` is the current status, like a status board.** It is a view, a saved query rather than a second copy of the data, that shows only the newest scan from each source. It is up to date as soon as a scan finishes.
+
+Use `findings_latest` for "what is wrong right now". The dashboard's Now and Versions and runs pages read it. Use `findings` for "since when, how often, and did it recover". The dashboard's History page reads it, and the alerts in Phase 3 need it to alert once when a job breaks and once when it recovers, instead of on every scan.
+
 ## What this deploys
 
 In the catalog and schema you choose (schema `watchdog` by default):
 
 - `monitored_jobs`, `job_dependencies` and `monitored_workspaces`: your config, loaded from a YAML file.
-- `findings`: every scan, one row per job, check and source. Re-running a scan never adds duplicate rows. This is the history.
-- `findings_latest`: a view of the newest scan from each source, judged by the time each scan first wrote. Dashboards read it.
+- `findings`: the history, every scan, one row per job, check and source. Re-running a scan never adds duplicate rows.
+- `findings_latest`: a view of the newest scan from each source, the current status (see [History and current status](#history-and-current-status-findings-and-findings_latest)).
 
 Notebook `01_create_tables` creates these, and upgrades existing tables and the view in place. Run it after each pull; each scheduled run runs it too. The bundle does not own them, so they and your findings history survive a teardown unless you ask for the schema to be dropped.
 
@@ -201,6 +212,7 @@ docs/                  guides and diagrams
 - [Phase 1 runbook](docs/phase-1-runbook.md): step by step, by role.
 - [Git folder setup](docs/git-folder-setup.md): cloning this repo into a workspace and pulling updates.
 - [Roadmap](docs/roadmap.md): Phases 2 to 5, and the backlog.
+- [Changelog](CHANGELOG.md): what changed in each release, and how to upgrade.
 
 ## License
 
