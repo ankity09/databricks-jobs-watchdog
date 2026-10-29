@@ -1,6 +1,7 @@
 # Phase 1, end to end: check access, create the tables, load the config,
-# explore both sources, scan both, and validate. On demand only; Phase 2
-# adds a schedule. Every task runs on serverless compute.
+# explore both sources, scan both, and validate. On demand only. The scheduled
+# scan is watchdog_scan (resources/watchdog_scan.job.yml). Every task runs on
+# serverless compute.
 #
 # The job parameters reach every notebook as widgets. scan_id is the job's
 # run ID, so both scans in one run share one scan_id.
@@ -31,6 +32,8 @@ resources:
           default: ${var.client_secret_key}
         - name: monitored_jobs_path
           default: ${var.monitored_jobs_path}
+        - name: code_version_tag
+          default: ${var.code_version_tag}
       tasks:
         - task_key: check_access
           notebook_task:

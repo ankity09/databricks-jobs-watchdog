@@ -1,4 +1,3 @@
-import re
 from datetime import datetime, timezone
 
 import pytest
@@ -42,10 +41,10 @@ def finalize(rows):
 
 
 def test_ddl_columns_and_types_match_the_schema():
-    ddl = load_sql("sql/setup/04_create_findings.sql")
-    body = ddl[ddl.index("(") + 1:ddl.rindex(")")]
-    columns = re.findall(r"^\s+(\w+)\s+([A-Z]+(?:<[A-Z]+>)?)", body, flags=re.MULTILINE)
-    assert tuple(columns) == FINDINGS_SCHEMA
+    from jobs_watchdog.upgrade import ddl_columns
+
+    columns = ddl_columns("sql/setup/04_create_findings.sql")
+    assert tuple((c.name, c.data_type) for c in columns) == FINDINGS_SCHEMA
     assert FINDINGS_COLUMNS == tuple(name for name, _ in FINDINGS_SCHEMA)
 
 
@@ -198,3 +197,32 @@ def test_merge_only_inserts_rows_it_has_not_seen():
     assert whens[0].args["matched"] is False
     assert whens[0].args.get("condition") is None
     assert isinstance(whens[0].args["then"], exp.Insert)
+
+
+def test_custom_service_rows_list_the_jobs_that_need_the_service():
+    row = {"job_name": "kafka", "check_id": "service_connectivity", "status": "FAILED", "error_summary": "timeout",
+           "source": "CUSTOM", "workspace_id": None}
+    assert finalize([row])[0]["affected_jobs"] == ["orders_ingest"]
+
+
+def test_custom_rows_for_unconfigured_names_keep_their_own_severity():
+    row = {"job_name": "kafka", "check_id": "service_connectivity", "status": "FAILED", "severity": "CRITICAL",
+           "error_summary": "timeout", "source": "CUSTOM"}
+    assert finalize([row])[0]["severity"] == "CRITICAL"
+    configured = dict(row, job_name="orders_enrich", severity="CRITICAL")
+    assert finalize([configured])[0]["severity"] == "WARNING"
+    healthy = dict(row, status="HEALTHY")
+    assert finalize([healthy])[0]["severity"] is None
+
+
+@pytest.mark.parametrize("status,category", [("FAILED", "FUNCTIONAL"), ("HEALTHY", "NONE"), ("UNKNOWN", "COVERAGE")])
+def test_rows_without_a_failure_category_get_one(status, category):
+    row = {"job_name": "kafka", "check_id": "service_connectivity", "status": status, "source": "CUSTOM"}
+    assert finalize([row])[0]["failure_category"] == category
+
+
+def test_custom_rows_keep_their_owner_unless_the_name_is_a_configured_job():
+    row = {"job_name": "kafka", "check_id": "service_connectivity", "status": "FAILED", "owner": "platform",
+           "source": "CUSTOM"}
+    assert finalize([row])[0]["owner"] == "platform"
+    assert finalize([dict(row, job_name="orders_enrich")])[0]["owner"] == "enrich-team"

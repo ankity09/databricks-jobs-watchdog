@@ -76,16 +76,21 @@ for table, required in TABLES:
 # MAGIC %md
 # MAGIC ## 3. Workspaces the system tables cover
 # MAGIC
-# MAGIC One row per workspace in this account and region that has jobs. Check that the workspaces you expect are listed. Workspaces in other regions need a run of the Watchdog from a workspace in that region.
+# MAGIC One row per workspace in this account and region that has jobs, with its name and URL when the workspaces table is readable. Check that the workspaces you expect are listed. System tables only cover this region: a workspace in another region (often visible in its name, for example a region suffix) needs a Watchdog run from a workspace in that region.
 
 # COMMAND ----------
 
 from jobs_watchdog.sqlfiles import run_sql
+from jobs_watchdog.workspaces import NAMES_VIEW, register_workspace_names
 
 system_tables_readable = not any(item.startswith("read system.lakeflow") for item in required_failures)
 if system_tables_readable:
     region_workspaces = run_sql(spark, "sql/explore/10_workspaces_in_region.sql", lookback_hours=s.lookback_hours)
-    display(region_workspaces)
+    _, names_error = register_workspace_names(spark)
+    named = spark.table(NAMES_VIEW).select("workspace_id", "workspace_name", "workspace_url")
+    display(region_workspaces.join(named, "workspace_id", "left").orderBy("workspace_name"))
+    if names_error:
+        print(f"Names are unavailable, so only workspace IDs are shown: {names_error}")
 else:
     print("Skipped: needs read access to the system.lakeflow tables above.")
 

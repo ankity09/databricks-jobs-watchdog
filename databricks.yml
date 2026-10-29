@@ -6,12 +6,13 @@
 #   databricks bundle run watchdog_phase_1 -t dev --profile <your-profile>
 #
 # Targets:
-#   dev   the Phase 1 job (default)
-#   demo  the Phase 1 job plus two sample jobs, one that succeeds and one that
-#         fails, so a fresh workspace has something to watch
+#   dev   the Phase 1 job and the scan job (default)
+#   demo  the same two jobs plus four sample jobs (one succeeds, one fails, one
+#         runs long, one retries), so a fresh workspace has something to watch
 #
 # Both targets use development mode, so deployed names carry a [dev <you>]
-# prefix and nothing is scheduled. Remove everything with ./teardown.sh.
+# prefix. Schedules stay PAUSED unless you set scan_schedule_status or
+# demo_schedule_status to UNPAUSED. Remove everything with ./teardown.sh.
 
 bundle:
   name: databricks-jobs-watchdog
@@ -23,7 +24,7 @@ variables:
   catalog:
     description: Catalog that holds the Watchdog schema (required)
   schema:
-    description: Schema for the three Watchdog tables
+    description: Schema for the Watchdog tables and view
     default: watchdog
   region:
     description: Cloud region of this metastore, recorded on every finding (required)
@@ -45,6 +46,18 @@ variables:
   monitored_jobs_path:
     description: Monitored-jobs YAML file; relative paths start at the deployed bundle root
     default: config/monitored_jobs.example.yml
+  code_version_tag:
+    description: Job tag whose value is the deployed code version
+    default: code_version
+  scan_schedule:
+    description: Quartz cron for the watchdog_scan job, in UTC (every 20 minutes by default)
+    default: "0 0/20 * * * ?"
+  scan_schedule_status:
+    description: PAUSED (default) or UNPAUSED; UNPAUSED runs watchdog_scan on its schedule
+    default: PAUSED
+  demo_schedule_status:
+    description: PAUSED (default) or UNPAUSED; UNPAUSED runs the demo jobs on their schedules
+    default: PAUSED
 
 targets:
   dev:
@@ -58,6 +71,13 @@ targets:
         watchdog_demo_succeeds:
           name: watchdog_demo_succeeds
           description: Sample job for the Watchdog demo. Every run succeeds.
+          # tagged the way a CI pipeline tags a deploy, so findings show a code_version
+          tags:
+            code_version: ${bundle.git.branch}@${bundle.git.commit}
+          schedule:
+            quartz_cron_expression: "0 0 * * * ?"  # hourly
+            timezone_id: UTC
+            pause_status: ${var.demo_schedule_status}
           tasks:
             - task_key: succeed
               notebook_task:
@@ -65,6 +85,12 @@ targets:
         watchdog_demo_fails:
           name: watchdog_demo_fails
           description: Sample job for the Watchdog demo. The load task fails on purpose.
+          tags:
+            code_version: ${bundle.git.branch}@${bundle.git.commit}
+          schedule:
+            quartz_cron_expression: "0 0 0/4 * * ?"  # every 4 hours
+            timezone_id: UTC
+            pause_status: ${var.demo_schedule_status}
           tasks:
             - task_key: extract
               notebook_task:
@@ -74,3 +100,33 @@ targets:
                 - task_key: extract
               notebook_task:
                 notebook_path: ./demo/fails.py
+        watchdog_demo_slow:
+          name: watchdog_demo_slow
+          description: Sample job for the Watchdog demo. The task waits about three minutes, then succeeds.
+          tags:
+            code_version: ${bundle.git.branch}@${bundle.git.commit}
+          schedule:
+            quartz_cron_expression: "0 30 0/4 * * ?"  # every 4 hours, 30 minutes past the hour
+            timezone_id: UTC
+            pause_status: ${var.demo_schedule_status}
+          tasks:
+            - task_key: wait
+              notebook_task:
+                notebook_path: ./demo/slow.py
+        watchdog_demo_retries:
+          name: watchdog_demo_retries
+          description: Sample job for the Watchdog demo. The task fails twice, then succeeds on its third attempt.
+          tags:
+            code_version: ${bundle.git.branch}@${bundle.git.commit}
+          schedule:
+            quartz_cron_expression: "0 0 0/6 * * ?"  # every 6 hours
+            timezone_id: UTC
+            pause_status: ${var.demo_schedule_status}
+          tasks:
+            - task_key: flaky
+              max_retries: 2
+              min_retry_interval_millis: 10000
+              notebook_task:
+                notebook_path: ./demo/retries.py
+                base_parameters:
+                  attempt: "{{task.execution_count}}"

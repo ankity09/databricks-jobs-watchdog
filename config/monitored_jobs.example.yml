@@ -4,9 +4,13 @@
 # a Unity Catalog volume), replace the examples with your own jobs, and point
 # scan.monitored_jobs_path (or the notebook's monitored_jobs_path widget) at it.
 #
+# jobs:
 # job_name          a short logical name used in findings and alerts
 # job_name_regex    matches the job's real name in each workspace, for example
 #                   ^orders_ingest_(dev|prod)$ when environments add a suffix
+# job_name_exclude_regex  optional; a job whose real name matches this regex is
+#                   skipped, even if job_name_regex matches it. Like job_name_regex,
+#                   it matches anywhere in the name unless anchored with ^ and $.
 # schedule_type     continuous or scheduled
 # max_gap_minutes   scheduled jobs: longest allowed gap between run starts
 # max_runtime_minutes  longest allowed run before a warning
@@ -15,10 +19,26 @@
 # severity          CRITICAL or WARNING, used when the job is not healthy
 # owner             team or person to route findings to
 # enabled           false keeps the entry without checking it
+# notes             free text for the people who read this file
+#
+# dependencies:     job_name depends on depends_on. dependency_type is job or child_job
+#                   for another monitored job, or service for something else the job
+#                   needs, such as a message broker (free text). When a monitored job
+#                   fails, affected_jobs lists the jobs that depend on it.
+#
+# workspaces:       optional, top level: an environment label for each workspace.
+#                   Give workspace_id or workspace_name, then environment (a label such
+#                   as production or lower) and optional notes. Uncomment to use:
+# workspaces:
+#   - workspace_id: "1111111111111111"
+#     environment: production
+#     notes: Orders and billing jobs
+#   - workspace_name: example-lower-workspace
+#     environment: lower
 
 jobs:
-  # The two demo jobs are created by the bundle's demo target, so a new
-  # deployment shows one healthy and one failing job straight away.
+  # The demo jobs are created by the bundle's demo target, so a new deployment
+  # shows a healthy job, a failing job, a slow job and a retrying job at once.
   - job_name: watchdog_demo_succeeds
     job_name_regex: "watchdog_demo_succeeds"
     schedule_type: scheduled
@@ -40,6 +60,28 @@ jobs:
     owner: platform-team
     enabled: true
     notes: Sample job from the demo target; fails on purpose.
+
+  - job_name: watchdog_demo_slow
+    job_name_regex: "watchdog_demo_slow"
+    schedule_type: scheduled
+    max_gap_minutes: 300
+    max_runtime_minutes: 1
+    max_retries: 1
+    severity: WARNING
+    owner: platform-team
+    enabled: true
+    notes: Sample job from the demo target; runs about three minutes, so it warns for long runtime.
+
+  - job_name: watchdog_demo_retries
+    job_name_regex: "watchdog_demo_retries"
+    schedule_type: scheduled
+    max_gap_minutes: 420
+    max_runtime_minutes: 30
+    max_retries: 1
+    severity: WARNING
+    owner: platform-team
+    enabled: true
+    notes: Sample job from the demo target; its task retries twice, so it warns for a retry loop.
 
   # Illustrative entries showing a small pipeline. Enable and edit them, or
   # replace them with your own jobs.
@@ -66,6 +108,7 @@ jobs:
 
   - job_name: daily_revenue_report
     job_name_regex: "^daily_revenue_report(_[a-z0-9]+)?$"
+    job_name_exclude_regex: "_test(_|$)"  # skips test copies such as daily_revenue_report_test, keeps ..._latest
     schedule_type: scheduled
     max_gap_minutes: 1500
     max_runtime_minutes: 120
@@ -76,6 +119,10 @@ jobs:
     notes: Runs once a day.
 
 dependencies:
+  # Demo: when watchdog_demo_fails fails, affected_jobs lists watchdog_demo_succeeds.
+  - job_name: watchdog_demo_succeeds
+    depends_on: watchdog_demo_fails
+    dependency_type: job
   - job_name: orders_enrich
     depends_on: orders_ingest
     dependency_type: job

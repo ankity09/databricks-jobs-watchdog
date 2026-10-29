@@ -12,9 +12,9 @@ metadata:
 
 target:
   catalog: ""                   # required: catalog that will hold the Watchdog schema
-  schema: watchdog              # schema created for the three Watchdog tables
+  schema: watchdog              # schema created for the Watchdog tables and view
   region: ""                    # required: cloud region of this metastore, for example us-east-2
-  warehouse_id: ""              # optional: SQL warehouse for the SQL editor and later alerts
+  warehouse_id: ""              # optional: SQL warehouse for the dashboard (notebook 08)
 
 auth:
   mode: current_workspace       # current_workspace: check only this workspace, as you
@@ -28,6 +28,10 @@ scan:
   monitored_jobs_path: config/monitored_jobs.example.yml
                                 # relative paths start at the repo root; point this at your
                                 # own copy outside the Git folder, for example a /Volumes path
+  code_version_tag: code_version
+                                # name of the job tag whose value is the deployed code version
+  schedule: "0 0/20 * * * ?"    # when watchdog_scan runs: a Quartz cron, every 20 minutes, in UTC
+  schedule_status: PAUSED       # PAUSED (the default): no timed runs; UNPAUSED: run on the schedule
 
 resources: {}                   # nothing extra is needed in Phase 1
 

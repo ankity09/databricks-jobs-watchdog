@@ -2,8 +2,9 @@ import subprocess
 import sys
 
 import pytest
+import yaml
 
-from jobs_watchdog.bundle_vars import as_exports, as_flags, bundle_variables
+from jobs_watchdog.bundle_vars import VARIABLES, as_exports, as_flags, bundle_variables
 from jobs_watchdog.config import ConfigError
 from jobs_watchdog.sqlfiles import repo_root
 
@@ -20,6 +21,12 @@ auth:
 scan:
   lookback_hours: 48
   monitored_jobs_path: /Volumes/main/ops/files/my jobs.yml
+"""
+
+# The scan settings for watchdog_scan. Accelerator files from before them lack these keys.
+SCHEDULE_KEYS = """  code_version_tag: code_version
+  schedule: "0 0/20 * * * ?"
+  schedule_status: PAUSED
 """
 
 
@@ -68,3 +75,26 @@ def test_script_explains_missing_values(tmp_path):
                             capture_output=True, text=True)
     assert result.returncode == 2
     assert "target.catalog must be set" in result.stderr
+
+
+def test_scan_schedule_settings_come_from_the_scan_section(tmp_path):
+    variables = bundle_variables(write(tmp_path, COMPLETE + SCHEDULE_KEYS))
+    assert variables["code_version_tag"] == "code_version"
+    assert variables["scan_schedule"] == "0 0/20 * * * ?"
+    assert variables["scan_schedule_status"] == "PAUSED"
+
+
+def test_cron_expression_is_shell_quoted_in_exports(tmp_path):
+    exports = as_exports(bundle_variables(write(tmp_path, COMPLETE + SCHEDULE_KEYS))).splitlines()
+    assert "export BUNDLE_VAR_scan_schedule='0 0/20 * * * ?'" in exports
+
+
+def test_older_files_without_the_schedule_keys_still_export_the_rest(tmp_path):
+    variables = bundle_variables(write(tmp_path, COMPLETE))
+    assert variables["catalog"] == "main"
+    assert "scan_schedule" not in variables  # databricks.yml supplies the default
+
+
+def test_every_exported_variable_is_declared_in_databricks_yml():
+    declared = yaml.safe_load((repo_root() / "databricks.yml").read_text())["variables"]
+    assert set(VARIABLES) <= set(declared)

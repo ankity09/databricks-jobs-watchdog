@@ -4,7 +4,7 @@
 # MAGIC
 # MAGIC **What it does.** Checks that Phase 1 is complete and prints one PASS or FAIL line per check:
 # MAGIC
-# MAGIC 1. the three tables exist;
+# MAGIC 1. the four tables and the `findings_latest` view exist;
 # MAGIC 2. the config has enabled jobs;
 # MAGIC 3. both sources (system tables and the Jobs API) wrote findings;
 # MAGIC 4. every enabled job got at least one finding from each source;
@@ -33,7 +33,9 @@ from jobs_watchdog.sqlfiles import run_sql
 from jobs_watchdog.validation import phase_1_checks
 
 prefix = f"{s.catalog}.{s.schema}"
-tables = {name: spark.catalog.tableExists(f"{prefix}.{name}") for name in ("monitored_jobs", "job_dependencies", "findings")}
+from jobs_watchdog.upgrade import watchdog_objects
+
+tables = {name: spark.catalog.tableExists(f"{prefix}.{name}") for name in watchdog_objects()}
 enabled_jobs, by_source, missing, duplicates = 0, [], [], []
 if all(tables.values()):
     params = dict(catalog=s.catalog, schema=s.schema, scan_id=s.scan_id)

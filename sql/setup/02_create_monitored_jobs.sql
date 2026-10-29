@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema || '.monitored_
   owner STRING COMMENT 'Team or person to route findings to',
   enabled BOOLEAN NOT NULL COMMENT 'false keeps the entry without checking it',
   notes STRING,
-  loaded_at TIMESTAMP NOT NULL COMMENT 'When this row was loaded from the YAML file'
+  loaded_at TIMESTAMP NOT NULL COMMENT 'When this row was loaded from the YAML file',
+  job_name_exclude_regex STRING COMMENT 'Job names matching this are skipped, for example test copies'
 )
 COMMENT 'Watchdog config: jobs to check'

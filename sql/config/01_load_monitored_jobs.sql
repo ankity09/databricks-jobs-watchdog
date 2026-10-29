@@ -14,5 +14,6 @@ SELECT
   owner,
   enabled,
   notes,
-  current_timestamp() AS loaded_at
+  current_timestamp() AS loaded_at,
+  job_name_exclude_regex
 FROM watchdog_config_jobs

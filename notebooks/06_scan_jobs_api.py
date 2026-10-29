@@ -15,7 +15,7 @@
 # MAGIC
 # MAGIC With `auth_mode = current_workspace`, it checks only this workspace, as you. With `service_principal`, it checks every workspace in the region that has jobs, signing in with the OAuth secret in `secret_scope`.
 # MAGIC
-# MAGIC **Inputs (widgets).** `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `auth_mode`, `secret_scope`, `client_id_key`, `client_secret_key`. Use the same `scan_id` as notebook 05 to make one scan across both sources; the bundle job does this for you. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
+# MAGIC **Inputs (widgets).** `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `auth_mode`, `secret_scope`, `client_id_key`, `client_secret_key`, `code_version_tag` (the job tag that holds the deployed code version). Use the same `scan_id` as notebook 05 to make one scan across both sources; the bundle job does this for you. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
 # MAGIC **What to look for.** Rows for each matched job. `api_unreachable` rows say which permission or URL is missing.
 
@@ -27,7 +27,7 @@
 
 # Shows the input boxes (widgets) at the top of the notebook. Fill them in, then run the cells below.
 NAMES = ("catalog", "schema", "region", "lookback_hours", "scan_id", "auth_mode", "secret_scope", "client_id_key",
-         "client_secret_key")
+         "client_secret_key", "code_version_tag")
 define_widgets(*NAMES)
 
 # COMMAND ----------
@@ -41,17 +41,20 @@ from datetime import datetime, timezone
 from databricks.sdk import WorkspaceClient
 from pyspark.sql import functions as F
 
-from jobs_watchdog.config_tables import read_config
+from jobs_watchdog.config_tables import read_config, read_workspaces
 from jobs_watchdog.findings import finalize_rows, new_scan_id, write_findings
 from jobs_watchdog.jobs_api import collect_target, make_client, merge_not_found, unreachable_rows
 from jobs_watchdog.sqlfiles import run_sql
+from jobs_watchdog.upgrade import require_current_tables
 from jobs_watchdog.workspaces import build_targets, register_workspace_names
 
 now = datetime.now(timezone.utc)
 scan_id = s.scan_id or new_scan_id(now)
 print(f"scan_id: {scan_id}")
 
+require_current_tables(spark, s.catalog, s.schema)
 jobs, dependencies = read_config(spark, s.catalog, s.schema)
+labels = read_workspaces(spark, s.catalog, s.schema)
 enabled = [job for job in jobs if job.enabled]
 names, names_error = register_workspace_names(spark)
 region_workspaces = [
@@ -60,7 +63,7 @@ region_workspaces = [
 ]
 here = WorkspaceClient()
 current_workspace_id = str(here.get_workspace_id())
-targets, missing = build_targets(s.auth_mode, current_workspace_id, region_workspaces, names)
+targets, missing = build_targets(s.auth_mode, current_workspace_id, region_workspaces, names, labels)
 if s.auth_mode == "service_principal" and names_error:
     print(f"Service principal mode needs workspace URLs from system.access.workspaces_latest: {names_error}")
 print(f"Checking {len(enabled)} enabled jobs in {len(targets)} workspace(s)")
@@ -81,10 +84,10 @@ for target in targets:
         except Exception as err:
             rows.extend(unreachable_rows(target, enabled, short_error(err)))
             continue
-    rows.extend(collect_target(client, target, enabled, now))
+    rows.extend(collect_target(client, target, enabled, now, code_version_tag=s.code_version_tag))
 for target in missing:
     rows.extend(unreachable_rows(target, enabled, "No URL for this workspace in system.access.workspaces_latest"))
-rows = merge_not_found(rows, enabled, workspaces_checked=len(targets))
+rows = merge_not_found(rows, enabled)
 
 account_ids = {row["workspace_id"]: row["account_id"] for row in region_workspaces}
 account_id = account_ids.get(current_workspace_id) or next(iter(account_ids.values()), None)

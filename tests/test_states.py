@@ -3,6 +3,7 @@ import pytest
 from jobs_watchdog.states import (
     category_from_termination,
     failure_category,
+    normalize_trigger,
     status_from_api,
     status_from_system_table,
 )
@@ -102,3 +103,32 @@ def test_termination_type_to_category(termination_type, expected):
 )
 def test_failure_category(check_id, status, termination_type, expected):
     assert failure_category(check_id, status, termination_type) == expected
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("CRON", "SCHEDULE"),
+        ("PERIODIC", "SCHEDULE"),
+        ("ONETIME", "ONE_TIME"),
+        ("ONE_TIME", "ONE_TIME"),
+        ("RETRY", "RETRY"),
+        ("ONETIME_RETRY", "RETRY"),
+        ("CONTINUOUS", "CONTINUOUS"),
+        ("CONTINUOUS_RESTART", "CONTINUOUS"),
+        ("FILE_ARRIVAL", "FILE_ARRIVAL"),
+        ("TABLE", "TABLE_UPDATE"),
+        ("RUN_JOB_TASK", "JOB_TASK"),
+        ("SOMETHING_NEW", "SOMETHING_NEW"),
+        (None, None),
+        ("", None),
+    ],
+)
+def test_normalize_trigger(raw, expected):
+    assert normalize_trigger(raw) == expected
+
+
+def test_normalize_trigger_reads_sdk_enums():
+    from databricks.sdk.service.jobs import TriggerType
+
+    assert normalize_trigger(TriggerType.PERIODIC) == "SCHEDULE"

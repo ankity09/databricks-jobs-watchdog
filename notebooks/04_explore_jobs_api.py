@@ -42,7 +42,7 @@ if not job_id:
     found = [hit for hit in resolve_jobs(client, [job for job in jobs if job.enabled]) if hit[1] is not None]
     if not found:
         dbutils.notebook.exit("No enabled monitored job matches a job in this workspace. Set the job_id widget.")
-    job, job_id, real_name = found[0]
+    job, job_id, real_name, _tags = found[0]
     print(f"Using monitored job {job.job_name}: job {job_id}, named {real_name!r}")
 explained = explain_job(client, int(job_id))
 

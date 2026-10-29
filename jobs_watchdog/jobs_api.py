@@ -16,7 +16,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from jobs_watchdog.config import AUTH_MODES
-from jobs_watchdog.states import API_FAILED_RESULTS, API_IN_PROGRESS, as_text, failure_category, status_from_api
+from jobs_watchdog.states import (
+    API_FAILED_RESULTS,
+    API_IN_PROGRESS,
+    as_text,
+    failure_category,
+    normalize_trigger,
+    status_from_api,
+)
 
 SOURCE = "JOBS_API"
 SUMMARY_CHARS = 1000
@@ -38,6 +45,7 @@ class Target:
     workspace_id: str
     workspace_name: str | None
     host: str | None
+    environment: str | None = None
 
 
 class WorkspaceIdMismatch(Exception):
@@ -68,33 +76,39 @@ def make_client(mode, host, client_id, client_secret):
 def resolve_jobs(client, jobs):
     """Match each monitored job's regex against the job names in a workspace.
 
-    Returns (monitored_job, job_id, real_name) tuples: one per matching job, or
-    (monitored_job, None, None) when nothing matches. The regex can match
-    anywhere in the name, like regexp_like in the system table scan, so it also
-    matches names that a bundle's development mode prefixes.
+    Returns (monitored_job, job_id, real_name, tags) tuples: one per matching
+    job, or (monitored_job, None, None, None) when nothing matches. The regex
+    can match anywhere in the name, like regexp_like in the system table scan,
+    so it also matches names that a bundle's development mode prefixes. Names
+    matching the job's job_name_exclude_regex (for example test copies) are
+    skipped.
     """
     listed = []
     for job in client.jobs.list(limit=100):
-        name = getattr(getattr(job, "settings", None), "name", None)
+        settings = getattr(job, "settings", None)
+        name = getattr(settings, "name", None)
         if name:
-            listed.append((job.job_id, name))
+            listed.append((job.job_id, name, getattr(settings, "tags", None) or None))
     resolved = []
     for monitored in jobs:
         pattern = re.compile(monitored.job_name_regex)
-        hits = [(job_id, name) for job_id, name in listed if pattern.search(name)]
+        exclude = re.compile(monitored.job_name_exclude_regex) if monitored.job_name_exclude_regex else None
+        hits = [hit for hit in listed if pattern.search(hit[1]) and not (exclude and exclude.search(hit[1]))]
         if hits:
-            resolved.extend((monitored, job_id, name) for job_id, name in hits)
+            resolved.extend((monitored, job_id, name, tags) for job_id, name, tags in hits)
         else:
-            resolved.append((monitored, None, None))
+            resolved.append((monitored, None, None, None))
     return resolved
 
 
-def collect_target(client, target, jobs, now):
+def collect_target(client, target, jobs, now, code_version_tag="code_version"):
     """Findings rows for one workspace.
 
     API errors never escape: a workspace that cannot be read gives one
     api_unreachable row per job, and a job that cannot be read gives one
     api_unreachable row for that job while the others are still checked.
+    code_version is the value of the job tag named code_version_tag, or the
+    git commit the run used when the job has no such tag.
     """
     if now.tzinfo is None:
         raise ValueError("now must include a timezone")
@@ -112,15 +126,17 @@ def collect_target(client, target, jobs, now):
         return [_unreachable(target, job, None, err) for job in jobs]
 
     rows = []
-    for job, job_id, _real_name in resolved:
+    for job, job_id, _real_name, tags in resolved:
         if job_id is None:
             summary = _NOT_HERE.format(regex=job.job_name_regex)
             rows.append(_row(target, job, None, "not_found", "UNKNOWN", error_summary=summary))
             continue
         try:
-            rows.extend(_job_rows(client, target, job, job_id, now))
+            job_rows, run = _job_rows(client, target, job, job_id, now)
         except Exception as err:
-            rows.append(_unreachable(target, job, job_id, err))
+            job_rows, run = [_unreachable(target, job, job_id, err)], None
+        extra = dict(_run_columns(run, now), job_tags=tags, code_version=_code_version(tags, code_version_tag, run))
+        rows.extend(dict(row, **extra) for row in job_rows)
     return rows
 
 
@@ -151,33 +167,42 @@ def explain_job(client, job_id):
             error = f"could not read the output: {type(err).__name__}: {err}"
         errors.append({"task_key": key, "task_run_id": getattr(task, "run_id", None), "error": error})
     return {
-        "runs": [_fields(item, run_id=item.run_id, run_page_url=getattr(item, "run_page_url", None)) for item in runs],
+        "runs": [_fields(item, run_id=item.run_id, run_page_url=getattr(item, "run_page_url", None),
+                         trigger_type=normalize_trigger(getattr(item, "trigger", None)),
+                         started_by=_started_by(item)) for item in runs],
         "tasks": [_fields(task, task_key=getattr(task, "task_key", None), task_run_id=getattr(task, "run_id", None),
                           attempt_number=_attempt(task)) for task in tasks],
         "errors": errors,
     }
 
 
-def merge_not_found(rows, jobs, workspaces_checked):
+def merge_not_found(rows, jobs):
     """Combine not_found rows from a scan of several workspaces.
 
-    A job found in any workspace keeps none of its not_found rows. A job found
-    in none keeps one row, with no workspace when more than one was checked.
+    A job found in any workspace keeps none of its not_found rows. A job that
+    two or more workspaces answered "not found" for keeps one row with no
+    workspace. Workspaces that could not be read (api_unreachable) do not
+    count as checked.
     """
     regex = {job.job_name: job.job_name_regex for job in jobs}
     found = {row["job_name"] for row in rows if row.get("job_id") is not None}
+    misses = {}
+    for row in rows:
+        if row["check_id"] == "not_found":
+            misses[row["job_name"]] = misses.get(row["job_name"], 0) + 1
     merged, collapsed = [], set()
     for row in rows:
+        name = row["job_name"]
         if row["check_id"] != "not_found":
             merged.append(row)
-        elif row["job_name"] in found or row["job_name"] in collapsed:
+        elif name in found or name in collapsed:
             continue
-        elif workspaces_checked <= 1:
+        elif misses[name] == 1:
             merged.append(row)
         else:
-            collapsed.add(row["job_name"])
-            summary = _NOWHERE.format(count=workspaces_checked, regex=regex.get(row["job_name"], row["job_name"]))
-            merged.append(dict(row, workspace_id=None, workspace_name=None, error_summary=summary))
+            collapsed.add(name)
+            summary = _NOWHERE.format(count=misses[name], regex=regex.get(name, name))
+            merged.append(dict(row, workspace_id=None, workspace_name=None, environment=None, error_summary=summary))
     return merged
 
 
@@ -186,7 +211,7 @@ def _job_rows(client, target, job, job_id, now):
     runs = list(itertools.islice(client.jobs.list_runs(job_id=job_id, limit=2), 2))
     runs.sort(key=lambda item: getattr(item, "start_time", None) or 0, reverse=True)
     if not runs:
-        return [_row(target, job, job_id, "live_run_status", "UNKNOWN", error_summary="The job has no runs.")]
+        return [_row(target, job, job_id, "live_run_status", "UNKNOWN", error_summary="The job has no runs.")], None
     previous = runs[1] if len(runs) > 1 else None
     run, tasks = _full_run(client, runs[0].run_id)
     latest = _latest_attempts(tasks)
@@ -198,7 +223,46 @@ def _job_rows(client, target, job, job_id, now):
         rows.append(_live_long_runtime(target, job, job_id, run, now))
     if job.max_retries is not None:
         rows.append(_retry_loop(target, job, job_id, run, latest))
-    return rows
+    return rows, run
+
+
+def _utc(milliseconds):
+    return datetime.fromtimestamp(milliseconds / 1000, tz=timezone.utc) if milliseconds else None
+
+
+def _run_columns(run, now):
+    """When and how the run started, and how long it took or has taken so far."""
+    if run is None:
+        return {}
+    start = _utc(getattr(run, "start_time", None))
+    running = as_text(getattr(getattr(run, "state", None), "life_cycle_state", None)) in API_IN_PROGRESS
+    end = None if running else _utc(getattr(run, "end_time", None))
+    trigger = normalize_trigger(getattr(run, "trigger", None))
+    if start is None or (end is None and not running):
+        duration = None  # a finished run without an end time: unknown, not still growing
+    else:
+        duration = max(0, int(((end or now) - start).total_seconds()))
+    return {
+        "run_start_time": start,
+        "run_end_time": end,
+        "run_duration_seconds": duration,
+        "trigger_type": trigger,
+        "triggered_by": _started_by(run),
+    }
+
+
+def _started_by(run):
+    # for a scheduled or continuous run, the run's creator is not who started it
+    if normalize_trigger(getattr(run, "trigger", None)) == "ONE_TIME":
+        return getattr(run, "creator_user_name", None)
+    return None
+
+
+def _code_version(tags, code_version_tag, run):
+    if code_version_tag and tags and tags.get(code_version_tag):
+        return tags[code_version_tag]
+    snapshot = getattr(getattr(run, "git_source", None), "git_snapshot", None)
+    return getattr(snapshot, "used_commit", None)
 
 
 def _full_run(client, run_id):
@@ -349,4 +413,6 @@ def _row(target, job, job_id, check_id, status, run=None, termination_type=None,
         "failed_task_keys": failed_task_keys,
         "error_summary": None if error_summary is None else str(error_summary)[:SUMMARY_CHARS],
         "source": SOURCE,
+        "environment": target.environment,
+        "schedule_type": job.schedule_type,
     }

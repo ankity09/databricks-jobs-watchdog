@@ -67,3 +67,24 @@ def test_service_principal_mode_checks_every_workspace_with_a_url():
     targets, missing = build_targets("service_principal", "1001", REGION, NAMES)
     assert targets == [Target("1001", "analytics", "https://a.example.invalid")]
     assert missing == [Target("2002", "ingest", None), Target("3003", None, None)]
+
+
+def test_targets_carry_the_environment_of_their_workspace():
+    from jobs_watchdog.config import MonitoredWorkspace
+
+    labels = [MonitoredWorkspace("1001", None, "production", ""), MonitoredWorkspace(None, "INGEST", "lower", "")]
+    targets, missing = build_targets("service_principal", "1001", REGION, NAMES, labels)
+    assert [(t.workspace_id, t.environment) for t in targets] == [("1001", "production")]
+    assert [(t.workspace_id, t.environment) for t in missing] == [("2002", "lower"), ("3003", None)]
+    here, _ = build_targets("current_workspace", 1001, REGION, NAMES, labels)
+    assert here[0].environment == "production"
+
+
+def test_environment_matches_by_id_before_name():
+    from jobs_watchdog.config import MonitoredWorkspace
+    from jobs_watchdog.workspaces import environment_for
+
+    labels = [MonitoredWorkspace(None, "analytics", "lower", ""), MonitoredWorkspace("1001", None, "production", "")]
+    assert environment_for("1001", "analytics", labels) == "production"
+    assert environment_for("9999", "Analytics", labels) == "lower"
+    assert environment_for("9999", None, labels) is None

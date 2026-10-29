@@ -19,6 +19,10 @@ VARIABLES = {
     "client_id_key": ("auth", "client_id_key"),
     "client_secret_key": ("auth", "client_secret_key"),
     "monitored_jobs_path": ("scan", "monitored_jobs_path"),
+    "code_version_tag": ("scan", "code_version_tag"),
+    "scan_schedule": ("scan", "schedule"),
+    "scan_schedule_status": ("scan", "schedule_status"),
+    # demo_schedule_status has no accelerator.yaml key: set it with --var
 }
 
 

@@ -97,3 +97,28 @@ def failure_category(check_id, status, termination_type=None):
         return _CHECK_CATEGORY[check_id]
     category = category_from_termination(termination_type)
     return "FUNCTIONAL" if category == "NONE" else category
+
+
+# Both sources spell run triggers differently; findings use one vocabulary.
+# sql/scan/21_system_table_findings.sql applies the same mapping in SQL.
+_TRIGGERS = {
+    "CRON": "SCHEDULE",
+    "PERIODIC": "SCHEDULE",
+    "ONETIME": "ONE_TIME",
+    "ONE_TIME": "ONE_TIME",
+    "RETRY": "RETRY",
+    "ONETIME_RETRY": "RETRY",
+    "CONTINUOUS": "CONTINUOUS",
+    "CONTINUOUS_RESTART": "CONTINUOUS",
+    "FILE_ARRIVAL": "FILE_ARRIVAL",
+    "TABLE": "TABLE_UPDATE",
+    "RUN_JOB_TASK": "JOB_TASK",
+}
+
+
+def normalize_trigger(value):
+    """How a run was started: SCHEDULE, ONE_TIME (Run now or the API), RETRY, CONTINUOUS, and so on."""
+    text = as_text(value)
+    if not text:
+        return None
+    return _TRIGGERS.get(text, text)

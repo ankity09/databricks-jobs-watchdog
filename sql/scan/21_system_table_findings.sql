@@ -18,9 +18,14 @@
 -- A monitored job that matches no job in the region gets one not_found row.
 -- System tables run about an hour behind, so a job created in the last hour
 -- is not_found here while the Jobs API scan (notebook 06) already sees it.
--- Parameters: :catalog, :schema, :region, :lookback_hours, :scan_id
+-- Job names matching a job's job_name_exclude_regex (for example test copies)
+-- are skipped. Each row also carries the environment label of its workspace
+-- (monitored_workspaces), when and how the run it is about started, the job
+-- tags, and the code version: the value of the job tag named :code_version_tag.
+-- Parameters: :catalog, :schema, :region, :lookback_hours, :scan_id, :code_version_tag
 WITH monitored AS (
-  SELECT job_name, job_name_regex, schedule_type, max_gap_minutes, max_runtime_minutes, severity, owner
+  SELECT job_name, job_name_regex, job_name_exclude_regex, schedule_type, max_gap_minutes, max_runtime_minutes,
+         severity, owner
   FROM IDENTIFIER(:catalog || '.' || :schema || '.monitored_jobs')
   WHERE enabled
 ),
@@ -32,10 +37,21 @@ dependents AS (
   GROUP BY depends_on
 ),
 latest_jobs AS (
-  SELECT account_id, workspace_id, job_id, name, paused
+  SELECT account_id, workspace_id, job_id, name, paused, tags
   FROM system.lakeflow.jobs
   QUALIFY ROW_NUMBER() OVER (PARTITION BY workspace_id, job_id ORDER BY change_time DESC) = 1
       AND delete_time IS NULL
+),
+environments AS (
+  -- the environment label of each workspace: an entry with this workspace ID,
+  -- otherwise an entry with no ID whose name matches the workspace name
+  SELECT w.workspace_id, coalesce(by_id.environment, by_name.environment) AS environment
+  FROM (SELECT DISTINCT workspace_id FROM latest_jobs) w
+  LEFT JOIN watchdog_workspace_names n ON n.workspace_id = w.workspace_id
+  LEFT JOIN IDENTIFIER(:catalog || '.' || :schema || '.monitored_workspaces') by_id
+    ON by_id.workspace_id = w.workspace_id
+  LEFT JOIN IDENTIFIER(:catalog || '.' || :schema || '.monitored_workspaces') by_name
+    ON by_name.workspace_id IS NULL AND lower(by_name.workspace_name) = lower(n.workspace_name)
 ),
 matched AS (
   SELECT
@@ -47,9 +63,12 @@ matched AS (
     j.account_id,
     j.workspace_id,
     j.job_id,
-    j.paused
+    j.paused,
+    j.tags
   FROM monitored m
-  JOIN latest_jobs j ON regexp_like(j.name, m.job_name_regex)
+  JOIN latest_jobs j
+    ON regexp_like(j.name, m.job_name_regex)
+    AND (m.job_name_exclude_regex IS NULL OR NOT regexp_like(j.name, m.job_name_exclude_regex))
 ),
 runs AS (
   -- one row per run; a run longer than an hour spans several timeline rows,
@@ -62,7 +81,12 @@ runs AS (
     MAX(period_end_time) AS last_seen,
     MAX_BY(result_state, period_end_time) AS result_state,
     MAX_BY(termination_code, period_end_time) AS termination_code,
-    MAX_BY(termination_type, period_end_time) AS termination_type
+    MAX_BY(termination_type, period_end_time) AS termination_type,
+    MAX(trigger_type) AS trigger_type,
+    -- rows are hourly slices, so a first slice in the window's first hour
+    -- usually means the run began before the window: its real start is unknown
+    MIN(period_start_time) < timestampadd(HOUR, 1 - CAST(:lookback_hours AS INT), current_timestamp())
+      AS started_before_window
   FROM system.lakeflow.job_run_timeline
   WHERE period_start_time >= timestampadd(HOUR, -CAST(:lookback_hours AS INT), current_timestamp())
   GROUP BY workspace_id, job_id, run_id
@@ -88,13 +112,20 @@ last_runs AS (
     mt.account_id,
     mt.workspace_id,
     mt.job_id,
+    mt.tags,
     mt.schedule_type = 'continuous' AND n.run_id IS NOT NULL AND n.result_state IS NULL AS running,
     n.run_id AS newest_run_id,
+    n.run_start AS newest_start,
     n.last_seen AS newest_seen,
+    n.trigger_type AS newest_trigger,
+    n.started_before_window AS newest_before_window,
     f.run_id,
+    f.run_start,
     f.result_state,
     f.termination_code,
     f.termination_type,
+    f.trigger_type,
+    f.started_before_window,
     f.last_seen
   FROM matched mt
   LEFT JOIN newest_run n ON n.workspace_id = mt.workspace_id AND n.job_id = mt.job_id
@@ -184,7 +215,21 @@ checks AS (
         l.result_state,
         coalesce(concat(' (', l.termination_code, ')'), ''),
         timestampdiff(MINUTE, l.last_seen, current_timestamp()))
-    END AS error_summary
+    END AS error_summary,
+    l.tags AS job_tags,
+    CASE
+      WHEN l.running THEN CASE WHEN l.newest_before_window THEN NULL ELSE l.newest_start END
+      WHEN l.started_before_window THEN NULL
+      ELSE l.run_start
+    END AS run_start_time,
+    CASE WHEN l.running THEN CAST(NULL AS TIMESTAMP) ELSE l.last_seen END AS run_end_time,
+    CASE
+      WHEN l.running THEN CASE WHEN l.newest_before_window THEN NULL
+                               ELSE timestampdiff(SECOND, l.newest_start, l.newest_seen) END
+      WHEN l.started_before_window THEN NULL
+      ELSE timestampdiff(SECOND, l.run_start, l.last_seen)
+    END AS run_duration_seconds,
+    CASE WHEN l.running THEN l.newest_trigger ELSE l.trigger_type END AS raw_trigger
   FROM last_runs l
 
   UNION ALL
@@ -197,7 +242,7 @@ checks AS (
     'task_failures',
     CASE WHEN t.run_id IS NULL THEN 'HEALTHY' ELSE 'FAILED' END,
     t.termination_type,
-    t.run_id,
+    coalesce(t.run_id, n.run_id),
     t.failed_task_keys,
     CASE
       WHEN t.run_id IS NULL THEN 'No failed tasks in the newest run.'
@@ -205,9 +250,15 @@ checks AS (
         '%d task(s) failed in the newest run, judged by the newest attempt of each task. Newest termination code: %s.',
         size(t.failed_task_keys),
         coalesce(t.termination_code, 'none'))
-    END
+    END,
+    mt.tags,
+    CASE WHEN n.started_before_window THEN NULL ELSE n.run_start END,
+    CASE WHEN n.result_state IS NULL THEN CAST(NULL AS TIMESTAMP) ELSE n.last_seen END,
+    CASE WHEN n.started_before_window THEN NULL ELSE timestampdiff(SECOND, n.run_start, n.last_seen) END,
+    n.trigger_type
   FROM matched mt
   LEFT JOIN failed_tasks t ON t.workspace_id = mt.workspace_id AND t.job_id = mt.job_id
+  LEFT JOIN newest_run n ON n.workspace_id = mt.workspace_id AND n.job_id = mt.job_id
 
   UNION ALL
 
@@ -227,7 +278,7 @@ checks AS (
       ELSE 'WARNING'
     END,
     CAST(NULL AS STRING),
-    CAST(NULL AS STRING),
+    s.run_id,
     CAST(NULL AS ARRAY<STRING>),
     concat(
       CASE
@@ -241,7 +292,12 @@ checks AS (
           THEN ' The window is shorter than the limit, so raise lookback_hours to check this job.'
         ELSE ''
       END,
-      CASE WHEN mt.paused THEN ' The job is paused.' ELSE '' END)
+      CASE WHEN mt.paused THEN ' The job is paused.' ELSE '' END),
+    mt.tags,
+    CASE WHEN s.started_before_window THEN NULL ELSE s.run_start END,
+    CASE WHEN s.result_state IS NULL THEN CAST(NULL AS TIMESTAMP) ELSE s.last_seen END,
+    CASE WHEN s.started_before_window THEN NULL ELSE timestampdiff(SECOND, s.run_start, s.last_seen) END,
+    s.trigger_type
   FROM matched mt
   LEFT JOIN newest_run s ON s.workspace_id = mt.workspace_id AND s.job_id = mt.job_id
   WHERE mt.schedule_type = 'scheduled' AND mt.max_gap_minutes IS NOT NULL
@@ -256,7 +312,7 @@ checks AS (
     'long_runtime',
     CASE WHEN o.run_id IS NULL THEN 'HEALTHY' ELSE 'WARNING' END,
     CAST(NULL AS STRING),
-    o.run_id,
+    lr.run_id,
     CAST(NULL AS ARRAY<STRING>),
     CASE
       WHEN o.run_id IS NULL
@@ -266,10 +322,18 @@ checks AS (
           'A run still going had run %d minutes by its newest system table record. The limit is %d.',
           o.minutes, mt.max_runtime_minutes)
       ELSE format_string('The newest finished run took %d minutes. The limit is %d.', o.minutes, mt.max_runtime_minutes)
-    END
+    END,
+    mt.tags,
+    CASE WHEN lr.started_before_window THEN NULL ELSE lr.run_start END,
+    CASE WHEN lr.result_state IS NULL THEN CAST(NULL AS TIMESTAMP) ELSE lr.last_seen END,
+    CASE WHEN lr.started_before_window THEN NULL ELSE timestampdiff(SECOND, lr.run_start, lr.last_seen) END,
+    lr.trigger_type
   FROM matched mt
   LEFT JOIN over_limit o
     ON o.job_name = mt.job_name AND o.workspace_id = mt.workspace_id AND o.job_id = mt.job_id
+  LEFT JOIN newest_finished nf ON nf.workspace_id = mt.workspace_id AND nf.job_id = mt.job_id
+  LEFT JOIN runs lr
+    ON lr.workspace_id = mt.workspace_id AND lr.job_id = mt.job_id AND lr.run_id = coalesce(o.run_id, nf.run_id)
   WHERE mt.max_runtime_minutes IS NOT NULL
 
   UNION ALL
@@ -286,7 +350,12 @@ checks AS (
     CAST(NULL AS ARRAY<STRING>),
     format_string(
       'No job in the system tables for this region matches %s. A new job takes about an hour to appear.',
-      m.job_name_regex)
+      m.job_name_regex),
+    CAST(NULL AS MAP<STRING, STRING>),
+    CAST(NULL AS TIMESTAMP),
+    CAST(NULL AS TIMESTAMP),
+    CAST(NULL AS BIGINT),
+    CAST(NULL AS STRING)
   FROM monitored m
   WHERE NOT EXISTS (SELECT 1 FROM matched mt WHERE mt.job_name = m.job_name)
 )
@@ -321,8 +390,32 @@ SELECT
     WHEN c.status = 'FAILED' THEN coalesce(d.affected_jobs, CAST(array() AS ARRAY<STRING>))
   END AS affected_jobs,
   m.owner,
-  'SYSTEM_TABLES' AS source
+  'SYSTEM_TABLES' AS source,
+  e.environment,
+  m.schedule_type,
+  c.run_start_time,
+  c.run_end_time,
+  c.run_duration_seconds,
+  -- the same mapping as jobs_watchdog.states.normalize_trigger
+  CASE c.raw_trigger
+    WHEN 'CRON' THEN 'SCHEDULE'
+    WHEN 'PERIODIC' THEN 'SCHEDULE'
+    WHEN 'ONETIME' THEN 'ONE_TIME'
+    WHEN 'ONE_TIME' THEN 'ONE_TIME'
+    WHEN 'RETRY' THEN 'RETRY'
+    WHEN 'ONETIME_RETRY' THEN 'RETRY'
+    WHEN 'CONTINUOUS' THEN 'CONTINUOUS'
+    WHEN 'CONTINUOUS_RESTART' THEN 'CONTINUOUS'
+    WHEN 'FILE_ARRIVAL' THEN 'FILE_ARRIVAL'
+    WHEN 'TABLE' THEN 'TABLE_UPDATE'
+    WHEN 'RUN_JOB_TASK' THEN 'JOB_TASK'
+    ELSE nullif(c.raw_trigger, '')
+  END AS trigger_type,
+  CAST(NULL AS STRING) AS triggered_by,
+  c.job_tags,
+  CASE WHEN :code_version_tag <> '' THEN try_element_at(c.job_tags, :code_version_tag) END AS code_version
 FROM checks c
 JOIN monitored m ON m.job_name = c.job_name
 LEFT JOIN dependents d ON d.job_name = c.job_name
 LEFT JOIN watchdog_workspace_names w ON w.workspace_id = c.workspace_id
+LEFT JOIN environments e ON e.workspace_id = c.workspace_id

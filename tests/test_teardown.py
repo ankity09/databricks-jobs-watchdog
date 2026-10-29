@@ -87,3 +87,26 @@ def test_an_empty_listing_counts_as_no_extra_tables(sandbox):
                             text=True, env=env)
     assert result.returncode == 0, result.stderr
     assert "schemas delete main.watchdog --force" in log.read_text().splitlines()
+
+
+def test_the_current_tables_and_view_still_let_the_schema_drop_run(sandbox):
+    listing = ["findings", "monitored_jobs", "job_dependencies", "monitored_workspaces", "findings_latest"]
+    result, calls = run(sandbox, listing, "--drop-schema", "-y")
+    assert result.returncode == 0, result.stderr
+    assert "schemas delete main.watchdog --force" in calls
+
+
+def test_teardown_accepts_exactly_the_objects_notebook_01_creates():
+    import re
+
+    from jobs_watchdog.upgrade import watchdog_objects
+
+    text = (repo_root() / "teardown.sh").read_text()
+    listed = set(re.search(r"watchdog = \{([^}]*)\}", text).group(1).replace('"', "").replace(" ", "").split(","))
+    assert listed == set(watchdog_objects())
+
+
+def test_help_prints_the_whole_header(sandbox):
+    result = subprocess.run(["bash", str(sandbox / "teardown.sh"), "-h"], capture_output=True, text=True)
+    assert result.returncode == 0
+    assert "docs/phase-1-runbook.md" in result.stdout and "set -euo" not in result.stdout

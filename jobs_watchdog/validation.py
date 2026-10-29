@@ -18,7 +18,7 @@ def phase_1_checks(tables, enabled_jobs, by_source, missing, duplicates):
     no_rows = [source for source in SOURCES if source not in totals]
     seen = ", ".join(f"{source}: {count} rows in scan {scan_id}" for source, (count, scan_id) in sorted(totals.items()))
     return [
-        ("tables exist", not absent, f"missing {', '.join(absent)}" if absent else "monitored_jobs, job_dependencies, findings"),
+        ("tables exist", not absent, f"missing {', '.join(absent)}" if absent else ", ".join(tables)),
         ("config has enabled jobs", enabled_jobs > 0, f"{enabled_jobs} enabled"),
         ("both sources wrote findings", not no_rows,
          f"no rows from {', '.join(no_rows)}" + (f"; {seen}" if seen else "") if no_rows else seen),

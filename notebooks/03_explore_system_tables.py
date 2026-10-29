@@ -42,7 +42,12 @@ def show(relpath, optional=False):
 
 # COMMAND ----------
 
-show("sql/explore/10_workspaces_in_region.sql")
+from jobs_watchdog.workspaces import NAMES_VIEW, register_workspace_names
+
+register_workspace_names(spark)
+named = spark.table(NAMES_VIEW).select("workspace_id", "workspace_name")
+display(run_sql(spark, "sql/explore/10_workspaces_in_region.sql", lookback_hours=s.lookback_hours)
+        .join(named, "workspace_id", "left").orderBy("workspace_name"))
 
 # COMMAND ----------
 

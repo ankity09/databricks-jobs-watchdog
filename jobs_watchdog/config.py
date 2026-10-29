@@ -31,6 +31,7 @@ class MonitoredJob:
     owner: str
     enabled: bool
     notes: str
+    job_name_exclude_regex: str | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,16 @@ class Dependency:
     job_name: str
     depends_on: str
     dependency_type: str
+    notes: str
+
+
+@dataclass(frozen=True)
+class MonitoredWorkspace:
+    """An environment label for a workspace, matched by ID or by name."""
+
+    workspace_id: str | None
+    workspace_name: str | None
+    environment: str
     notes: str
 
 
@@ -64,15 +75,24 @@ def _optional_int(raw, job_name, field):
     return raw
 
 
+def _compiled(raw, name, field):
+    try:
+        re.compile(raw)
+    except re.error as err:
+        raise ConfigError(f"job {name}: {field} does not compile: {err}") from err
+    return raw
+
+
 def _parse_job(raw):
     if not isinstance(raw, dict) or not raw.get("job_name"):
         raise ConfigError(f"every job needs a job_name, got {raw!r}")
     name = str(raw["job_name"])
-    regex = raw.get("job_name_regex") or f"^{re.escape(name)}$"
-    try:
-        re.compile(regex)
-    except re.error as err:
-        raise ConfigError(f"job {name}: job_name_regex does not compile: {err}") from err
+    regex = _compiled(raw.get("job_name_regex") or f"^{re.escape(name)}$", name, "job_name_regex")
+    exclude = raw.get("job_name_exclude_regex")
+    exclude = _compiled(str(exclude), name, "job_name_exclude_regex") if exclude not in (None, "") else None
+    enabled = raw.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise ConfigError(f"job {name}: enabled must be true or false, got {enabled!r}")
     schedule_type = raw.get("schedule_type", "scheduled")
     if schedule_type not in SCHEDULE_TYPES:
         raise ConfigError(f"job {name}: schedule_type must be one of {sorted(SCHEDULE_TYPES)}, got {schedule_type!r}")
@@ -91,8 +111,9 @@ def _parse_job(raw):
         max_retries=_optional_int(raw.get("max_retries"), name, "max_retries"),
         severity=severity,
         owner=str(raw.get("owner") or ""),
-        enabled=bool(raw.get("enabled", True)),
+        enabled=enabled,
         notes=str(raw.get("notes") or ""),
+        job_name_exclude_regex=exclude,
     )
 
 
@@ -127,6 +148,45 @@ def load_monitored_jobs(path):
         seen.add(job.job_name)
     deps = [_parse_dependency(raw, seen) for raw in data.get("dependencies") or []]
     return jobs, deps
+
+
+_ENVIRONMENT = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _parse_workspace(raw):
+    if not isinstance(raw, dict):
+        raise ConfigError(f"every workspace entry must be a mapping, got {raw!r}")
+    workspace_id = raw.get("workspace_id")
+    workspace_name = raw.get("workspace_name")
+    workspace_id = None if workspace_id in (None, "") else str(workspace_id)
+    workspace_name = None if workspace_name in (None, "") else str(workspace_name)
+    label = workspace_id or workspace_name
+    if label is None:
+        raise ConfigError(f"workspace entry {raw!r}: set workspace_id or workspace_name")
+    if workspace_id is not None and not workspace_id.isdigit():
+        raise ConfigError(f"workspace {label}: workspace_id must be digits, got {workspace_id!r}")
+    environment = raw.get("environment")
+    if not environment:
+        raise ConfigError(f"workspace {label}: environment is required, for example production or lower")
+    if not _ENVIRONMENT.fullmatch(str(environment)):
+        raise ConfigError(f"workspace {label}: environment must be letters, digits, - or _, got {environment!r}")
+    return MonitoredWorkspace(workspace_id, workspace_name, str(environment), str(raw.get("notes") or ""))
+
+
+def load_monitored_workspaces(path):
+    """The optional workspaces section of a monitored-jobs file: an environment per workspace."""
+    data = _read_yaml(path)
+    workspaces = [_parse_workspace(raw) for raw in data.get("workspaces") or []]
+    seen = set()
+    for workspace in workspaces:
+        name = workspace.workspace_name.lower() if workspace.workspace_name else None
+        for key in (("id", workspace.workspace_id), ("name", name)):
+            if key[1] is None:
+                continue
+            if key in seen:
+                raise ConfigError(f"workspace {key[1]} is listed twice in {path}")
+            seen.add(key)
+    return workspaces
 
 
 def load_accelerator(path, require_complete=False):

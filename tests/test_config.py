@@ -5,8 +5,10 @@ import pytest
 
 from jobs_watchdog.config import (
     ConfigError,
+    MonitoredWorkspace,
     load_accelerator,
     load_monitored_jobs,
+    load_monitored_workspaces,
 )
 
 REPO = Path(__file__).resolve().parents[1]
@@ -167,3 +169,78 @@ def test_accelerator_rejects_unknown_auth_mode(tmp_path):
 def test_service_principal_mode_needs_secret_scope(tmp_path):
     with pytest.raises(ConfigError, match="secret_scope"):
         load_accelerator(_accelerator(tmp_path, mode="service_principal"), require_complete=True)
+
+
+def test_exclude_regex_is_optional_and_loaded(tmp_path):
+    path = write(tmp_path, "jobs:" + VALID_JOB + '    job_name_exclude_regex: "test"\n')
+    jobs, _ = load_monitored_jobs(path)
+    assert jobs[0].job_name_exclude_regex == "test"
+    plain, _ = load_monitored_jobs(write(tmp_path, "jobs:" + VALID_JOB, name="plain.yml"))
+    assert plain[0].job_name_exclude_regex is None
+
+
+def test_exclude_regex_must_compile(tmp_path):
+    path = write(tmp_path, "jobs:" + VALID_JOB + '    job_name_exclude_regex: "(unclosed"\n')
+    with pytest.raises(ConfigError, match="job_name_exclude_regex"):
+        load_monitored_jobs(path)
+
+
+def test_enabled_must_be_true_or_false(tmp_path):
+    path = write(tmp_path, "jobs:" + VALID_JOB.replace("enabled: true", 'enabled: "false"'))
+    with pytest.raises(ConfigError, match="enabled must be true or false"):
+        load_monitored_jobs(path)
+
+
+WORKSPACES = """
+jobs:
+  - job_name: orders_ingest
+    schedule_type: continuous
+workspaces:
+  - workspace_id: 1234567890123456
+    environment: production
+    notes: the production workspace
+  - workspace_name: analytics-dev
+    environment: lower
+"""
+
+
+def test_workspaces_map_ids_and_names_to_environments(tmp_path):
+    workspaces = load_monitored_workspaces(write(tmp_path, WORKSPACES))
+    assert workspaces == [
+        MonitoredWorkspace("1234567890123456", None, "production", "the production workspace"),
+        MonitoredWorkspace(None, "analytics-dev", "lower", ""),
+    ]
+
+
+def test_no_workspaces_section_means_no_environments(tmp_path):
+    assert load_monitored_workspaces(write(tmp_path, "jobs:" + VALID_JOB)) == []
+
+
+@pytest.mark.parametrize(
+    "entry,message",
+    [
+        ("  - environment: production\n", "workspace_id or workspace_name"),
+        ("  - workspace_id: 12\n", "environment"),
+        ("  - workspace_id: abc\n    environment: production\n", "workspace_id must be digits"),
+        ("  - workspace_id: 12\n    environment: prod east\n", "environment must be"),
+    ],
+)
+def test_bad_workspace_entries_are_rejected(tmp_path, entry, message):
+    path = write(tmp_path, "jobs:" + VALID_JOB + "workspaces:\n" + entry)
+    with pytest.raises(ConfigError, match=message):
+        load_monitored_workspaces(path)
+
+
+def test_a_workspace_listed_twice_is_rejected(tmp_path):
+    entry = "  - workspace_name: analytics-dev\n    environment: lower\n"
+    path = write(tmp_path, "jobs:" + VALID_JOB + "workspaces:\n" + entry + entry)
+    with pytest.raises(ConfigError, match="listed twice"):
+        load_monitored_workspaces(path)
+
+
+def test_workspace_names_differing_only_in_case_are_listed_twice(tmp_path):
+    entries = "  - workspace_name: Analytics-Dev\n    environment: lower\n" \
+              "  - workspace_name: analytics-dev\n    environment: production\n"
+    path = write(tmp_path, "jobs:" + VALID_JOB + "workspaces:\n" + entries)
+    with pytest.raises(ConfigError, match="listed twice"):
+        load_monitored_workspaces(path)

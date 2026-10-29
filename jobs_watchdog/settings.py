@@ -24,6 +24,7 @@ WIDGETS = {
     "client_id_key": ("auth", "client_id_key", "client_id"),
     "client_secret_key": ("auth", "client_secret_key", "client_secret"),
     "monitored_jobs_path": ("scan", "monitored_jobs_path", "config/monitored_jobs.example.yml"),
+    "code_version_tag": ("scan", "code_version_tag", "code_version"),
 }
 
 

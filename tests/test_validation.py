@@ -1,6 +1,7 @@
 from jobs_watchdog.validation import phase_1_checks
 
-TABLES = {"monitored_jobs": True, "job_dependencies": True, "findings": True}
+TABLES = {"monitored_jobs": True, "job_dependencies": True, "findings": True, "monitored_workspaces": True,
+          "findings_latest": True}
 BY_SOURCE = [{"source": "JOBS_API", "scan_id": "9", "status": "HEALTHY", "findings": 4},
              {"source": "SYSTEM_TABLES", "scan_id": "9", "status": "FAILED", "findings": 2}]
 
@@ -70,3 +71,7 @@ def test_no_workspaces_to_try_is_a_required_failure():
     required, warnings = service_principal_verdict([])
     assert len(required) == 1 and "no workspaces" in required[0]
     assert warnings == []
+
+
+def test_tables_detail_names_every_object_checked():
+    assert "monitored_workspaces" in outcome()["tables exist"][1]

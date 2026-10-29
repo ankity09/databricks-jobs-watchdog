@@ -12,7 +12,7 @@
 # MAGIC | `long_runtime` | the newest finished run, or a run still going, over `max_runtime_minutes`, measured up to its newest system table record |
 # MAGIC | `not_found` | the job's regex matches no job in this region |
 # MAGIC
-# MAGIC **Inputs (widgets).** `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`. With `scan_id` empty, a new one is made from the current UTC time. Re-running with the same `scan_id` adds nothing. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
+# MAGIC **Inputs (widgets).** `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `code_version_tag` (the job tag that holds the deployed code version). With `scan_id` empty, a new one is made from the current UTC time. Re-running with the same `scan_id` adds nothing. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
 # MAGIC **What to look for.** One row per check for each matched job. System tables run about an hour behind, so a brand-new job shows `not_found` here until it lands.
 
@@ -23,7 +23,7 @@
 # COMMAND ----------
 
 # Shows the input boxes (widgets) at the top of the notebook. Fill them in, then run the cells below.
-NAMES = ("catalog", "schema", "region", "lookback_hours", "scan_id")
+NAMES = ("catalog", "schema", "region", "lookback_hours", "scan_id", "code_version_tag")
 define_widgets(*NAMES)
 
 # COMMAND ----------
@@ -38,8 +38,10 @@ from pyspark.sql import functions as F
 
 from jobs_watchdog.findings import MERGE_SQL, NEW_FINDINGS_VIEW, new_scan_id
 from jobs_watchdog.sqlfiles import run_sql
+from jobs_watchdog.upgrade import require_current_tables
 from jobs_watchdog.workspaces import register_workspace_names
 
+require_current_tables(spark, s.catalog, s.schema)
 scan_id = s.scan_id or new_scan_id(datetime.now(timezone.utc))
 print(f"scan_id: {scan_id}")
 
@@ -55,6 +57,7 @@ new_rows = run_sql(
     region=s.region,
     lookback_hours=s.lookback_hours,
     scan_id=scan_id,
+    code_version_tag=s.code_version_tag,
 )
 new_rows.createOrReplaceTempView(NEW_FINDINGS_VIEW)
 display(run_sql(spark, MERGE_SQL, catalog=s.catalog, schema=s.schema))

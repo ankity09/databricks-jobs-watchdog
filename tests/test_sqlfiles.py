@@ -10,6 +10,10 @@ EXPECTED_FILES = [
     "sql/setup/02_create_monitored_jobs.sql",
     "sql/setup/03_create_job_dependencies.sql",
     "sql/setup/04_create_findings.sql",
+    "sql/setup/05_create_monitored_workspaces.sql",
+    "sql/config/01_load_monitored_jobs.sql",
+    "sql/config/02_load_job_dependencies.sql",
+    "sql/config/03_load_monitored_workspaces.sql",
     "sql/explore/10_workspaces_in_region.sql",
     "sql/explore/11_workspace_names.sql",
     "sql/explore/12_job_inventory.sql",
@@ -26,8 +30,13 @@ EXPECTED_FILES = [
     "sql/validate/42_enabled_jobs_without_findings.sql",
 ]
 
-ALL_SQL = sorted(str(p.relative_to(repo_root())) for p in (repo_root() / "sql").rglob("*.sql"))
-WATCHDOG_TABLES = ("monitored_jobs", "job_dependencies", "findings")
+# sql/views holds CREATE VIEW templates (views cannot take parameter markers); tests/test_upgrade.py covers them.
+ALL_SQL = sorted(
+    str(p.relative_to(repo_root()))
+    for p in (repo_root() / "sql").rglob("*.sql")
+    if not p.relative_to(repo_root()).as_posix().startswith("sql/views/")
+)
+WATCHDOG_TABLES = ("monitored_jobs", "job_dependencies", "findings", "monitored_workspaces")
 
 
 class FakeSpark:
@@ -140,3 +149,54 @@ def test_continuous_jobs_are_judged_by_their_newest_run():
 def test_open_runs_are_measured_to_their_newest_system_table_record():
     exp, ctes = _scan_ctes()
     assert ctes["over_limit"].find(exp.CurrentTimestamp) is None
+
+
+def test_scan_skips_names_matching_the_exclude_regex():
+    exp, ctes = _scan_ctes()
+    calls = [call for call in ctes["matched"].find_all(exp.RegexpLike)]
+    assert {call.expression.name for call in calls} >= {"job_name_regex", "job_name_exclude_regex"}
+    assert any(isinstance(call.parent, exp.Not) for call in calls)
+
+
+def test_scan_labels_workspaces_from_monitored_workspaces():
+    exp, ctes = _scan_ctes()
+    tables = {table.name for table in ctes["environments"].find_all(exp.Table)}
+    assert "monitored_workspaces" in tables and "watchdog_workspace_names" in tables
+
+
+def test_scan_trigger_mapping_matches_python():
+    from jobs_watchdog.states import _TRIGGERS
+
+    text = load_sql("sql/scan/21_system_table_findings.sql")
+    for raw, normalized in _TRIGGERS.items():
+        assert f"WHEN '{raw}' THEN '{normalized}'" in text, raw
+
+
+def test_scan_reads_code_version_from_the_configured_tag():
+    text = load_sql("sql/scan/21_system_table_findings.sql")
+    assert "try_element_at(c.job_tags, :code_version_tag)" in text
+    assert "code_version_tag" in parameters(text)
+
+
+def test_resolve_query_skips_excluded_names_like_the_scans():
+    sqlglot = pytest.importorskip("sqlglot")
+    from sqlglot import exp
+
+    tree = sqlglot.parse_one(for_parsing(load_sql("sql/scan/20_resolve_monitored_jobs.sql")), read="databricks")
+    calls = list(tree.find_all(exp.RegexpLike))
+    assert {call.expression.name for call in calls} >= {"job_name_regex", "job_name_exclude_regex"}
+    assert any(isinstance(call.parent, exp.Not) for call in calls)
+
+
+def test_runs_that_began_before_the_window_get_no_start_or_duration():
+    exp, ctes = _scan_ctes()
+    assert "started_before_window" in ctes["runs"].named_selects
+    referenced = {column.name for column in ctes["checks"].find_all(exp.Column)}
+    assert {"started_before_window", "newest_before_window"} <= referenced
+
+
+def test_latest_view_ranks_scans_by_when_they_first_wrote():
+    from jobs_watchdog.upgrade import render_view
+
+    text = render_view("sql/views/01_findings_latest.sql", "main", "watchdog")
+    assert "min(observed_at) AS first_seen" in text and "max_by(scan_id, first_seen)" in text
