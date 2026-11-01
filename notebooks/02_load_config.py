@@ -2,7 +2,7 @@
 # MAGIC %md
 # MAGIC # 02 · Load the monitored-jobs config
 # MAGIC
-# MAGIC **What it does.** Reads your monitored-jobs YAML file, checks it, and replaces the rows of `monitored_jobs`, `job_dependencies` and `monitored_workspaces` (the optional `workspaces` section, which gives each workspace an environment label such as production or lower) with its contents. Then it shows which real jobs each monitored job matches.
+# MAGIC **What it does.** Reads your monitored-jobs YAML file, checks it, fills in its `defaults`, and replaces the rows of four tables with its contents: `monitored_jobs`, `job_dependencies`, `monitored_workspaces` (the optional `workspaces` section, which gives each workspace an environment label such as production or lower) and `monitored_job_environments` (each job's optional `environments` section: its settings for one environment label). Then it shows which real jobs each monitored job matches.
 # MAGIC
 # MAGIC **Inputs (widgets).** `catalog`, `schema`, `monitored_jobs_path`. Keep your own copy of the file outside the Git folder (your workspace home folder, or a Unity Catalog volume such as `/Volumes/<catalog>/<schema>/<volume>/monitored_jobs.yml`) so a pull never conflicts with your edits. Relative paths start at the repo root. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
@@ -34,7 +34,8 @@ enabled = sum(job.enabled for job in jobs)
 print(f"Read {len(jobs)} jobs ({enabled} enabled), {len(dependencies)} dependencies and "
       f"{len(workspaces)} workspace labels from {s.monitored_jobs_path}")
 write_config(spark, jobs, dependencies, s.catalog, s.schema, workspaces)
-print(f"Replaced the rows of {s.catalog}.{s.schema}.monitored_jobs, job_dependencies and monitored_workspaces")
+print(f"Replaced the rows of {s.catalog}.{s.schema}.monitored_jobs, job_dependencies, "
+      "monitored_workspaces and monitored_job_environments")
 
 # COMMAND ----------
 
