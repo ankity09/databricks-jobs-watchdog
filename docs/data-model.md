@@ -400,4 +400,4 @@ ORDER BY observed_at DESC, check_id
 
 - grant `SELECT` on them, or on the schema, only to the people and identities that need them;
 - the identity that runs the scheduled job needs `CREATE TABLE` and `MODIFY` on the schema, because each scheduled run runs notebook 01; it owns the tables when it creates them;
-- the table grows with every scan. The schedule runs a scan every 20 minutes by default, so plan retention now, for example by deleting rows older than 90 days.
+- the table grows with every scan: the schedule runs one every 20 minutes by default. The daily `watchdog_cleanup` job (notebook 10) deletes scans older than `scan.retention_days` (30 by default; `0` keeps everything) and always keeps each source's newest scan, so `findings_latest` never goes empty. See the runbook's [Delete old findings](phase-1-runbook.md#delete-old-findings). Set the number of days to how far back you need the history.

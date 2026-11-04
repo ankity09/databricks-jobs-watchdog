@@ -28,8 +28,9 @@ Ask for each value **one at a time**. Offer the default where there is one, and 
 7. **lookback_hours** (default `48`): how far back the system table checks look.
 8. **code_version_tag** (default `code_version`): the name of the job tag whose value is the deployed code version. Findings show that value when the job has the tag, so a CI pipeline that tags each deploy makes version changes visible.
    **pipeline_url_parameter** (default `PIPELINE_URL`): the name of the job parameter that holds the link to the CI pipeline that deployed the job. Findings show it as `pipeline_url`.
-9. **Schedule** (default `0 0/20 * * * ?`, every 20 minutes in UTC, and `schedule_status` `PAUSED`): keep it paused until the first `watchdog_phase_1` run has passed. Then `UNPAUSED` turns the scan on.
-10. **warehouse_id** (optional): a SQL warehouse for the dashboard (notebook 08). Skip it if the operator does not want a dashboard yet.
+9. **Schedule** (default `0 0/20 * * * ?`, every 20 minutes in UTC, and `schedule_status` `PAUSED`): keep it paused until the first `watchdog_phase_1` run has passed. Then `UNPAUSED` turns the scan on, and the daily cleanup job with it.
+10. **retention_days** (default 30): the daily `watchdog_cleanup` job deletes findings scans older than this many days, always keeping each source's newest scan. 0 keeps everything. Ask how long the operator wants the history.
+11. **warehouse_id** (optional): a SQL warehouse for the dashboard (notebook 08). Skip it if the operator does not want a dashboard yet.
 
 ## Step 2. Preflight
 
@@ -64,7 +65,7 @@ Show the operator:
 
 1. the completed `accelerator.local.yaml`;
 2. the capability matrix from step 2;
-3. what step 5 will create: the schema `<catalog>.<schema>` with five tables and the view `findings_latest`. With the bundle path, the `watchdog_phase_1` job and the `watchdog_scan` job, which is created paused. With the demo target, four sample jobs as well. The dashboard is created only if the operator runs notebook 08.
+3. what step 5 will create: the schema `<catalog>.<schema>` with five tables and the view `findings_latest`. With the bundle path, the `watchdog_phase_1` job, and the `watchdog_scan` and `watchdog_cleanup` jobs, which are created paused. With the demo target, four sample jobs as well. The dashboard is created only if the operator runs notebook 08.
 
 **Wait for the operator to approve.** Nothing has been created yet. If they change a value, update `accelerator.local.yaml` and show it again.
 
@@ -72,7 +73,7 @@ Show the operator:
 
 Deploy only what preflight supports, and say clearly what was skipped and why. Pick the path the operator prefers.
 
-**Path A: notebooks, in the workspace.** Run in order: `01_create_tables`, `02_load_config`, `03_explore_system_tables`, `04_explore_jobs_api`, `05_scan_system_tables`, `06_scan_jobs_api`. Give notebooks 05 and 06 the same `scan_id`, or leave it empty in both. If the operator wants a dashboard, run `08_create_dashboard` after the scans, with the warehouse ID in its `warehouse_id` box.
+**Path A: notebooks, in the workspace.** Run in order: `01_create_tables`, `02_load_config`, `05_scan_system_tables`, `06_scan_jobs_api`. The read-only notebooks in `notebooks/explore` (03 and 04) are optional, for looking at the raw data. Give notebooks 05 and 06 the same `scan_id`, or leave it empty in both. If the operator wants a dashboard, run `08_create_dashboard` after the scans, with the warehouse ID in its `warehouse_id` box.
 
 **Path B: the bundle.** From a terminal with the Databricks CLI:
 
@@ -84,7 +85,7 @@ databricks bundle run watchdog_phase_1 -t dev --profile <profile>
 
 Use `-t demo` instead of `-t dev` to add the four sample jobs. Run `watchdog_demo_succeeds`, `watchdog_demo_fails`, `watchdog_demo_slow` and `watchdog_demo_retries` once before `watchdog_phase_1`. `watchdog_demo_fails` reports an error on purpose.
 
-`watchdog_phase_1` checks access, creates or upgrades the tables and the view, and validates the setup, so run it before anything else. The scheduled scan `watchdog_scan` is deployed paused. Leave it paused until `watchdog_phase_1` has passed in this workspace. To turn it on, set `scan.schedule_status` to `UNPAUSED` in `accelerator.local.yaml`, run the `eval` line again, and deploy again. Each scheduled run then brings the tables up to date itself.
+`watchdog_phase_1` checks access, creates or upgrades the tables and the view, and validates the setup, so run it before anything else. The scheduled scan `watchdog_scan` and the daily `watchdog_cleanup` job are deployed paused. Leave them paused until `watchdog_phase_1` has passed in this workspace. To turn it on, set `scan.schedule_status` to `UNPAUSED` in `accelerator.local.yaml`, run the `eval` line again, and deploy again. Each scheduled run then brings the tables up to date itself.
 
 Known degradations:
 

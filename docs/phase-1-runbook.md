@@ -114,7 +114,7 @@ After every pull, restart Python on any notebook you have open, so it loads the 
 
    The file is git-ignored, so it stays out of commits and pulls. Every notebook widget takes its default from it, and you can still override any widget by hand.
 
-To write `job_name_regex` values, look at your real job names in notebook 03 (query 12) or the Jobs page. A regex matches anywhere in the name unless you anchor it with `^` and `$`.
+To write `job_name_regex` values, look at your real job names in `notebooks/explore/03_explore_system_tables` (query 12) or the Jobs page. A regex matches anywhere in the name unless you anchor it with `^` and `$`.
 
 ### Exclude test copies
 
@@ -228,13 +228,19 @@ Open each notebook in `notebooks/`, attach it to serverless compute, run its fir
 | `00_check_access` | checks system table access, the region's workspaces and the Jobs API | every line PASS, and the workspace names you expect in section 3 |
 | `01_create_tables` | creates or upgrades the schema, the five tables and the view `findings_latest` | six `exists: True` lines, a `view findings_latest:` line that says created, replaced or current, and the columns it added, if any |
 | `02_load_config` | loads your YAML file into the config tables, shows what each job matches | every job matches a real job where you expect it, with `checked_here` true where it should be checked |
-| `03_explore_system_tables` | runs the read-only system table queries | your jobs and runs, as you expect |
-| `04_explore_jobs_api` | walks one job through the Jobs API calls | the newest run, its tasks, any error text |
 | `05_scan_system_tables` | writes the system table findings | one row per check for each matched job |
 | `06_scan_jobs_api` | writes the Jobs API findings | rows for each matched job |
 | `07_validate_phase_1` | checks the result | five PASS lines |
 | `08_create_dashboard` (optional) | creates or updates the "Watchdog findings" dashboard and publishes it | a `Dashboard ready` line with its link |
 | `09_custom_check_example` (optional) | probes the services in its list and writes `CUSTOM` rows | one row per service, or a skip line for each placeholder host |
+| `10_delete_old_findings` (optional) | deletes scans older than `retention_days`, keeping each source's newest; the `watchdog_cleanup` job runs it daily | a `Deleted N rows` line, then the scans left per source |
+
+Two read-only notebooks in `notebooks/explore` show the raw data behind a finding. They are not part of the main path, and no job runs them; run them by hand when you want to look:
+
+| Notebook | What it does | Look for |
+|---|---|---|
+| `explore/03_explore_system_tables` | runs the read-only system table queries | your jobs and runs, as you expect |
+| `explore/04_explore_jobs_api` | walks one job through the Jobs API calls | the newest run, its tasks, any error text |
 
 Notebooks 05 and 06 each make their own `scan_id` when the widget is empty. Notebook 07, with its `scan_id` empty, checks each source's newest scan, so the by-hand path validates without copying IDs.
 
@@ -248,7 +254,7 @@ databricks bundle deploy -t dev --profile <profile>
 databricks bundle run watchdog_phase_1 -t dev --profile <profile>
 ```
 
-The job runs notebooks 00 to 07 on serverless compute, with one `scan_id` (the job's run ID) for both scans. In development mode the job runs as the person who deployed it.
+The job runs notebooks 00, 01, 02, 05, 06 and 07 on serverless compute, with one `scan_id` (the job's run ID) for both scans. In development mode the job runs as the person who deployed it.
 
 To try it in a workspace with no jobs worth watching, use the `demo` target. It adds four sample jobs: one that succeeds, one whose `load` task fails on purpose, one that runs about three minutes, and one whose task fails twice and then succeeds. The example config lists all four, with limits that make the slow job warn for long runtime and the retrying job warn for a retry loop. Their schedules start paused. Set `BUNDLE_VAR_demo_schedule_status=UNPAUSED` in your shell to unpause them.
 
@@ -282,7 +288,20 @@ The job starts paused. To turn it on:
 2. Set `scan.schedule_status` to `UNPAUSED` in `accelerator.local.yaml`, or set `BUNDLE_VAR_scan_schedule_status=UNPAUSED` in your shell.
 3. Run the `eval` line from the bundle steps again, then `databricks bundle deploy -t dev --profile <profile>`.
 
-To change the timing, set `scan.schedule` to another Quartz cron expression. It is read in UTC. Each run adds rows for every check of every job, so 72 runs a day add up quickly. Plan retention as described in [data-model.md](data-model.md#governance).
+To change the timing, set `scan.schedule` to another Quartz cron expression. It is read in UTC. Each run adds rows for every check of every job, so 72 runs a day add up quickly. The daily `watchdog_cleanup` job deletes old scans: see [Delete old findings](#delete-old-findings).
+
+### Delete old findings
+
+`findings` keeps every scan, and with the schedule on, that is 72 scans a day. The `watchdog_cleanup` job keeps it in check. Once a day, at 03:30 UTC, it runs notebook 10 (`10_delete_old_findings`), which runs `sql/maintenance/50_delete_old_findings.sql`:
+
+- It deletes every scan whose first row is more than `scan.retention_days` days old. The default is 30. Set it in `accelerator.local.yaml`, run the `eval` line again and deploy again; the job passes it as its `retention_days` parameter. `0` keeps everything.
+- It always keeps each source's newest scan, even when it is older than that, so `findings_latest` still shows the current status after the scans have stopped for a while.
+- It deletes whole scans, never part of one, matching rows on `source` and `scan_id`. Scans are ranked by when they first wrote, as in `findings_latest`.
+- It prints how many rows it deleted, then the scans that are left per source and the oldest `observed_at` left.
+
+The job is paused and unpaused with the scan: `scan.schedule_status` sets both. You can also run notebook 10 by hand at any time. The identity that runs it needs `MODIFY` on `findings`, which the scan's identity already has.
+
+Deleted rows leave old data files behind until Delta removes them with `VACUUM`. If predictive optimization is on for the schema (it is for many Unity Catalog managed tables), Databricks runs `VACUUM` for you. Otherwise run `VACUUM <catalog>.<schema>.findings` now and then. `./teardown.sh` removes the job with the others; `--drop-schema` removes the data.
 
 ### Build the dashboard (notebook 08)
 

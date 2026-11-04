@@ -97,3 +97,23 @@ def test_a_broken_accelerator_file_is_an_error_not_a_silent_fallback(tmp_path):
 
 def test_pipeline_url_parameter_defaults_to_PIPELINE_URL(tmp_path):
     assert widget_defaults(tmp_path)["pipeline_url_parameter"] == "PIPELINE_URL"
+
+
+def test_retention_days_defaults_to_thirty(tmp_path):
+    assert widget_defaults(tmp_path)["retention_days"] == "30"
+
+
+def test_retention_days_is_read_from_the_scan_section(tmp_path):
+    write(tmp_path, "accelerator.yaml", ACCELERATOR + "  retention_days: 14\n")
+    assert widget_defaults(tmp_path)["retention_days"] == "14"
+
+
+@pytest.mark.parametrize("days, expected", [("30", 30), ("0", 0), (" 7 ", 7)])
+def test_retention_days_is_a_whole_number_and_zero_keeps_everything(tmp_path, days, expected):
+    assert read_settings({"retention_days": days}, tmp_path).retention_days == expected
+
+
+@pytest.mark.parametrize("days", ["-1", "two weeks", "1.5", ""])
+def test_bad_retention_days_says_what_to_fix(tmp_path, days):
+    with pytest.raises(ValueError, match="retention_days"):
+        read_settings({"retention_days": days}, tmp_path)

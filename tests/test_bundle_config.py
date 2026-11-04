@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 import yaml
 
@@ -7,6 +9,7 @@ from jobs_watchdog.sqlfiles import repo_root
 
 JOB_FILE = repo_root() / "resources" / "watchdog_phase_1.job.yml"
 SCAN_FILE = repo_root() / "resources" / "watchdog_scan.job.yml"
+CLEANUP_FILE = repo_root() / "resources" / "watchdog_cleanup.job.yml"
 EXAMPLE_CONFIG = repo_root() / "config" / "monitored_jobs.example.yml"
 CUSTOM_CHECK = repo_root() / "notebooks" / "09_custom_check_example.py"
 
@@ -25,6 +28,10 @@ def load_job():
 
 def load_scan_job():
     return yaml.safe_load(SCAN_FILE.read_text())["resources"]["jobs"]["watchdog_scan"]
+
+
+def load_cleanup_job():
+    return yaml.safe_load(CLEANUP_FILE.read_text())["resources"]["jobs"]["watchdog_cleanup"]
 
 
 def load_bundle():
@@ -52,7 +59,17 @@ def test_every_task_notebook_exists():
 
 def test_job_parameters_match_the_notebook_widgets():
     names = {parameter["name"] for parameter in load_job()["parameters"]}
-    assert names == set(WIDGETS)
+    # retention_days is only for the cleanup job
+    assert names == set(WIDGETS) - {"retention_days"}
+
+
+def test_phase_1_runs_the_setup_scan_and_validation_notebooks_but_not_the_explore_ones():
+    paths = [task["notebook_task"]["notebook_path"] for task in load_job()["tasks"]]
+    assert [Path(path).name[:2] for path in paths] == ["00", "01", "02", "05", "06", "07"]
+    assert not any("explore" in path for path in paths)
+    depends_on = {task["task_key"]: [dep["task_key"] for dep in task.get("depends_on", [])]
+                  for task in load_job()["tasks"]}
+    assert depends_on["scan_system_tables"] == ["load_config"]
 
 
 def test_scan_id_is_the_job_run_id():
@@ -180,7 +197,36 @@ def test_scan_schedule_uses_the_variables_and_runs_in_utc():
 
 
 def test_scan_job_is_part_of_every_target():
-    assert {"watchdog_phase_1", "watchdog_scan"} <= included_jobs()
+    assert {"watchdog_phase_1", "watchdog_scan", "watchdog_cleanup"} <= included_jobs()
+
+
+def test_cleanup_job_runs_notebook_10_once_a_day_and_follows_the_scan_pause_status():
+    job = load_cleanup_job()
+    assert job["schedule"] == {
+        "quartz_cron_expression": "0 30 3 * * ?",
+        "timezone_id": "UTC",
+        "pause_status": "${var.scan_schedule_status}",
+    }
+    assert job["max_concurrent_runs"] == 1
+    (task,) = job["tasks"]
+    assert task["notebook_task"]["notebook_path"] == "../notebooks/10_delete_old_findings.py"
+    assert (CLEANUP_FILE.parent / task["notebook_task"]["notebook_path"]).resolve().is_file()
+    assert not {"job_cluster_key", "existing_cluster_id", "new_cluster"} & set(task)
+    assert "job_clusters" not in job
+
+
+def test_cleanup_job_parameters_come_from_the_bundle_variables_and_are_widgets():
+    parameters = {p["name"]: p["default"] for p in load_cleanup_job()["parameters"]}
+    assert parameters == {name: f"${{var.{name}}}" for name in ("catalog", "schema", "retention_days")}
+    assert set(parameters) <= set(WIDGETS)
+    assert set(parameters) <= set(load_bundle()["variables"])
+
+
+def test_retention_defaults_to_thirty_days_everywhere():
+    scan = yaml.safe_load((repo_root() / "accelerator.yaml").read_text())["scan"]
+    assert scan["retention_days"] == 30
+    assert load_bundle()["variables"]["retention_days"]["default"] == "30"
+    assert WIDGETS["retention_days"] == ("scan", "retention_days", "30")
 
 
 def test_demo_target_still_deploys_the_phase_1_job():

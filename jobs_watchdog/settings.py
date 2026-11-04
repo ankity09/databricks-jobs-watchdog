@@ -26,6 +26,7 @@ WIDGETS = {
     "monitored_jobs_path": ("scan", "monitored_jobs_path", "config/monitored_jobs.example.yml"),
     "code_version_tag": ("scan", "code_version_tag", "code_version"),
     "pipeline_url_parameter": ("scan", "pipeline_url_parameter", "PIPELINE_URL"),
+    "retention_days": ("scan", "retention_days", "30"),
 }
 
 
@@ -68,6 +69,11 @@ def read_settings(values, repo_root):
         if not hours.isdigit() or int(hours) == 0:
             raise ValueError(f"lookback_hours must be a whole number above zero, got {hours!r}")
         settings["lookback_hours"] = int(hours)
+    if "retention_days" in settings:
+        days = settings["retention_days"]
+        if not days.isdigit():
+            raise ValueError(f"retention_days must be a whole number of days (0 keeps everything), got {days!r}")
+        settings["retention_days"] = int(days)
     if "auth_mode" in settings:
         if settings["auth_mode"] not in AUTH_MODES:
             raise ValueError(f"auth_mode must be one of {sorted(AUTH_MODES)}, got {settings['auth_mode']!r}")

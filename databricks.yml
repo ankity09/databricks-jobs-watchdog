@@ -6,13 +6,14 @@
 #   databricks bundle run watchdog_phase_1 -t dev --profile <your-profile>
 #
 # Targets:
-#   dev   the Phase 1 job and the scan job (default)
-#   demo  the same two jobs plus four sample jobs (one succeeds, one fails, one
+#   dev   the Phase 1 job, the scan job and the daily cleanup job (default)
+#   demo  the same three jobs plus four sample jobs (one succeeds, one fails, one
 #         runs long, one retries), so a fresh workspace has something to watch
 #
 # Both targets use development mode, so deployed names carry a [dev <you>]
-# prefix. Schedules stay PAUSED unless you set scan_schedule_status or
-# demo_schedule_status to UNPAUSED. Remove everything with ./teardown.sh.
+# prefix. Schedules stay PAUSED unless you set scan_schedule_status (the scan
+# and cleanup jobs) or demo_schedule_status to UNPAUSED. Remove everything with
+# ./teardown.sh.
 
 bundle:
   name: databricks-jobs-watchdog
@@ -56,8 +57,11 @@ variables:
     description: Quartz cron for the watchdog_scan job, in UTC (every 20 minutes by default)
     default: "0 0/20 * * * ?"
   scan_schedule_status:
-    description: PAUSED (default) or UNPAUSED; UNPAUSED runs watchdog_scan on its schedule
+    description: PAUSED (default) or UNPAUSED; UNPAUSED runs watchdog_scan and watchdog_cleanup on their schedules
     default: PAUSED
+  retention_days:
+    description: watchdog_cleanup deletes findings scans older than this many days, keeping each source's newest scan; 0 keeps everything
+    default: "30"
   demo_schedule_status:
     description: PAUSED (default) or UNPAUSED; UNPAUSED runs the demo jobs on their schedules
     default: PAUSED

@@ -10,13 +10,13 @@
 # MAGIC
 # MAGIC Unlike system tables, the Jobs API is live: a run that started a minute ago is already here.
 # MAGIC
-# MAGIC **Inputs (widgets).** `catalog`, `schema` (to read your monitored jobs), and `job_id`. With `job_id` empty, the notebook uses the first enabled monitored job it finds in this workspace. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
+# MAGIC **Inputs (widgets).** `catalog`, `schema` (to read your monitored jobs), and `job_id`. With `job_id` empty, the notebook uses the first enabled monitored job it finds in this workspace. The input boxes appear at the top of the notebook after you run the first two code cells. This notebook is in `notebooks/explore` and is run by hand: no job runs it.
 # MAGIC
 # MAGIC **What to look for.** The newest run's states, its tasks, and for a failed task, the error text the Watchdog writes to `error_summary`.
 
 # COMMAND ----------
 
-# MAGIC %run ./_setup
+# MAGIC %run ../_setup
 
 # COMMAND ----------
 

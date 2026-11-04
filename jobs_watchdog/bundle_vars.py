@@ -23,6 +23,7 @@ VARIABLES = {
     "pipeline_url_parameter": ("scan", "pipeline_url_parameter"),
     "scan_schedule": ("scan", "schedule"),
     "scan_schedule_status": ("scan", "schedule_status"),
+    "retention_days": ("scan", "retention_days"),
     # demo_schedule_status has no accelerator.yaml key: set it with --var
 }
 

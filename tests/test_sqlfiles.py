@@ -30,6 +30,7 @@ EXPECTED_FILES = [
     "sql/validate/40_findings_by_source.sql",
     "sql/validate/41_duplicate_keys.sql",
     "sql/validate/42_enabled_jobs_without_findings.sql",
+    "sql/maintenance/50_delete_old_findings.sql",
 ]
 
 # sql/views holds CREATE VIEW templates (views cannot take parameter markers); tests/test_upgrade.py covers them.
@@ -245,3 +246,17 @@ def test_schedule_gap_checks_scheduled_jobs_only():
     text = load_sql("sql/scan/21_system_table_findings.sql")
     assert "WHERE mt.schedule_type = 'scheduled' AND mt.max_gap_minutes IS NOT NULL" in text
 
+
+def test_cleanup_deletes_whole_old_scans_but_never_a_sources_newest_scan():
+    text = load_sql("sql/maintenance/50_delete_old_findings.sql")
+    code = " ".join(text.split())
+    assert parameters(text) == {"catalog", "schema", "retention_days"}
+    # scans ranked newest first within each source, by when they first wrote; rank 1 is never deleted
+    assert "PARTITION BY source ORDER BY first_seen DESC" in code
+    assert "min(observed_at) AS first_seen" in code
+    assert "newest_first > 1" in code
+    # 0 keeps everything, and the age limit is in days
+    assert "CAST(:retention_days AS INT) > 0" in code
+    assert "timestampadd(DAY, -CAST(:retention_days AS INT), current_timestamp())" in code
+    # whole scans go: rows are matched on source and scan_id only
+    assert "ON t.source = old.source AND t.scan_id = old.scan_id WHEN MATCHED THEN DELETE" in code

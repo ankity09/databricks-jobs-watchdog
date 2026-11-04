@@ -110,3 +110,12 @@ def test_help_prints_the_whole_header(sandbox):
     result = subprocess.run(["bash", str(sandbox / "teardown.sh"), "-h"], capture_output=True, text=True)
     assert result.returncode == 0
     assert "docs/phase-1-runbook.md" in result.stdout and "set -euo" not in result.stdout
+
+
+def test_teardown_header_names_every_job_the_bundle_deploys():
+    import yaml
+
+    header = (repo_root() / "teardown.sh").read_text().split("set -euo")[0]
+    for path in (repo_root() / "resources").glob("*.yml"):
+        for job in (yaml.safe_load(path.read_text()) or {}).get("resources", {}).get("jobs", {}):
+            assert job in header, job
