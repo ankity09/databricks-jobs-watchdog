@@ -634,3 +634,20 @@ def test_a_failed_and_stopped_stream_stays_failed_with_the_runs_category():
 def test_a_continuous_job_without_a_gap_limit_uses_30_minutes():
     assert stream_status(stream(max_gap=None), ended_minutes_ago=31)["status"] == "FAILED"
     assert stream_status(stream(max_gap=None), ended_minutes_ago=29)["status"] == "HEALTHY"
+
+
+def test_a_continuous_runs_unparsed_trigger_reads_as_continuous():
+    # older SDKs parse the CONTINUOUS trigger as None
+    going = run(22, "RUNNING", minutes_ago=300)
+    rows = collect_target(FakeClient(jobs=[(7, "ingest")], runs={7: [going]}), TARGET, [stream()], NOW)
+    assert {row["trigger_type"] for row in rows} == {"CONTINUOUS"}
+    scheduled = FakeClient(jobs=[(1, "orders")], runs={1: [run(11, "TERMINATED", "SUCCESS")]})
+    assert {row["trigger_type"] for row in collect_target(scheduled, TARGET, [monitored()], NOW)} == {None}
+
+
+def test_a_continuous_jobs_known_trigger_is_kept_and_no_run_gets_none():
+    restart = run(22, "RUNNING", minutes_ago=300, trigger="ONE_TIME")
+    rows = collect_target(FakeClient(jobs=[(7, "ingest")], runs={7: [restart]}), TARGET, [stream()], NOW)
+    assert {row["trigger_type"] for row in rows} == {"ONE_TIME"}
+    rows = collect_target(FakeClient(jobs=[(7, "ingest")], runs={7: []}), TARGET, [stream()], NOW)
+    assert [row.get("trigger_type") for row in rows] == [None]

@@ -159,6 +159,9 @@ def collect_target(client, target, jobs, now, code_version_tag="code_version", p
             job_rows, run = [_unreachable(target, job, job_id, err)], None
         extra = dict(_run_columns(run, now), job_tags=tags, code_version=_code_version(tags, code_version_tag, run),
                      pipeline_url=_job_parameter(run, pipeline_url_parameter))
+        if run is not None and extra.get("trigger_type") is None and job.schedule_type == "continuous":
+            # older databricks-sdk versions (serverless) do not know the CONTINUOUS trigger and parse it as None
+            extra["trigger_type"] = "CONTINUOUS"
         rows.extend(dict(row, **extra) for row in job_rows)
     return rows
 
