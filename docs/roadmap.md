@@ -6,7 +6,7 @@ The Watchdog is built in phases. Each phase keeps the `findings` table as the co
 
 - The schema, the config tables (`monitored_jobs`, `job_dependencies`, `monitored_workspaces`), the `findings` table and the `findings_latest` view.
 - Your monitored-jobs file loaded into the config tables.
-- Read-only explore notebooks for the system tables and the Jobs API.
+- Read-only explore notebooks for the system tables and the Jobs API (now in `notebooks/explore`).
 - Both scans, system tables and the Jobs API, writing to `findings`, with re-runs that never duplicate rows.
 - A validation notebook, and an on-demand bundle job that runs all of it.
 
@@ -35,6 +35,11 @@ Delivered in this release:
 - **The CI pipeline link.** `pipeline_url` on every finding, from a job parameter.
 - **A dashboard fix.** Notebook 08 creates the dashboard through the dashboards REST API, so it works on every SDK version.
 
+## Phase 1.3 (built)
+
+- **Retention.** The daily `watchdog_cleanup` job (notebook 10) deletes `findings` scans older than `scan.retention_days` (30 by default), always keeping each source's newest scan.
+- **A shorter main path.** The read-only exploration notebooks moved to `notebooks/explore`, and `watchdog_phase_1` now runs 00, 01, 02, 05, 06 and 07.
+
 ## Phase 2: incidents and more checks
 
 - **Incidents.** An incident view on top of `findings` that changes only when a job's status changes: it opens an incident when a job turns unhealthy, escalates it when it stays that way or gets worse, and records the recovery when the job is healthy again. Alerts in Phase 3 fire on these changes instead of on every scan.
@@ -42,7 +47,6 @@ Delivered in this release:
   - a stuck batch, or no new input, for continuous jobs;
   - a growing backlog over several scans;
   - connectivity probes for the services jobs depend on, such as a message broker or an API (the `service` entries in your dependency map). Notebook 09 is a template for these.
-- **Retention.** A rule and a job for deleting old scans from `findings`, since the schedule adds rows every 20 minutes.
 
 ## Phase 3: alerts
 

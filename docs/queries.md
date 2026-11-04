@@ -2,7 +2,7 @@
 
 Every SQL file in `sql/` holds one statement and starts with a comment that says what it does. This page adds the parameters, the columns it returns, how to read the result, and any temp view it needs. The views in `sql/views` are the one exception: they hold a template, explained below.
 
-The notebooks run these files with named parameters (`jobs_watchdog/sqlfiles.py`). Object names reach SQL only through `IDENTIFIER(:catalog || '.' || :schema || '.<table>')`, and the notebook checks that `catalog` and `schema` contain only letters, digits and underscores before anything runs. The only parameters are `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `code_version_tag` and `pipeline_url_parameter`.
+The notebooks run these files with named parameters (`jobs_watchdog/sqlfiles.py`). Object names reach SQL only through `IDENTIFIER(:catalog || '.' || :schema || '.<table>')`, and the notebook checks that `catalog` and `schema` contain only letters, digits and underscores before anything runs. The only parameters are `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `code_version_tag`, `pipeline_url_parameter` and `retention_days`.
 
 ## Running a file in the SQL editor
 
@@ -79,7 +79,7 @@ Made current by notebook 01, after the tables are upgraded. Notebook 01 creates 
 
 ## sql/explore
 
-Read-only. Notebook 03 runs them all; notebook 00 also runs `10`. Each takes `:lookback_hours` except `11` and `12`.
+Read-only. Notebook 03 (`notebooks/explore/03_explore_system_tables`) runs them all; notebook 00 also runs `10`. Each takes `:lookback_hours` except `11` and `12`.
 
 ### 10_workspaces_in_region.sql
 
@@ -201,3 +201,16 @@ Run by notebook 07. `:scan_id` works the same way in `40` and `42`: set it to ch
 - **Parameters:** `catalog`, `schema`, `scan_id`.
 - **Columns:** `job_name`, `source`.
 - **Read it:** expect no rows. It checks every job switched on in at least one environment: `enabled: true`, or `enabled: true` for a label in its `environments` section. The system table scan always writes `last_run_result` or `not_found` for such a job, and the Jobs API scan always writes `live_run_status`, `not_found` or `api_unreachable`. A row here names a job and the source that wrote nothing about it.
+
+## sql/maintenance
+
+Run by notebook 10, which the daily `watchdog_cleanup` job runs.
+
+### 50_delete_old_findings.sql
+
+Deletes old scans from `findings`, so it does not grow forever.
+
+- **Parameters:** `catalog`, `schema`, `retention_days`.
+- **Returns:** the merge counts, including `num_deleted_rows`.
+- **Read it:** a scan is old when its first row is more than `retention_days` days old. Each source's newest scan is always kept, and scans are deleted whole. `retention_days` `0` deletes nothing. It is a `MERGE ... WHEN MATCHED THEN DELETE`, because the scans to keep are found with a nested query, which `DELETE` does not allow.
+

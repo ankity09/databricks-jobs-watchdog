@@ -3,8 +3,8 @@
 Notebook 06 reads live job state from each workspace's Jobs API, through the Databricks SDK for
 Python. System tables give history for every workspace at once, about an hour behind. The Jobs API
 gives the run happening right now and the error text of failed tasks, one workspace at a time. The
-code is `jobs_watchdog/jobs_api.py`; notebook 04 walks one job through the same calls and shows the
-raw fields.
+code is `jobs_watchdog/jobs_api.py`; notebook 04 (`notebooks/explore/04_explore_jobs_api`) walks
+one job through the same calls and shows the raw fields.
 
 Nothing in this scan writes to a job. It only reads.
 

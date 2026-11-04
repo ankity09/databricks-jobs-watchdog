@@ -62,18 +62,19 @@ Use `findings_latest` for "what is wrong right now". The dashboard's Now and Ver
 In the catalog and schema you choose (schema `watchdog` by default):
 
 - `monitored_jobs`, `job_dependencies`, `monitored_workspaces` and `monitored_job_environments`: your config, loaded from a YAML file.
-- `findings`: the history, every scan, one row per job, check and source. Re-running a scan never adds duplicate rows.
+- `findings`: the history, every scan, one row per job, check and source. Re-running a scan never adds duplicate rows. Scans older than `scan.retention_days` (30 by default) are deleted once a day, except each source's newest.
 - `findings_latest`: a view of the newest scan from each source, the current status (see [History and current status](#history-and-current-status-findings-and-findings_latest)).
 
 Notebook `01_create_tables` creates these, and upgrades existing tables and the view in place. Run it after each pull; each scheduled run runs it too. The bundle does not own them, so they and your findings history survive a teardown unless you ask for the schema to be dropped.
 
 With the bundle (`databricks.yml`):
 
-- `watchdog_phase_1`: an on-demand job (no schedule) that runs notebooks 00 to 07 as serverless tasks. Use it for setup and validation.
+- `watchdog_phase_1`: an on-demand job (no schedule) that runs notebooks 00, 01, 02, 05, 06 and 07 as serverless tasks. Use it for setup and validation.
 - `watchdog_scan`: the scheduled scan. Every 20 minutes in UTC, it brings the tables and the view up to date (notebook 01), reloads your config (notebook 02), then runs both scans (notebooks 05 and 06). It is deployed paused.
+- `watchdog_cleanup`: once a day at 03:30 UTC, it deletes findings scans older than `scan.retention_days` days (notebook 10), keeping each source's newest scan. It is paused and unpaused with the scan (`scan.schedule_status`).
 - With `-t demo`, four sample jobs as well: `watchdog_demo_succeeds`, `watchdog_demo_fails` (its `load` task fails on purpose), `watchdog_demo_slow` and `watchdog_demo_retries`. Their schedules are paused too.
 
-Outside the bundle, you run two notebooks by hand. Notebook `08_create_dashboard` creates the "Watchdog findings" dashboard in your folder. Notebook `09_custom_check_example` is a template for your own checks.
+Outside the bundle, you run two notebooks by hand. Notebook `08_create_dashboard` creates the "Watchdog findings" dashboard in your folder. Notebook `09_custom_check_example` is a template for your own checks. The two exploration notebooks in `notebooks/explore` are also run by hand.
 
 Phase 1 creates no clusters, apps, alerts or secrets. The dashboard uses a SQL warehouse you already have. The scan job uses serverless compute unless you uncomment its custom-check task, which runs on a job cluster.
 
@@ -110,13 +111,14 @@ Both paths use the same notebooks. Settings come from `accelerator.yaml`: copy i
 | `00_check_access` | confirms system table and Jobs API access, and lists the workspaces this region covers; changes nothing |
 | `01_create_tables` | creates the schema, the tables and the view, and upgrades existing tables. **Run it after every pull.** |
 | `02_load_config` | loads your monitored-jobs file and shows which real jobs each entry matches |
-| `03_explore_system_tables` | runs each read-only query in `sql/explore`, with notes |
-| `04_explore_jobs_api` | walks one job through the three Jobs API calls |
 | `05_scan_system_tables` | writes the system table findings |
 | `06_scan_jobs_api` | writes the Jobs API findings |
 | `07_validate_phase_1` | prints PASS or FAIL for each Phase 1 check |
 | `08_create_dashboard` | optional: creates or updates the "Watchdog findings" dashboard and publishes it |
 | `09_custom_check_example` | optional: a template for your own checks, such as service connectivity |
+| `10_delete_old_findings` | deletes findings scans older than `retention_days`, keeping each source's newest; the `watchdog_cleanup` job runs it daily |
+
+To look at the raw data behind a finding, two read-only notebooks in `notebooks/explore` help: `03_explore_system_tables` runs each query in `sql/explore`, with notes, and `04_explore_jobs_api` walks one job through the three Jobs API calls. They are not part of the main path.
 
 Each notebook takes its inputs from widgets (input boxes) at the top, with defaults from `accelerator.local.yaml` (or `accelerator.yaml`). Give notebooks 05 and 06 the same `scan_id` to make one scan across both sources, or leave it empty in both: notebook 07 then checks each source's newest scan.
 
@@ -134,7 +136,7 @@ databricks bundle run watchdog_phase_1 -t dev --profile <your-profile>
 
 `scripts/bundle_vars.py` turns `accelerator.local.yaml` into `BUNDLE_VAR_*` environment variables, which the CLI reads as bundle variables. Each job passes its run ID as `scan_id`, so both scans in one run share one scan.
 
-**The schedule.** `watchdog_scan` is deployed paused. After `watchdog_phase_1` has passed in your workspace, set `scan.schedule_status` to `UNPAUSED` in `accelerator.local.yaml`, run the `eval` line again, and deploy again. `scan.schedule` sets the Quartz cron, in UTC; it is every 20 minutes by default. Each run brings the tables up to date first, so a deploy that adds columns needs no manual step. The [runbook](docs/phase-1-runbook.md#schedule-the-scan) explains what each run does.
+**The schedule.** `watchdog_scan` and `watchdog_cleanup` are deployed paused. After `watchdog_phase_1` has passed in your workspace, set `scan.schedule_status` to `UNPAUSED` in `accelerator.local.yaml`, run the `eval` line again, and deploy again. `scan.schedule` sets the Quartz cron, in UTC; it is every 20 minutes by default. Each run brings the tables up to date first, so a deploy that adds columns needs no manual step. The [runbook](docs/phase-1-runbook.md#schedule-the-scan) explains what each run does.
 
 **The dashboard.** Notebook 08 creates it. Run it in the workspace after the first scan has written rows, with a SQL warehouse ID in its `warehouse_id` box. The [runbook](docs/phase-1-runbook.md#build-the-dashboard-notebook-08) has the steps.
 
@@ -186,16 +188,18 @@ Both targets use development mode, so deployed names start with `[dev <your name
 accelerator.yaml       the settings you review; copy to accelerator.local.yaml
 DEPLOY.md              Genie Code playbook
 databricks.yml         bundle: dev and demo targets
-resources/             watchdog_phase_1 (on demand) and watchdog_scan (scheduled)
+resources/             watchdog_phase_1 (on demand), watchdog_scan and watchdog_cleanup (scheduled)
 teardown.sh            bundle destroy, plus an optional schema drop
 config/                example monitored-jobs file
 dashboards/            the dashboard template that notebook 08 publishes
-notebooks/             00 to 09, plus _setup (shared widgets and paths)
+notebooks/             00 to 02 and 05 to 10, plus _setup (shared widgets and paths)
+notebooks/explore/     03 and 04, read-only exploration, run by hand
 sql/setup/             schema and table DDL
 sql/config/            loads the config tables
 sql/explore/           read-only system table queries
 sql/scan/              system table checks and the findings merge
 sql/validate/          checks used by notebook 07
+sql/maintenance/       deletes old findings scans (notebook 10)
 sql/views/             the findings_latest view, created by notebook 01
 jobs_watchdog/         Python package the notebooks use
 demo/                  the four sample job notebooks

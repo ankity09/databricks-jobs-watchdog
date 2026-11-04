@@ -1,6 +1,8 @@
 # Phase 1, end to end: check access, create the tables, load the config,
-# explore both sources, scan both, and validate. On demand only. The scheduled
-# scan is watchdog_scan (resources/watchdog_scan.job.yml). Every task runs on
+# scan both sources, and validate (notebooks 00, 01, 02, 05, 06 and 07). On
+# demand only. The scheduled scan is watchdog_scan
+# (resources/watchdog_scan.job.yml). The exploration notebooks in
+# notebooks/explore are run by hand, not by a job. Every task runs on
 # serverless compute.
 #
 # The job parameters reach every notebook as widgets. scan_id is the job's
@@ -50,16 +52,6 @@ resources:
             - task_key: create_tables
           notebook_task:
             notebook_path: ../notebooks/02_load_config.py
-        - task_key: explore_system_tables
-          depends_on:
-            - task_key: load_config
-          notebook_task:
-            notebook_path: ../notebooks/03_explore_system_tables.py
-        - task_key: explore_jobs_api
-          depends_on:
-            - task_key: load_config
-          notebook_task:
-            notebook_path: ../notebooks/04_explore_jobs_api.py
         - task_key: scan_system_tables
           depends_on:
             - task_key: load_config

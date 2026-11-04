@@ -1,0 +1,30 @@
+# Daily cleanup: deletes findings scans older than retention_days (30 by
+# default), keeping each source's newest scan, so the findings table does not
+# grow forever and findings_latest never goes empty (notebook 10,
+# sql/maintenance/50_delete_old_findings.sql). retention_days 0 keeps
+# everything.
+#
+# Its schedule follows the scan's: PAUSED unless scan.schedule_status is
+# UNPAUSED in accelerator.local.yaml (or --var scan_schedule_status=UNPAUSED).
+# It runs at 03:30 UTC. The one task runs on serverless compute.
+resources:
+  jobs:
+    watchdog_cleanup:
+      name: watchdog_cleanup
+      description: "Watchdog cleanup once a day: delete findings scans older than retention_days, keeping each source's newest scan"
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 30 3 * * ?"  # every day at 03:30 UTC
+        timezone_id: UTC
+        pause_status: ${var.scan_schedule_status}
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: retention_days
+          default: ${var.retention_days}
+      tasks:
+        - task_key: delete_old_findings
+          notebook_task:
+            notebook_path: ../notebooks/10_delete_old_findings.py

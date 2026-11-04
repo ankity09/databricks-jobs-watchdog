@@ -4,7 +4,7 @@
 # MAGIC
 # MAGIC **What it does.** Runs each read-only query in `sql/explore`, with a note on what it answers. These are the same tables the system table scan (notebook 05) reads, so this is the place to see the raw data behind a finding. Nothing is written.
 # MAGIC
-# MAGIC **Inputs (widgets).** `lookback_hours` (how far back to look). The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
+# MAGIC **Inputs (widgets).** `lookback_hours` (how far back to look). The input boxes appear at the top of the notebook after you run the first two code cells. This notebook is in `notebooks/explore` and is run by hand: no job runs it.
 # MAGIC
 # MAGIC **What to look for.** Your jobs and runs appear as you expect. System tables run about an hour behind, so very recent runs are missing until they land. Every query also runs in the SQL editor, which shows a field for each `:parameter`.
 # MAGIC
@@ -12,7 +12,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run ./_setup
+# MAGIC %run ../_setup
 
 # COMMAND ----------
 

@@ -4,8 +4,8 @@
 #   ./teardown.sh [-t dev|demo] [-p profile] [--drop-schema] [-y]
 #
 # Default: `databricks bundle destroy` for the target, which deletes the
-# watchdog_phase_1 and watchdog_scan jobs (and, for -t demo, the four demo
-# jobs) and the bundle's workspace files. It does not delete the dashboard
+# watchdog_phase_1, watchdog_scan and watchdog_cleanup jobs (and, for -t demo,
+# the four demo jobs) and the bundle's workspace files. It does not delete the dashboard
 # from notebook 08; move that to the trash in the workspace yourself.
 #
 # --drop-schema also drops <catalog>.<schema> with its tables and view
