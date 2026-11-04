@@ -73,8 +73,9 @@ def test_write_config_loads_the_views_then_the_tables():
     spark = FakeSpark()
     write_config(spark, [JOB], [DEP], "main", "watchdog", [WS])
     assert spark.views[JOBS_VIEW].data == [("orders", "^orders$", "scheduled", 90, 60, 1, "CRITICAL", "data-team",
-                                            True, "hourly", "test", 10)]
-    assert spark.views[ENVIRONMENTS_VIEW].data == [("orders", "lower", "WARNING", None, False, None, None, None, None)]
+                                            True, "hourly", "test", 10, None)]
+    assert spark.views[ENVIRONMENTS_VIEW].data == [("orders", "lower", "WARNING", None, False, None, None, None, None,
+                                                    None)]
     assert spark.views[JOBS_VIEW].schema.startswith("job_name STRING, job_name_regex STRING")
     assert spark.views[DEPENDENCIES_VIEW].data == [("orders", "kafka", "service", "events")]
     assert spark.views[WORKSPACES_VIEW].data == [("1234", None, "production", "main one")]
@@ -98,7 +99,7 @@ def test_read_config_rebuilds_jobs_and_dependencies():
                "loaded_at": None}
     env_row = {"job_name": "orders", "environment": "lower", "severity": "WARNING", "owner": None, "enabled": False,
                "max_gap_minutes": None, "max_runtime_minutes": None, "max_retries": None, "min_attempt_minutes": None,
-               "loaded_at": None}
+               "loaded_at": None, "job_ids": None}
     spark = FakeSpark({"main.watchdog.monitored_jobs": [job_row], "main.watchdog.job_dependencies": [dep_row],
                        "main.watchdog.monitored_job_environments": [env_row]})
     jobs, deps = read_config(spark, "main", "watchdog")
@@ -112,3 +113,29 @@ def test_read_workspaces():
            "loaded_at": None}
     spark = FakeSpark({"main.watchdog.monitored_workspaces": [row]})
     assert read_workspaces(spark, "main", "watchdog") == [MonitoredWorkspace("1234", None, "production", "")]
+
+
+PINNED = MonitoredJob("orders", "^orders$", "scheduled", 90, None, None, "WARNING", "", True, "", None, None,
+                      {"lower": {"job_ids": ("333",)}}, ("111", "222"))
+
+
+def test_write_config_stores_job_ids_as_lists():
+    spark = FakeSpark()
+    write_config(spark, [PINNED], [], "main", "watchdog")
+    assert spark.views[JOBS_VIEW].data[0][-1] == ["111", "222"]
+    assert spark.views[ENVIRONMENTS_VIEW].data == [("orders", "lower", None, None, None, None, None, None, None,
+                                                    ["333"])]
+    assert "job_ids ARRAY<STRING>" in spark.views[JOBS_VIEW].schema
+
+
+def test_read_config_rebuilds_job_ids_as_tuples():
+    job_row = {name: getattr(PINNED, name) for name, _ in JOB_COLUMNS} | {"job_ids": ["111", "222"]}
+    env_row = {"job_name": "orders", "environment": "lower", "severity": None, "owner": None, "enabled": None,
+               "max_gap_minutes": None, "max_runtime_minutes": None, "max_retries": None, "min_attempt_minutes": None,
+               "loaded_at": None, "job_ids": ["333"]}
+    spark = FakeSpark({"main.watchdog.monitored_jobs": [job_row], "main.watchdog.job_dependencies": [],
+                       "main.watchdog.monitored_job_environments": [env_row]})
+    (job,), _ = read_config(spark, "main", "watchdog")
+    assert job.job_ids == ("111", "222")
+    assert job.environments == {"lower": {"job_ids": ("333",)}}
+    assert job.settings_for("lower").job_ids == ("333",)

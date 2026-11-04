@@ -18,12 +18,12 @@ ACCELERATOR_SECTIONS = ("metadata", "target", "auth", "scan", "resources", "feat
 JOB_KEYS = {
     "job_name", "job_name_regex", "job_name_exclude_regex", "schedule_type", "max_gap_minutes",
     "max_runtime_minutes", "max_retries", "min_attempt_minutes", "severity", "owner", "enabled", "notes",
-    "environments",
+    "environments", "job_ids",
 }
-DEFAULT_KEYS = JOB_KEYS - {"job_name", "job_name_regex", "environments"}
+DEFAULT_KEYS = JOB_KEYS - {"job_name", "job_name_regex", "environments", "job_ids"}
 # settings an environment can override for one job
 OVERRIDE_KEYS = ("severity", "owner", "enabled", "max_gap_minutes", "max_runtime_minutes", "max_retries",
-                 "min_attempt_minutes")
+                 "min_attempt_minutes", "job_ids")
 
 
 class ConfigError(Exception):
@@ -46,9 +46,15 @@ class MonitoredJob:
     min_attempt_minutes: int | None = None
     # environment label -> {setting: value}, from the job's environments section
     environments: dict = field(default_factory=dict, hash=False)
+    # job IDs to check instead of matching names; an environment can list its own
+    job_ids: tuple = ()
 
     def settings_for(self, environment):
-        """This job with the overrides for one environment label applied."""
+        """This job with the overrides for one environment label applied.
+
+        Its job_ids are then the IDs that apply in that environment: the
+        environment's own list when it sets one, otherwise the job's.
+        """
         overrides = self.environments.get(environment) if environment else None
         return replace(self, **overrides) if overrides else self
 
@@ -56,6 +62,14 @@ class MonitoredJob:
     def active(self):
         """True when the job is checked in at least one environment."""
         return self.enabled or any(o.get("enabled") for o in self.environments.values())
+
+    @property
+    def listed_job_ids(self):
+        """Every job ID this entry lists, at job level or for any environment."""
+        ids = set(self.job_ids)
+        for overrides in self.environments.values():
+            ids.update(overrides.get("job_ids") or ())
+        return tuple(sorted(ids))
 
 
 @dataclass(frozen=True)
@@ -105,6 +119,23 @@ def _compiled(raw, name, field):
     except re.error as err:
         raise ConfigError(f"job {name}: {field} does not compile: {err}") from err
     return raw
+
+
+def _parse_job_ids(raw, where):
+    """A list of job IDs as digit strings; YAML may give them as numbers or strings."""
+    if not isinstance(raw, list) or not raw:
+        raise ConfigError(f"{where}: job_ids must be a list of one or more job IDs, got {raw!r}")
+    ids = []
+    for value in raw:
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise ConfigError(f"{where}: job_ids must be whole numbers, got {value!r}")
+        text = str(value).strip()
+        if not text.isdigit():
+            raise ConfigError(f"{where}: job_ids must be whole numbers, got {value!r}")
+        if text in ids:
+            raise ConfigError(f"{where}: job ID {text} is listed twice")
+        ids.append(text)
+    return tuple(ids)
 
 
 def _check_severity(value, where):
@@ -158,6 +189,8 @@ def _parse_environments(raw, name, labels):
                 values[key] = _check_enabled(value, where)
             elif key == "owner":
                 values[key] = str(value or "")
+            elif key == "job_ids":
+                values[key] = _parse_job_ids(value, where)
             else:
                 values[key] = _optional_int(value, name, f"environments.{label}.{key}")
         parsed[label] = values
@@ -172,6 +205,7 @@ def _parse_job(raw, defaults=None, labels=()):
     if unknown:
         raise ConfigError(f"job {name}: unknown keys {unknown}; allowed: {sorted(JOB_KEYS)}")
     environments = _parse_environments(raw.get("environments"), name, set(labels))
+    job_ids = _parse_job_ids(raw["job_ids"], f"job {name}") if raw.get("job_ids") is not None else ()
     raw = {**(defaults or {}), **raw}
     regex = _compiled(raw.get("job_name_regex") or f"^{re.escape(name)}$", name, "job_name_regex")
     exclude = raw.get("job_name_exclude_regex")
@@ -198,6 +232,7 @@ def _parse_job(raw, defaults=None, labels=()):
         job_name_exclude_regex=exclude,
         min_attempt_minutes=_optional_int(raw.get("min_attempt_minutes"), name, "min_attempt_minutes"),
         environments=environments,
+        job_ids=job_ids,
     )
 
 

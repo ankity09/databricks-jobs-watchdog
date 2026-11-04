@@ -1,8 +1,9 @@
 """Read job health from the Jobs API, one workspace at a time.
 
 For each enabled monitored job, the collector finds the matching jobs in the
-workspace (jobs.list plus the job's regex), reads the newest run, pages through
-its tasks, and fetches the error text of failed tasks. It returns
+workspace (jobs.list, then the job IDs that apply in the workspace's
+environment, or the job's regex where none apply), reads the newest run, pages
+through its tasks, and fetches the error text of failed tasks. It returns
 findings-shaped dicts with source JOBS_API; findings.finalize_rows fills the
 columns that are the same for the whole scan. Nothing here writes to Databricks.
 
@@ -35,6 +36,14 @@ _NOT_HERE = (
 _NOWHERE = (
     "No job that this identity can see in any of the {count} workspaces checked matches {regex}. "
     "Check the regex, and CAN VIEW on the job."
+)
+_IDS_NOT_HERE = (
+    "None of the listed job IDs ({ids}) is a job that this identity can see in this workspace. "
+    "Check the IDs, and that the identity has CAN VIEW on the job."
+)
+_IDS_NOWHERE = (
+    "No job that this identity can see in any of the {count} workspaces checked matches {what}. "
+    "A job deleted and created again gets a new ID. Check the IDs, and CAN VIEW on the job."
 )
 
 
@@ -74,14 +83,17 @@ def make_client(mode, host, client_id, client_secret):
 
 
 def resolve_jobs(client, jobs):
-    """Match each monitored job's regex against the job names in a workspace.
+    """Match each monitored job against the jobs in a workspace.
 
-    Returns (monitored_job, job_id, real_name, tags) tuples: one per matching
-    job, or (monitored_job, None, None, None) when nothing matches. The regex
-    can match anywhere in the name, like regexp_like in the system table scan,
-    so it also matches names that a bundle's development mode prefixes. Names
-    matching the job's job_name_exclude_regex (for example test copies) are
-    skipped.
+    Pass jobs with their overrides for this workspace's environment applied
+    (MonitoredJob.settings_for). A job with job_ids matches exactly those IDs;
+    the regex and the exclusion are not used. Any other job matches by its
+    regex. Returns (monitored_job, job_id, real_name, tags) tuples: one per
+    matching job, or (monitored_job, None, None, None) when nothing matches.
+    The regex can match anywhere in the name, like regexp_like in the system
+    table scan, so it also matches names that a bundle's development mode
+    prefixes. Names matching the job's job_name_exclude_regex (for example test
+    copies) are skipped.
     """
     listed = []
     for job in client.jobs.list(limit=100):
@@ -91,9 +103,13 @@ def resolve_jobs(client, jobs):
             listed.append((job.job_id, name, getattr(settings, "tags", None) or None))
     resolved = []
     for monitored in jobs:
-        pattern = re.compile(monitored.job_name_regex)
-        exclude = re.compile(monitored.job_name_exclude_regex) if monitored.job_name_exclude_regex else None
-        hits = [hit for hit in listed if pattern.search(hit[1]) and not (exclude and exclude.search(hit[1]))]
+        if monitored.job_ids:
+            wanted = set(monitored.job_ids)
+            hits = [hit for hit in listed if str(hit[0]) in wanted]
+        else:
+            pattern = re.compile(monitored.job_name_regex)
+            exclude = re.compile(monitored.job_name_exclude_regex) if monitored.job_name_exclude_regex else None
+            hits = [hit for hit in listed if pattern.search(hit[1]) and not (exclude and exclude.search(hit[1]))]
         if hits:
             resolved.extend((monitored, job_id, name, tags) for job_id, name, tags in hits)
         else:
@@ -131,7 +147,10 @@ def collect_target(client, target, jobs, now, code_version_tag="code_version", p
     rows = []
     for job, job_id, _real_name, tags in resolved:
         if job_id is None:
-            summary = _NOT_HERE.format(regex=job.job_name_regex)
+            if job.job_ids:
+                summary = _IDS_NOT_HERE.format(ids=", ".join(job.job_ids))
+            else:
+                summary = _NOT_HERE.format(regex=job.job_name_regex)
             rows.append(_row(target, job, None, "not_found", "UNKNOWN", error_summary=summary))
             continue
         try:
@@ -189,9 +208,11 @@ def merge_not_found(rows, jobs):
     workspace. Workspaces that could not be read (api_unreachable) do not
     count as checked. A job with no rows at all, because it is switched off in
     the environment of every workspace checked, gets one not_found row, so it
-    never disappears silently.
+    never disappears silently. For a job that lists job IDs, finding any of
+    them in any workspace counts as found: in current_workspace mode the scan
+    cannot tell which listed IDs belong to the workspaces it did not check.
     """
-    regex = {job.job_name: job.job_name_regex for job in jobs}
+    regex = {job.job_name: _wanted(job) for job in jobs}
     found = {row["job_name"] for row in rows if row.get("job_id") is not None}
     misses = {}
     for row in rows:
@@ -208,7 +229,9 @@ def merge_not_found(rows, jobs):
             merged.append(row)
         else:
             collapsed.add(name)
-            summary = _NOWHERE.format(count=misses[name], regex=regex.get(name, name))
+            wanted, by_ids = regex.get(name, (name, False))
+            template = _IDS_NOWHERE if by_ids else _NOWHERE
+            summary = template.format(count=misses[name], regex=wanted, what=wanted)
             merged.append(dict(row, workspace_id=None, workspace_name=None, environment=None, error_summary=summary))
     seen = {row["job_name"] for row in merged}
     nowhere = Target(None, None, None, None)
@@ -218,6 +241,16 @@ def merge_not_found(rows, jobs):
                 f"No workspace checked has {job.job_name} switched on: it is switched off in their environments, "
                 "or no workspace could be checked.")))
     return merged
+
+
+def _wanted(job):
+    """What a merged not_found row says the job was looked for by, and whether job IDs are involved."""
+    if job.job_ids:
+        return f"the listed job IDs ({', '.join(job.job_ids)})", True
+    ids = job.listed_job_ids
+    if ids:
+        return f"{job.job_name_regex} or the listed job IDs ({', '.join(ids)})", True
+    return job.job_name_regex, False
 
 
 def _job_rows(client, target, job, job_id, now):

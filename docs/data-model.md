@@ -31,7 +31,7 @@ One row per job you want checked.
 | Column | Type | Meaning |
 |---|---|---|
 | `job_name` | STRING, required | Short logical name. It appears on every finding and alert. Unique in the file. |
-| `job_name_regex` | STRING, required | Matches the job's real name in each workspace. Left out, it is `^<job_name>$`. |
+| `job_name_regex` | STRING, required | Matches the job's real name in each workspace where no `job_ids` apply. Left out, it is `^<job_name>$`. |
 | `job_name_exclude_regex` | STRING | Optional. A job whose real name matches this is skipped, even when `job_name_regex` matches it. Use it for test copies. |
 | `schedule_type` | STRING, required | `scheduled` or `continuous`. Left out, it is `scheduled`. Only scheduled jobs get the `schedule_gap` check. |
 | `max_gap_minutes` | INT | Scheduled jobs: the longest allowed time between run starts. Required for scheduled jobs. |
@@ -43,15 +43,25 @@ One row per job you want checked.
 | `enabled` | BOOLEAN, required | `true` or `false`, written without quotes. Any other value stops the load. `false` keeps the entry in the table without checking it. Left out, it is `true`. The job's `environments` section can switch it off, or on, in one environment. |
 | `notes` | STRING | Free text. |
 | `loaded_at` | TIMESTAMP, required | When notebook 02 loaded the row. |
+| `job_ids` | ARRAY&lt;STRING&gt; | Optional. The exact jobs to check, by job ID, instead of matching names. Where job IDs apply, `job_name_regex` and `job_name_exclude_regex` are not used. NULL when the job lists none. The job's `environments` section can list other IDs for one environment. |
 
 A setting a job leaves out comes from the file's `defaults` section when that sets it, and otherwise from the built-in default above ("Left out, it is ...").
 
 About `job_name_regex` and `job_name_exclude_regex`:
 
 - Each can match anywhere in the name unless you anchor it with `^` and `$`. That is on purpose: a bundle deployed in development mode adds a `[dev <user>]` prefix, and an unanchored regex still matches.
-- `job_name_regex` can match several jobs, in one workspace or in many. Each match gets its own findings rows, with its workspace and job ID, so one entry covers a job in every workspace where it runs and you never list job IDs. Excluded names get none.
+- `job_name_regex` can match several jobs, in one workspace or in many. Each match gets its own findings rows, with its workspace and job ID, so one entry covers a job in every workspace where it runs without listing job IDs. Excluded names get none.
+- When two or more jobs that a job's pattern matches in one workspace have exactly the same name, the system table scan writes a `duplicate_name` WARNING for that workspace. Different names (variants, copies in other workspaces) are normal and not flagged.
 - The system table scan matches with Spark's `regexp_like`; the Jobs API scan matches with Python's `re.search`. Simple patterns (letters, `^`, `$`, `|`, groups, character classes) behave the same in both. Avoid engine-specific syntax in either field.
 - The example config sets `job_name_exclude_regex: "_test(_|$)"` in its `defaults` section, so every job skips test copies. It uses `_test(_|$)` rather than a bare `test`, because a bare `test` would also match names such as `daily_revenue_report_latest` and `contest`.
+
+About `job_ids`:
+
+- In each workspace, the job IDs that apply are the ones the job's `environments` section lists for that workspace's label, otherwise the job's own `job_ids`. Where IDs apply, the job matches exactly those jobs; everywhere else it matches by name. So one entry can pin production by ID and still find lower-environment copies by name.
+- List them in YAML as numbers or strings; they are stored as strings of digits. A list must hold at least one ID, and an ID cannot appear twice in one list. `defaults` cannot set them.
+- A job keeps its job ID for as long as it exists, including through a bundle deployment that updates it. A job that is deleted and created again, or created by code each time, gets a new ID: match those by name.
+- When one file serves several regions, list job IDs per environment rather than at job level, so a Watchdog does not look for another region's IDs.
+- The system table scan reports listed IDs it cannot find with `not_found` (see [Checks](#checks)).
 
 ## monitored_workspaces
 
@@ -92,6 +102,7 @@ One row per job and environment label: the settings that job changes in that env
 | `max_retries` | INT | The retry limit in this environment. |
 | `min_attempt_minutes` | INT | The shortest allowed attempt before a retry in this environment. |
 | `loaded_at` | TIMESTAMP, required | When notebook 02 loaded the row. |
+| `job_ids` | ARRAY&lt;STRING&gt; | The job IDs to check in this environment, instead of the job's own `job_ids` or its name pattern. |
 
 An empty column means the job's own setting applies. Two entries from the example file, trimmed to the parts that matter here:
 
@@ -108,11 +119,11 @@ An empty column means the job's own setting applies. Two entries from the exampl
 How the overrides apply:
 
 - Each finding uses the settings for its workspace's environment label. A workspace with no label, and a row with no workspace, use the job's own settings.
-- Each label must be defined in the `workspaces` section. An undefined label, or a key other than the seven settings above, stops the load with a message that names it.
+- Each label must be defined in the `workspaces` section. An undefined label, or a key other than the eight settings above, stops the load with a message that names it.
 - A job switched off in an environment is not checked in that environment's workspaces, and gets no rows there.
 - A job is checked wherever it is switched on: `enabled: false` with `environments: {production: {enabled: true}}` checks it in production workspaces only.
 - A job switched on in some environment that a scan finds only where it is switched off still gets one `not_found` row, so it never drops out of the findings unnoticed. The system table scan says `Every job in this region that matches <regex> is in an environment where this job is switched off.` The Jobs API scan says `No workspace checked has <job_name> switched on: it is switched off in their environments, or no workspace could be checked.`
-- The system table scan uses `enabled`, `severity`, `owner`, `max_gap_minutes` and `max_runtime_minutes`. The Jobs API scan, which has no schedule check, uses `enabled`, `severity`, `owner`, `max_runtime_minutes`, `max_retries` and `min_attempt_minutes`.
+- The system table scan uses `enabled`, `severity`, `owner`, `max_gap_minutes`, `max_runtime_minutes` and `job_ids`. The Jobs API scan, which has no schedule check, uses `enabled`, `severity`, `owner`, `max_runtime_minutes`, `max_retries`, `min_attempt_minutes` and `job_ids`.
 
 ## job_dependencies
 
@@ -185,6 +196,7 @@ The same rules apply to both sources (`jobs_watchdog/states.py` holds them, and 
 |---|---|
 | status is HEALTHY | `NONE` |
 | status is UNKNOWN | `COVERAGE` |
+| `duplicate_name` | `COVERAGE` |
 | `long_runtime` or `live_long_runtime` | `SLA_EXCEEDED` |
 | `schedule_gap` | `SCHEDULE_GAP` |
 | `retry_loop` | `RETRY_LOOP` |
@@ -305,7 +317,8 @@ System tables cover every workspace in the account and region, and run about an 
 | `task_failures` | Tasks in the job's newest run whose newest attempt ended FAILED, ERROR or TIMED_OUT. A task retried to success is not counted, and a newer run settles failures in older runs. | FAILED, with `failed_task_keys` | always |
 | `schedule_gap` | Minutes since the newest run started, against `max_gap_minutes` plus 60 minutes of allowance for system table lag. | FAILED for CRITICAL jobs, WARNING for WARNING jobs. UNKNOWN when no run is in the window and the limit is longer than the window. | scheduled jobs only |
 | `long_runtime` | Runs still going, plus the newest finished run, against `max_runtime_minutes`, each measured up to its newest system table record. | WARNING | `max_runtime_minutes` is set |
-| `not_found` | The regex matches no job in the region, or matches only in environments where the job is switched off. The summary says which. | UNKNOWN, with no workspace or job ID | once per job switched on somewhere that has no match where it is switched on |
+| `duplicate_name` | Jobs matched by name: two or more of them in one workspace with exactly the same name. The summary names each duplicated name and its job IDs. Jobs matched by `job_ids` are not checked. | WARNING, with no job ID | once per job and workspace with duplicates |
+| `not_found` | The regex matches no job in the region, or matches only in environments where the job is switched off, or listed job IDs that apply in this region are missing. The summary says which: for IDs, `2 of 3 listed job IDs were not found in this region: 111, 222.` | UNKNOWN, with no workspace or job ID | once per job switched on somewhere that has no match where it is switched on, or that misses a listed job ID |
 
 Run lengths come from the timeline rows, as described in [Run timing](#run-timing). That keeps a finished run whose last hourly row is late from looking long.
 
@@ -321,10 +334,10 @@ The Jobs API is live. It shows a run that started a minute ago, and the error te
 | `live_task_failures` | Failed tasks in the newest run, even while the run continues, judged on each task's newest attempt. | FAILED, with `failed_task_keys` and the error text | the job has runs |
 | `live_long_runtime` | The newest run, if it is still going, against `max_runtime_minutes`. | WARNING | the job has runs and `max_runtime_minutes` is set |
 | `retry_loop` | In the newest run: each task's newest attempt number against `max_retries`, and each attempt that was then retried against `min_attempt_minutes`. | WARNING, with the tasks in `failed_task_keys` | the job has runs and `max_retries` or `min_attempt_minutes` is set |
-| `not_found` | No job this identity can see matches the regex in the workspaces that answered, or no workspace checked has the job switched on. | UNKNOWN | once per unmatched job, as described below |
+| `not_found` | No job this identity can see matches the regex, or has one of the listed job IDs, in the workspaces that answered, or no workspace checked has the job switched on. | UNKNOWN | once per unmatched job, as described below |
 | `api_unreachable` | A workspace or job could not be read. The scan carries on with the rest. | UNKNOWN, with the error in `error_summary` | on errors only |
 
-The Jobs API scan writes `not_found` (UNKNOWN) for a monitored job that matches no job in the workspaces it checked. Only workspaces that answered count. With one workspace the row carries that workspace's ID. With several, a job found in any of them gets no `not_found` row, and a job that two or more answering workspaces did not find gets one row with no workspace, saying how many workspaces were checked. A workspace that could not be read does not count as checked: it gets `api_unreachable` rows instead. A job switched on in some environment, but in none of the workspaces checked, gets one `not_found` row with no workspace that says so. [jobs-api.md](jobs-api.md) has the field-by-field detail.
+The Jobs API scan writes `not_found` (UNKNOWN) for a monitored job that matches no job in the workspaces it checked. Only workspaces that answered count. With one workspace the row carries that workspace's ID. With several, a job found in any of them gets no `not_found` row, and a job that two or more answering workspaces did not find gets one row with no workspace, saying how many workspaces were checked. A workspace that could not be read does not count as checked: it gets `api_unreachable` rows instead. A job switched on in some environment, but in none of the workspaces checked, gets one `not_found` row with no workspace that says so. For a job that lists job IDs, finding any of them counts as found: with one workspace checked, the scan cannot tell which IDs belong to the others, so missing IDs are reported by the system table scan only. [jobs-api.md](jobs-api.md) has the field-by-field detail.
 
 ## Example rows
 

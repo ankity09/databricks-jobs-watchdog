@@ -80,6 +80,8 @@ _CHECK_CATEGORY = {
     "live_long_runtime": "SLA_EXCEEDED",
     "schedule_gap": "SCHEDULE_GAP",
     "retry_loop": "RETRY_LOOP",
+    # two jobs with one name: the Watchdog cannot tell which copy is the real one
+    "duplicate_name": "COVERAGE",
 }
 
 

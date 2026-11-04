@@ -300,3 +300,12 @@ def test_demo_jobs_carry_a_code_version_tag_like_a_ci_deploy(name):
 def test_demo_jobs_carry_a_pipeline_url_parameter_like_a_ci_deploy(name):
     defaults = {p["name"]: p["default"] for p in demo_jobs()[name].get("parameters", [])}
     assert defaults["PIPELINE_URL"] == "${bundle.git.origin_url}"
+
+
+def test_example_config_pins_one_environment_by_job_id():
+    jobs = {job.job_name: job for job in load_monitored_jobs(EXAMPLE_CONFIG)[0]}
+    enrich = jobs["orders_enrich"]
+    assert enrich.settings_for("production").job_ids == ("123456789012345", "234567890123456")
+    assert enrich.settings_for("lower").job_ids == ()
+    assert "job_ids" in EXAMPLE_CONFIG.read_text().split("\ndefaults:")[0]  # documented in the header
+

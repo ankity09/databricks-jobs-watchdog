@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema || '.monitored_
   notes STRING,
   loaded_at TIMESTAMP NOT NULL COMMENT 'When this row was loaded from the YAML file',
   job_name_exclude_regex STRING COMMENT 'Job names matching this are skipped, for example test copies',
-  min_attempt_minutes INT COMMENT 'A task attempt that ran shorter than this before a retry counts as a retry loop'
+  min_attempt_minutes INT COMMENT 'A task attempt that ran shorter than this before a retry counts as a retry loop',
+  job_ids ARRAY<STRING> COMMENT 'Job IDs to check instead of matching names; empty means match by job_name_regex'
 )
 COMMENT 'Watchdog config: jobs to check'

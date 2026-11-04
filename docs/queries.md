@@ -145,8 +145,8 @@ Which real jobs each monitored job matches. Notebook 02 shows it after loading t
 
 - **Parameters:** `catalog`, `schema`.
 - **Needs:** the temp view `watchdog_workspace_names`, which notebook 02 creates before it runs this query. Workspace labels by name need it.
-- **Columns:** `job_name`, `enabled`, `job_name_regex`, `job_name_exclude_regex`, `workspace_id`, `environment`, `checked_here`, `job_id`, `matched_job_name`, `run_as`.
-- **Read it:** one row per monitored job and matching job. Names matching `job_name_exclude_regex` are left out, as the scans leave them out. `environment` is the label of the match's workspace, and `checked_here` says whether the job is switched on there: its `enabled`, unless its `environments` section sets `enabled` for that label. A match with `checked_here` false gets no findings. A monitored job with empty workspace and job columns matches nothing, and the system table scan will report it as `not_found`. Fix its regex, or wait an hour if the job is new.
+- **Columns:** `job_name`, `enabled`, `job_name_regex`, `job_name_exclude_regex`, `job_ids`, `workspace_id`, `environment`, `checked_here`, `matched_by`, `job_id`, `matched_job_name`, `same_name_jobs`, `run_as`.
+- **Read it:** one row per monitored job and matching job. In each workspace a job matches by ID where `job_ids` apply (its environment's list, otherwise its own) and by name elsewhere; `matched_by` says which. Names matching `job_name_exclude_regex` are left out of name matches, as the scans leave them out. `same_name_jobs` counts the jobs in that workspace with exactly the matched name: above 1 on a name match, the system table scan writes a `duplicate_name` warning. `environment` is the label of the match's workspace, and `checked_here` says whether the job is switched on there: its `enabled`, unless its `environments` section sets `enabled` for that label. A match with `checked_here` false gets no findings. A monitored job with empty workspace and job columns matches nothing, and the system table scan will report it as `not_found`. Fix its regex, or wait an hour if the job is new.
 
 ### 21_system_table_findings.sql
 
@@ -155,18 +155,20 @@ The system table checks, shaped as findings rows. Notebook 05 runs it, saves the
 - **Parameters:** `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `code_version_tag`, `pipeline_url_parameter`.
 - **Needs:** the temp view `watchdog_workspace_names`.
 - **Columns:** the 29 `findings` columns, in table order, with `source` = `SYSTEM_TABLES`. `triggered_by` is always empty here, because only the Jobs API knows who started a run.
-- **Read it:** one row per check for each workspace job a monitored job matches where the job is switched on, plus one `not_found` row for each job, switched on in at least one environment, that has no such match:
+- **Read it:** one row per check for each workspace job a monitored job matches where the job is switched on (by job ID where `job_ids` apply, by name elsewhere), plus one `not_found` row for each job, switched on in at least one environment, that has no such match or misses a listed job ID:
   - `last_run_result`: for scheduled jobs, the newest finished run in the window; for continuous jobs, the newest run, even while it runs (a healthy stream never finishes, so its last finished run is usually an old restart);
   - `task_failures`: tasks whose newest attempt failed, in the job's newest run;
   - `schedule_gap` (scheduled jobs): minutes since the newest run started, against `max_gap_minutes` plus 60 for system table lag; UNKNOWN when no run is in the window and the limit is longer than the window; the summary says so when the job is paused;
   - `long_runtime` (when `max_runtime_minutes` is set): runs still going and the newest finished run, measured up to their newest system table record, against the limit;
-  - `not_found`: no job in the region matches the regex, or every match is in an environment where the job is switched off. The summary says which.
+  - `duplicate_name` (jobs matched by name): two or more jobs in one workspace with exactly the same name, one WARNING row per job and workspace naming their IDs;
+  - `not_found`: no job in the region matches the regex, or every match is in an environment where the job is switched off, or some listed job IDs that apply in this region were not found where they apply. The summary says which.
 
   [data-model.md](data-model.md#checks) lists the status each check gives.
 
-- **Exclusions:** a job whose name matches its `job_name_exclude_regex` is skipped, so it writes no rows.
+- **Exclusions:** a job whose name matches its `job_name_exclude_regex` is skipped when matching by name, so it writes no rows. Jobs pinned by ID are not excluded.
+- **Job IDs:** `job_ids` from `monitored_jobs` and `monitored_job_environments`. Where IDs apply, only those jobs match. The listed IDs a job expects here are the ones that apply in at least one workspace of the region where the job is switched on; any of them not found where it applies is named in the job's `not_found` row.
 - **Environments:** `environment` comes from `monitored_workspaces`. An entry with the workspace's ID is used first. Otherwise an entry with no ID whose name matches the workspace name, ignoring case, is used.
-- **Overrides:** each match uses its environment's row in `monitored_job_environments`, when there is one: `enabled`, `max_gap_minutes`, `max_runtime_minutes`, `severity` and `owner`. An empty column there keeps the job's own setting. A match in an environment where the job is switched off writes no rows. A workspace with no label uses the job's own settings.
+- **Overrides:** each match uses its environment's row in `monitored_job_environments`, when there is one: `enabled`, `max_gap_minutes`, `max_runtime_minutes`, `severity`, `owner` and `job_ids`. An empty column there keeps the job's own setting. A match in an environment where the job is switched off writes no rows. A workspace with no label uses the job's own settings.
 - **Run timing and trigger:** `run_start_time`, `run_end_time` and `run_duration_seconds` describe the run each row is about, as explained in [Run timing](data-model.md#run-timing). When the first hourly slice of a run falls in the window's first hour, the run may have begun before the window, so `run_start_time` and `run_duration_seconds` are left empty. `trigger_type` uses the same mapping as the Jobs API scan, described in [trigger_type](data-model.md#trigger_type), and it maps `ONETIME_RETRY` to `RETRY`.
 - **Code version:** `code_version` is the value of the job tag named by `:code_version_tag` on the job's current definition, so it shows the version deployed now. It is empty when the job has no such tag. System table rows have no git commit to fall back on.
 - **Pipeline link:** `pipeline_url` comes from the run's `job_parameters` column, which holds `{name: {value, default}}`: the value of the parameter named by `:pipeline_url_parameter`, or its default.

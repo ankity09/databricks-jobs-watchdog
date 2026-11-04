@@ -15,9 +15,11 @@ For each workspace the scan visits:
 1. **Which workspace answered.** `w.get_workspace_id()`. If the ID differs from the workspace the
    scan meant to reach, it stops for that workspace (see [the workspace ID guard](#the-workspace-id-guard)).
 2. **Find the jobs.** `w.jobs.list(limit=100)` lists the jobs this identity can see, 100 per page.
-   The `job_name_regex` of each monitored job switched on in this workspace's environment is searched
-   in every job name. A job switched off there is not looked for (see
-   [Environments](#environments)). One listing serves all monitored jobs.
+   Each monitored job switched on in this workspace's environment is matched against the listing:
+   by job ID when `job_ids` apply in that environment (its environment's list, otherwise its own),
+   otherwise by searching its `job_name_regex` in every job name. A job switched off there is not
+   looked for (see [Environments](#environments)). One listing serves all monitored jobs, so job
+   IDs cost no extra calls.
 
 Then, for each job that matched:
 
@@ -172,7 +174,7 @@ gives RETRY_LOOP, and every UNKNOWN row gives COVERAGE. HEALTHY rows give NONE.
 | `live_task_failures` | A task fails when its newest attempt ended FAILED or TIMEDOUT, or its life cycle is INTERNAL_ERROR. Any failed task makes the row FAILED, even while the run continues. `failed_task_keys` lists them, and `error_summary` holds `<task_key>: <error>` for each, separated by vertical bars. |
 | `live_long_runtime` | When `max_runtime_minutes` is set: WARNING if the newest run is still in progress and has been going longer than the limit, in whole minutes since `start_time`. |
 | `retry_loop` | When `max_retries` or `min_attempt_minutes` is set: WARNING if any task's newest attempt has an `attempt_number` above `max_retries`, or if any task has an attempt that ran shorter than `min_attempt_minutes` (from its `start_time` to its `end_time`) and was then retried. With `max_retries: 1`, a task on its third try (attempt 2) is a retry loop. With `min_attempt_minutes: 10`, a task whose first try ended after 3 minutes and was retried is a retry loop on its first retry. Set `max_retries` below the job's own task retry limit: a job never retries past its own limit, so an equal value never fires. |
-| `not_found` | No job this identity can see matches the regex. With several workspaces, a job found in any of them gets no row, and the row counts only the workspaces that answered. A job that no workspace checked has switched on gets one row with no workspace. |
+| `not_found` | No job this identity can see matches the regex, or has one of the listed job IDs: `None of the listed job IDs (111, 222) is a job that this identity can see in this workspace.` With several workspaces, a job found in any of them gets no row, and the row counts only the workspaces that answered. A pinned job counts as found when any of its IDs is found: the scan cannot tell which IDs belong to workspaces it did not check, so the system table scan reports missing IDs. A job that no workspace checked has switched on gets one row with no workspace. |
 | `api_unreachable` | The workspace or the job could not be read. |
 
 Two details:
@@ -237,7 +239,7 @@ Each workspace's rows carry its environment label, from the `workspaces` section
 Each workspace also uses each job's settings for its label, from the job's `environments` section
 (see [monitored_job_environments](data-model.md#monitored_job_environments)). A job switched off in
 that environment is not looked for there, and `severity`, `owner`, `max_runtime_minutes`,
-`max_retries` and `min_attempt_minutes` can differ. A workspace with no label uses the job's own
+`max_retries`, `min_attempt_minutes` and `job_ids` can differ. A workspace with no label uses the job's own
 settings. The scan reads every job switched on in at least one environment, so a job with
 `enabled: false` and `environments: {production: {enabled: true}}` is checked in production
 workspaces only. A job that no workspace checked has switched on gets one `not_found` row with no
