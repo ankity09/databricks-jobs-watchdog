@@ -57,7 +57,7 @@ def test_valid_continuous_job_loads(tmp_path):
     path = write(tmp_path, "jobs:" + VALID_JOB)
     jobs, deps = load_monitored_jobs(path)
     assert jobs[0].job_name == "orders_ingest"
-    assert jobs[0].max_gap_minutes is None
+    assert jobs[0].max_gap_minutes == 30  # continuous: how long the stream may have no run in progress
     assert deps == []
 
 
@@ -454,3 +454,21 @@ def test_defaults_cannot_set_job_ids(tmp_path):
     text = "defaults:\n  job_ids: [1]\n" + PINNED
     with pytest.raises(ConfigError, match="defaults.*job_ids"):
         load_monitored_jobs(write(tmp_path, text))
+
+
+def test_a_continuous_job_keeps_its_own_gap_limit(tmp_path):
+    jobs, _ = load_monitored_jobs(write(tmp_path, "jobs:" + VALID_JOB + "    max_gap_minutes: 10\n"))
+    assert (jobs[0].schedule_type, jobs[0].max_gap_minutes) == ("continuous", 10)
+
+
+def test_an_environment_can_change_a_continuous_jobs_gap_limit(tmp_path):
+    text = ("workspaces:\n  - workspace_id: \"1001\"\n    environment: lower\njobs:" + VALID_JOB
+            + "    environments:\n      lower: {max_gap_minutes: 5}\n")
+    job = load_monitored_jobs(write(tmp_path, text))[0][0]
+    assert job.max_gap_minutes == 30
+    assert job.settings_for("lower").max_gap_minutes == 5
+
+
+def test_a_gap_limit_from_defaults_applies_to_continuous_jobs(tmp_path):
+    jobs, _ = load_monitored_jobs(write(tmp_path, "defaults:\n  max_gap_minutes: 120\njobs:" + VALID_JOB))
+    assert jobs[0].max_gap_minutes == 120

@@ -10,6 +10,9 @@ from jobs_watchdog.identifiers import validate_identifier
 
 # triggered: started by another job or by hand, so it has no schedule to check
 SCHEDULE_TYPES = {"continuous", "scheduled", "triggered"}
+# continuous: how long a stream may have no run in progress before schedule_gap and
+# live_run_status flag it, when the job (or defaults) sets no max_gap_minutes
+CONTINUOUS_MAX_GAP_MINUTES = 30
 SEVERITIES = {"CRITICAL", "WARNING"}
 DEPENDENCY_TYPES = {"job", "child_job", "service"}
 AUTH_MODES = {"current_workspace", "service_principal"}
@@ -220,6 +223,8 @@ def _parse_job(raw, defaults=None, labels=()):
     max_gap = _optional_int(raw.get("max_gap_minutes"), name, "max_gap_minutes")
     if schedule_type == "scheduled" and max_gap is None:
         raise ConfigError(f"job {name}: scheduled jobs need max_gap_minutes")
+    if schedule_type == "continuous" and max_gap is None:
+        max_gap = CONTINUOUS_MAX_GAP_MINUTES  # the longest the stream may have no run in progress
     if schedule_type == "triggered":
         # a triggered job has no schedule check; a gap limit set on it would look checked when it is not
         gap_labels = sorted(label for label, values in environments.items() if "max_gap_minutes" in values)

@@ -16,8 +16,9 @@
 --   last_run_result  scheduled jobs: the newest finished run in the window;
 --                    continuous jobs: the newest run, even while it runs
 --   task_failures    tasks whose newest attempt failed, in the newest run
---   schedule_gap     scheduled jobs: time since the newest run started
---                    (continuous and triggered jobs have no schedule check)
+--   schedule_gap     scheduled jobs: time since the newest run started;
+--                    continuous jobs: time with no run in progress
+--                    (triggered jobs have no schedule check)
 --   long_runtime     the newest finished run, and any run still going,
 --                    measured up to its newest system table record
 --   duplicate_name   jobs matched by name: two or more jobs in one workspace
@@ -424,6 +425,65 @@ checks AS (
   FROM matched mt
   LEFT JOIN newest_run s ON s.workspace_id = mt.workspace_id AND s.job_id = mt.job_id
   WHERE mt.schedule_type = 'scheduled' AND mt.max_gap_minutes IS NOT NULL
+
+  UNION ALL
+
+  -- continuous jobs: time with no run in progress. A healthy stream always has
+  -- a run going (its newest record has no result yet), and a restart starts a
+  -- new run within minutes, so a newest run that ended more than the limit
+  -- (30 minutes when max_gap_minutes is not set), plus 60 minutes for system
+  -- table lag, ago means the stream is stopped or paused
+  SELECT
+    mt.job_name,
+    mt.account_id,
+    mt.workspace_id,
+    mt.job_id,
+    'schedule_gap',
+    CASE
+      WHEN s.run_id IS NOT NULL AND s.result_state IS NULL THEN 'HEALTHY'
+      WHEN s.run_id IS NOT NULL
+        AND timestampdiff(MINUTE, s.last_seen, current_timestamp()) <= coalesce(mt.max_gap_minutes, 30) + 60
+        THEN 'HEALTHY'
+      WHEN s.run_id IS NULL AND coalesce(mt.max_gap_minutes, 30) + 60 > CAST(:lookback_hours AS INT) * 60
+        THEN 'UNKNOWN'
+      WHEN mt.severity = 'CRITICAL' THEN 'FAILED'
+      ELSE 'WARNING'
+    END,
+    CAST(NULL AS STRING),
+    s.run_id,
+    CAST(NULL AS ARRAY<STRING>),
+    concat(
+      CASE
+        WHEN s.run_id IS NOT NULL AND s.result_state IS NULL
+          THEN format_string('A run is in progress (newest system table record %d minutes old)',
+                             timestampdiff(MINUTE, s.last_seen, current_timestamp()))
+        WHEN s.run_id IS NOT NULL
+          AND timestampdiff(MINUTE, s.last_seen, current_timestamp()) <= coalesce(mt.max_gap_minutes, 30) + 60
+          THEN format_string('The newest run ended %s %d minutes ago, at %s UTC, so a restart may not be in the system tables yet',
+                             s.result_state, timestampdiff(MINUTE, s.last_seen, current_timestamp()),
+                             date_format(to_utc_timestamp(s.last_seen, current_timezone()), 'yyyy-MM-dd HH:mm'))
+        WHEN s.run_id IS NOT NULL
+          THEN format_string('No run in progress for %d minutes: the newest run ended %s at %s UTC',
+                             timestampdiff(MINUTE, s.last_seen, current_timestamp()), s.result_state,
+                             date_format(to_utc_timestamp(s.last_seen, current_timezone()), 'yyyy-MM-dd HH:mm'))
+        ELSE format_string('No run in the last %d hours', CAST(:lookback_hours AS INT))
+      END,
+      format_string('. The limit is %d minutes, plus 60 for system table lag.', coalesce(mt.max_gap_minutes, 30)),
+      CASE
+        WHEN s.run_id IS NULL AND coalesce(mt.max_gap_minutes, 30) + 60 > CAST(:lookback_hours AS INT) * 60
+          THEN ' The window is shorter than the limit, so raise lookback_hours to check this job.'
+        ELSE ''
+      END,
+      CASE WHEN mt.paused THEN ' The job is paused.' ELSE '' END),
+    mt.tags,
+    CASE WHEN s.started_before_window THEN NULL ELSE s.run_start END,
+    CASE WHEN s.result_state IS NULL THEN CAST(NULL AS TIMESTAMP) ELSE s.last_seen END,
+    CASE WHEN s.started_before_window THEN NULL ELSE timestampdiff(SECOND, s.run_start, s.last_seen) END,
+    s.trigger_type,
+    s.job_parameters
+  FROM matched mt
+  LEFT JOIN newest_run s ON s.workspace_id = mt.workspace_id AND s.job_id = mt.job_id
+  WHERE mt.schedule_type = 'continuous'
 
   UNION ALL
 

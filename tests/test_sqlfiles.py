@@ -242,9 +242,20 @@ def test_scan_takes_affected_jobs_and_parent_job_from_the_impact_view():
     assert "d.parent_job" in text
 
 
-def test_schedule_gap_checks_scheduled_jobs_only():
+def test_schedule_gap_checks_scheduled_jobs_by_start_and_continuous_jobs_by_run_in_progress():
     text = load_sql("sql/scan/21_system_table_findings.sql")
+    code = " ".join(text.split())
     assert "WHERE mt.schedule_type = 'scheduled' AND mt.max_gap_minutes IS NOT NULL" in text
+    # continuous jobs: a run in progress is healthy; a newest run that ended more than the limit
+    # (30 by default) plus 60 minutes of system table lag ago means the stream is stopped
+    assert "WHERE mt.schedule_type = 'continuous'" in text
+    assert "WHEN s.run_id IS NOT NULL AND s.result_state IS NULL THEN 'HEALTHY'" in code
+    assert ("timestampdiff(MINUTE, s.last_seen, current_timestamp()) <= coalesce(mt.max_gap_minutes, 30) + 60"
+            in code)
+    assert "No run in progress for %d minutes: the newest run ended %s at %s UTC" in text
+    assert text.count("CASE WHEN mt.paused THEN ' The job is paused.' ELSE '' END") == 2
+    # triggered jobs still get no schedule check
+    assert "mt.schedule_type = 'triggered'" not in text
 
 
 def test_cleanup_deletes_whole_old_scans_but_never_a_sources_newest_scan():

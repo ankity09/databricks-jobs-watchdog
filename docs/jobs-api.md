@@ -170,7 +170,7 @@ gives RETRY_LOOP, and every UNKNOWN row gives COVERAGE. HEALTHY rows give NONE.
 
 | check_id | Rule |
 |---|---|
-| `live_run_status` | The newest run's state, mapped as above. A job with no runs is UNKNOWN, and gets no other Jobs API rows. |
+| `live_run_status` | The newest run's state, mapped as above. For a continuous job whose newest run ended more than `max_gap_minutes` ago (30 by default), the stream is not running: FAILED for CRITICAL jobs, WARNING for WARNING jobs, and the summary adds "The job is paused." when `jobs.get` shows its continuous trigger paused. A job with no runs is UNKNOWN, and gets no other Jobs API rows. |
 | `live_task_failures` | A task fails when its newest attempt ended FAILED or TIMEDOUT, or its life cycle is INTERNAL_ERROR. Any failed task makes the row FAILED, even while the run continues. `failed_task_keys` lists them, and `error_summary` holds `<task_key>: <error>` for each, separated by vertical bars. |
 | `live_long_runtime` | When `max_runtime_minutes` is set: WARNING if the newest run is still in progress and has been going longer than the limit, in whole minutes since `start_time`. |
 | `retry_loop` | When `max_retries` or `min_attempt_minutes` is set: WARNING if any task's newest attempt has an `attempt_number` above `max_retries`, or if any task has an attempt that ran shorter than `min_attempt_minutes` (from its `start_time` to its `end_time`) and was then retried. With `max_retries: 1`, a task on its third try (attempt 2) is a retry loop. With `min_attempt_minutes: 10`, a task whose first try ended after 3 minutes and was retried is a retry loop on its first retry. Set `max_retries` below the job's own task retry limit: a job never retries past its own limit, so an equal value never fires. |

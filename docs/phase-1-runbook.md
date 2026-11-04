@@ -197,6 +197,15 @@ One entry covers a job in every workspace where it runs. To treat its copies dif
 
 The two rules work together: either one makes the row a WARNING, and its summary names the rule and the tasks. Only the Jobs API scan checks retries, on each job's newest run.
 
+### Continuous jobs
+
+A continuous job always has a run going, and restarts within minutes when a run ends. The Watchdog checks that a run is in progress:
+
+- **`max_gap_minutes`** is the longest a continuous job may have no run in progress: 30 minutes when you set none. A value in `defaults` applies too, so set it on the job when `defaults` holds a scheduled job's limit.
+- **The Jobs API scan** (`live_run_status`) reports a stopped stream as soon as its newest run ended more than the limit ago: FAILED for a CRITICAL job, WARNING for a WARNING job, adding "The job is paused." when it is.
+- **The system table scan** (`schedule_gap`) reports it too, after the limit plus 60 minutes for system table lag.
+- Leave out `max_runtime_minutes` for a stream, since its run is meant to keep going.
+
 ### Child jobs and jobs with no schedule
 
 A job that another job starts, for example with a Run Job task, has no schedule of its own. List it as a child of the job that starts it, and give it `schedule_type: triggered`:

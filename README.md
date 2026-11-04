@@ -33,11 +33,11 @@ Inside a scan, step 1 reads the system tables, step 2 calls the Jobs API, and st
 |---|---|---|
 | System tables | `last_run_result` | scheduled and triggered jobs: the newest finished run in the lookback window; continuous jobs: the newest run, even while it runs |
 | | `task_failures` | tasks whose newest attempt failed, in the job's newest run |
-| | `schedule_gap` | a scheduled job with no run started within `max_gap_minutes` (plus 60 minutes for system table lag); triggered jobs, such as child jobs another job starts, have no schedule check |
+| | `schedule_gap` | a scheduled job with no run started within `max_gap_minutes`, or a continuous job with no run in progress for longer than `max_gap_minutes` (30 by default), plus 60 minutes for system table lag; triggered jobs, such as child jobs another job starts, have no schedule check |
 | | `long_runtime` | the newest finished run, or a run still going, over `max_runtime_minutes`, measured up to its newest system table record |
 | | `not_found` | a monitored job whose name pattern matches no job in the region, or matches only where the job is switched off, or whose listed job IDs are missing |
 | | `duplicate_name` | two jobs in one workspace with exactly the same name, both matched by one name pattern |
-| Jobs API | `live_run_status` | the state of the newest run, right now |
+| Jobs API | `live_run_status` | the state of the newest run, right now; for a continuous job, also whether a run is going (a stopped or paused stream is flagged after `max_gap_minutes`) |
 | | `live_task_failures` | failed tasks in the newest run, with their error text, even while the run continues |
 | | `live_long_runtime` | a run still going past `max_runtime_minutes` |
 | | `retry_loop` | a task retried more than `max_retries` times, or retried after an attempt shorter than `min_attempt_minutes` |
