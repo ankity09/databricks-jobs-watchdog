@@ -39,6 +39,7 @@ Delivered in this release:
 
 - **Pin jobs by job ID.** `job_ids` on a job, or per environment, lists the exact jobs to check; name patterns still cover jobs without stable IDs. Missing IDs get a `not_found` row, and a `duplicate_name` check warns when one pattern finds two jobs with the same name.
 - **Child jobs and the whole chain.** `schedule_type: triggered` for jobs another job starts; `affected_jobs` lists everything downstream, with `child_job` links counted both ways; findings carry `parent_job`.
+- **Continuous jobs that stop.** `schedule_gap` and `live_run_status` flag a continuous job with no run in progress for longer than `max_gap_minutes` (30 by default).
 - **Retention.** The daily `watchdog_cleanup` job (notebook 10) deletes `findings` scans older than `scan.retention_days` (30 by default), always keeping each source's newest scan.
 - **A shorter main path.** The read-only exploration notebooks moved to `notebooks/explore`, and `watchdog_phase_1` now runs 00, 01, 02, 05, 06 and 07.
 

@@ -18,6 +18,13 @@ What changed, for people who already run the Watchdog. After every pull: restart
 - **New `findings` column `parent_job`:** on rows about a child job, the job that starts it, so a child's findings can be read and routed with its parent's. A job can be the child of only one job.
 - Notebook 02 shows what a failure of each job affects.
 
+### Continuous jobs that stop are flagged
+
+- A paused or stopped continuous job used to read HEALTHY. Now `max_gap_minutes` on a continuous job is the longest it may have no run in progress (30 minutes when not set; a value in `defaults` does not apply to continuous jobs, because a scheduled job's gap between runs is a different limit).
+- The system table scan's `schedule_gap` now covers continuous jobs: a stream with no run in progress after the limit, plus 60 minutes of system table lag, is FAILED for CRITICAL jobs and WARNING for WARNING jobs, and the summary says when the job is paused.
+- The Jobs API scan's `live_run_status` reports the same once the limit passes, with failure_category `SCHEDULE_GAP`.
+- Jobs API rows for continuous runs now say `CONTINUOUS` in `trigger_type`. Older databricks-sdk versions, such as the one on serverless, read that trigger as empty.
+
 ### Delete old findings
 
 - **`scan.retention_days`** (default 30; `0` keeps everything) and a daily **`watchdog_cleanup`** job (03:30 UTC, paused and unpaused with the scan through `scan.schedule_status`). It runs the new notebook `10_delete_old_findings` (`sql/maintenance/50_delete_old_findings.sql`), which deletes whole scans older than the limit and always keeps each source's newest scan, so `findings_latest` never goes empty.
@@ -29,6 +36,7 @@ What changed, for people who already run the Watchdog. After every pull: restart
 ### Changed behavior
 
 - `affected_jobs` lists the whole downstream chain, so it can be longer than before.
+- A paused or stopped continuous job that read HEALTHY now gets FAILED or WARNING rows. Notebook 02 shows 30 in `max_gap_minutes` for continuous jobs that set none.
 - Running `sql/scan/21_system_table_findings.sql` by hand now also needs the temp view `watchdog_affected_jobs`, which notebook 05 creates. Run it from notebook 05.
 
 ### Docs
@@ -41,7 +49,7 @@ What changed, for people who already run the Watchdog. After every pull: restart
 2. If you deployed the jobs with the bundle, deploy it again. This also creates `watchdog_cleanup`, paused unless `scan.schedule_status` is UNPAUSED.
 3. Restart Python on any open notebook (detach and reattach).
 4. Run notebook 01. It adds `job_ids` to `monitored_jobs` and `monitored_job_environments`, adds `parent_job` to `findings`, and prints `view findings_latest: replaced`. Your rows stay.
-5. Run notebook 02. Job lists without `job_ids` or `triggered` jobs work unchanged. Optionally pin jobs by ID, mark child jobs and jobs with no schedule as `triggered`, and set `scan.retention_days`.
+5. Run notebook 02. Job lists without `job_ids` or `triggered` jobs work unchanged. Optionally pin jobs by ID, mark child jobs and jobs with no schedule as `triggered`, set `max_gap_minutes` on continuous jobs whose restarts take longer than 30 minutes, and set `scan.retention_days`.
 6. Run notebooks 05 and 06, and check that notebook 07 prints only PASS lines. Open notebooks 03 and 04 from `notebooks/explore` from now on.
 
 ## Phase 1.2 (2026-10-29)
