@@ -67,7 +67,9 @@ def run(run_id, life_cycle, result=None, minutes_ago=10, tasks=(), message="", n
 
 class FakeJobs:
     def __init__(self, jobs=(), runs=None, pages=None, outputs=None, list_error=None, output_error=None,
-                 runs_error=None):
+                 runs_error=None, pause_status=None, get_error=None):
+        self._pause_status = pause_status or {}
+        self._get_error = get_error
         self._jobs = list(jobs)
         self._runs = runs or {}
         self._by_id = {r.run_id: r for job_runs in self._runs.values() for r in job_runs}
@@ -90,6 +92,12 @@ class FakeJobs:
         for item in self._runs.get(job_id, []):
             self.runs_yielded += 1
             yield item
+
+    def get(self, job_id):
+        if self._get_error:
+            raise self._get_error
+        status = self._pause_status.get(job_id)
+        return NS(job_id=job_id, settings=NS(continuous=None if status is None else NS(pause_status=status)))
 
     def get_run(self, run_id, page_token=None):
         if page_token:
@@ -563,3 +571,83 @@ def test_merge_not_found_mentions_both_regex_and_environment_ids():
     ]
     (row,) = merge_not_found(rows, [job])
     assert "orders or the listed job IDs (9)" in row["error_summary"]
+
+
+def stream(severity="CRITICAL", max_gap=30, schedule_type="continuous"):
+    return MonitoredJob(
+        job_name="ingest", job_name_regex="ingest", schedule_type=schedule_type, max_gap_minutes=max_gap,
+        max_runtime_minutes=None, max_retries=None, severity=severity, owner="stream-team", enabled=True,
+        notes="",
+    )
+
+
+def stream_status(job, life_cycle="TERMINATED", result="SUCCESS", ended_minutes_ago=95, **client_args):
+    finished = run(21, life_cycle, result, minutes_ago=200, ended_minutes_ago=ended_minutes_ago)
+    client = FakeClient(jobs=[(7, "ingest")], runs={7: [finished]}, **client_args)
+    return by_check(collect_target(client, TARGET, [job], NOW))["live_run_status"]
+
+
+def test_a_stopped_continuous_job_is_flagged_as_serious_as_the_job():
+    row = stream_status(stream("CRITICAL"))
+    assert (row["status"], row["failure_category"]) == ("FAILED", "SCHEDULE_GAP")
+    assert row["error_summary"] == ("The continuous job is not running: its newest run ended SUCCESS 95 minutes "
+                                    "ago. The limit is 30 minutes.")
+    assert stream_status(stream("WARNING"))["status"] == "WARNING"
+
+
+def test_a_stopped_continuous_job_says_when_it_is_paused():
+    row = stream_status(stream(), pause_status={7: "PAUSED"})
+    assert row["error_summary"].endswith(" The job is paused.")
+    unpaused = stream_status(stream(), pause_status={7: "UNPAUSED"})
+    assert "paused" not in unpaused["error_summary"]
+
+
+def test_unreadable_job_settings_still_flag_a_stopped_stream():
+    row = stream_status(stream(), get_error=PermissionError("no access"))
+    assert row["status"] == "FAILED" and "paused" not in row["error_summary"]
+
+
+def test_a_continuous_job_restarting_within_its_limit_is_healthy():
+    row = stream_status(stream(max_gap=30), ended_minutes_ago=10)
+    assert (row["status"], row["error_summary"]) == ("HEALTHY", "Newest run ended SUCCESS.")
+
+
+def test_a_running_continuous_job_is_healthy():
+    going = run(22, "RUNNING", minutes_ago=300)
+    client = FakeClient(jobs=[(7, "ingest")], runs={7: [going]})
+    row = by_check(collect_target(client, TARGET, [stream()], NOW))["live_run_status"]
+    assert row["status"] == "HEALTHY"
+
+
+def test_only_continuous_jobs_are_checked_for_a_run_in_progress():
+    row = stream_status(stream(schedule_type="scheduled", max_gap=30))
+    assert (row["status"], row["error_summary"]) == ("HEALTHY", "Newest run ended SUCCESS.")
+
+
+def test_a_failed_and_stopped_stream_stays_failed_with_the_runs_category():
+    row = stream_status(stream("WARNING"), result="FAILED")
+    assert row["status"] == "FAILED"
+    assert row["failure_category"] != "SCHEDULE_GAP"
+    assert row["error_summary"].startswith("The continuous job is not running: its newest run ended FAILED 95")
+
+
+def test_a_continuous_job_without_a_gap_limit_uses_30_minutes():
+    assert stream_status(stream(max_gap=None), ended_minutes_ago=31)["status"] == "FAILED"
+    assert stream_status(stream(max_gap=None), ended_minutes_ago=29)["status"] == "HEALTHY"
+
+
+def test_a_continuous_runs_unparsed_trigger_reads_as_continuous():
+    # older SDKs parse the CONTINUOUS trigger as None
+    going = run(22, "RUNNING", minutes_ago=300)
+    rows = collect_target(FakeClient(jobs=[(7, "ingest")], runs={7: [going]}), TARGET, [stream()], NOW)
+    assert {row["trigger_type"] for row in rows} == {"CONTINUOUS"}
+    scheduled = FakeClient(jobs=[(1, "orders")], runs={1: [run(11, "TERMINATED", "SUCCESS")]})
+    assert {row["trigger_type"] for row in collect_target(scheduled, TARGET, [monitored()], NOW)} == {None}
+
+
+def test_a_continuous_jobs_known_trigger_is_kept_and_no_run_gets_none():
+    restart = run(22, "RUNNING", minutes_ago=300, trigger="ONE_TIME")
+    rows = collect_target(FakeClient(jobs=[(7, "ingest")], runs={7: [restart]}), TARGET, [stream()], NOW)
+    assert {row["trigger_type"] for row in rows} == {"ONE_TIME"}
+    rows = collect_target(FakeClient(jobs=[(7, "ingest")], runs={7: []}), TARGET, [stream()], NOW)
+    assert [row.get("trigger_type") for row in rows] == [None]

@@ -37,7 +37,9 @@
 #                     gets a new ID, so keep name patterns for jobs created by code.
 #   schedule_type     scheduled, continuous, or triggered (started by another
 #                     job or by hand: no schedule check, so no max_gap_minutes)
-#   max_gap_minutes   scheduled jobs: longest allowed gap between run starts
+#   max_gap_minutes   scheduled jobs: longest allowed gap between run starts;
+#                     continuous jobs: longest time with no run in progress
+#                     (30 minutes when not set)
 #   max_runtime_minutes  longest allowed run before a warning
 #   max_retries       a task retried more times than this is a retry loop; set it
 #                     below the job's own retry limit so you hear before it gives up
@@ -128,7 +130,8 @@ jobs:
     # default exclude skips. Listing the words, as orders_enrich does, is stricter.
     job_name_regex: "^orders_ingest(_[a-z]+)?_(prod|dev)$"
     schedule_type: continuous
-    # no max_runtime_minutes: a streaming run is meant to keep going
+    # no max_runtime_minutes: a streaming run is meant to keep going. With no
+    # max_gap_minutes, a stream with no run in progress for 30 minutes is flagged
     max_retries: 3
     min_attempt_minutes: 10  # a task that restarts within 10 minutes of starting is a retry loop
     severity: CRITICAL

@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from jobs_watchdog.config import AUTH_MODES
+from jobs_watchdog.config import AUTH_MODES, CONTINUOUS_MAX_GAP_MINUTES
 from jobs_watchdog.states import (
     API_FAILED_RESULTS,
     API_IN_PROGRESS,
@@ -159,6 +159,9 @@ def collect_target(client, target, jobs, now, code_version_tag="code_version", p
             job_rows, run = [_unreachable(target, job, job_id, err)], None
         extra = dict(_run_columns(run, now), job_tags=tags, code_version=_code_version(tags, code_version_tag, run),
                      pipeline_url=_job_parameter(run, pipeline_url_parameter))
+        if run is not None and extra.get("trigger_type") is None and job.schedule_type == "continuous":
+            # older databricks-sdk versions (serverless) do not know the CONTINUOUS trigger and parse it as None
+            extra["trigger_type"] = "CONTINUOUS"
         rows.extend(dict(row, **extra) for row in job_rows)
     return rows
 
@@ -263,7 +266,7 @@ def _job_rows(client, target, job, job_id, now):
     run, tasks = _full_run(client, runs[0].run_id)
     latest = _latest_attempts(tasks)
     rows = [
-        _live_run_status(target, job, job_id, run, previous),
+        _live_run_status(client, target, job, job_id, run, previous, now),
         _live_task_failures(client, target, job, job_id, run, latest),
     ]
     if job.max_runtime_minutes is not None:
@@ -348,23 +351,68 @@ def _latest_attempts(tasks):
     return latest
 
 
-def _live_run_status(target, job, job_id, run, previous):
+_STATUS_RANK = {"HEALTHY": 0, "UNKNOWN": 1, "WARNING": 2, "FAILED": 3}
+
+
+def _live_run_status(client, target, job, job_id, run, previous, now):
     state = getattr(run, "state", None)
     life_cycle = as_text(getattr(state, "life_cycle_state", None))
     result = as_text(getattr(state, "result_state", None))
     status = status_from_api(life_cycle, result)
+    stopped = None
     if life_cycle in API_IN_PROGRESS:
         summary = f"Newest run is {life_cycle}."
         before = as_text(getattr(getattr(previous, "state", None), "result_state", None))
         if before:
             summary += f" The run before it ended {before}."
     else:
-        summary = f"Newest run ended {result or life_cycle or 'with no state'}."
+        stopped = _continuous_stopped(job, run, now)
+        if stopped:
+            minutes, limit = stopped
+            summary = (f"The continuous job is not running: its newest run ended "
+                       f"{result or life_cycle or 'with no state'} {minutes} minutes ago. The limit is {limit} minutes.")
+        else:
+            summary = f"Newest run ended {result or life_cycle or 'with no state'}."
         message = getattr(state, "state_message", None)
         if message and status != "HEALTHY":
             summary += f" {message}"
-    return _row(target, job, job_id, "live_run_status", status, run=run,
-                termination_type=_termination_type(run), error_summary=summary)
+        if stopped and _continuous_paused(client, job_id):
+            summary += " The job is paused."
+    run_status = status
+    if stopped:
+        # a stopped stream is as serious as the job: FAILED for CRITICAL jobs, WARNING otherwise,
+        # and never better than what the run itself ended with
+        stopped_status = "FAILED" if job.severity == "CRITICAL" else "WARNING"
+        if _STATUS_RANK[stopped_status] > _STATUS_RANK.get(status, 0):
+            status = stopped_status
+    row = _row(target, job, job_id, "live_run_status", status, run=run,
+               termination_type=_termination_type(run), error_summary=summary)
+    if stopped and status != run_status:
+        # the problem is the missing run, not how the last run ended
+        row["failure_category"] = failure_category("schedule_gap", status)
+    return row
+
+
+def _continuous_stopped(job, run, now):
+    """(minutes since the newest run ended, limit) when a continuous job has had no run going past its limit."""
+    if job.schedule_type != "continuous":
+        return None
+    end = _utc(getattr(run, "end_time", None))
+    if end is None:
+        return None  # a finished run without an end time: cannot tell how long nothing has run
+    limit = job.max_gap_minutes if job.max_gap_minutes is not None else CONTINUOUS_MAX_GAP_MINUTES
+    minutes = max(0, int((now - end).total_seconds() // 60))
+    return (minutes, limit) if minutes > limit else None
+
+
+def _continuous_paused(client, job_id):
+    """True when the job's continuous trigger is paused; None when the settings cannot be read."""
+    try:
+        settings = getattr(client.jobs.get(job_id=job_id), "settings", None)
+    except Exception:
+        return None
+    continuous = getattr(settings, "continuous", None)
+    return as_text(getattr(continuous, "pause_status", None)) == "PAUSED"
 
 
 def _live_task_failures(client, target, job, job_id, run, latest):

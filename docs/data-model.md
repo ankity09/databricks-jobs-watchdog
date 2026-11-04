@@ -33,8 +33,8 @@ One row per job you want checked.
 | `job_name` | STRING, required | Short logical name. It appears on every finding and alert. Unique in the file. |
 | `job_name_regex` | STRING, required | Matches the job's real name in each workspace where no `job_ids` apply. Left out, it is `^<job_name>$`. |
 | `job_name_exclude_regex` | STRING | Optional. A job whose real name matches this is skipped, even when `job_name_regex` matches it. Use it for test copies. |
-| `schedule_type` | STRING, required | `scheduled`, `continuous` or `triggered`. Left out, it is `scheduled`. Only scheduled jobs get the `schedule_gap` check. A triggered job is started by another job (a child job) or by hand, so it has no schedule to check: leave out `max_gap_minutes`, which is rejected on a triggered job and ignored when it comes from `defaults`. `last_run_result` judges a triggered job like a scheduled one. |
-| `max_gap_minutes` | INT | Scheduled jobs: the longest allowed time between run starts. Required for scheduled jobs, not allowed on triggered jobs. |
+| `schedule_type` | STRING, required | `scheduled`, `continuous` or `triggered`. Left out, it is `scheduled`. Scheduled and continuous jobs get the `schedule_gap` check: time between run starts for a scheduled job, time with no run in progress for a continuous one. A triggered job is started by another job (a child job) or by hand, so it has no schedule to check: leave out `max_gap_minutes`, which is rejected on a triggered job and ignored when it comes from `defaults`. `last_run_result` judges a triggered job like a scheduled one. |
+| `max_gap_minutes` | INT | Scheduled jobs: the longest allowed time between run starts, required. Continuous jobs: the longest a job may have no run in progress, 30 minutes when not set (a value in `defaults` does not apply to continuous jobs). Not allowed on triggered jobs. |
 | `max_runtime_minutes` | INT | The longest allowed run. Left out turns off `long_runtime` and `live_long_runtime`. |
 | `max_retries` | INT | A task retried more times than this is a retry loop. Set it below the job's own task retry limit: a job never retries past its own limit, so an equal value never fires. With `min_attempt_minutes` also left out, `retry_loop` is off. |
 | `min_attempt_minutes` | INT | A task attempt that ran shorter than this and was then retried is a retry loop: the task fails fast and restarts. The Jobs API scan checks it. With `max_retries` also left out, `retry_loop` is off. |
@@ -97,7 +97,7 @@ One row per job and environment label: the settings that job changes in that env
 | `severity` | STRING | `CRITICAL` or `WARNING` in this environment. |
 | `owner` | STRING | Team or person to route findings to in this environment. |
 | `enabled` | BOOLEAN | `false` switches the job off in this environment; `true` switches it on. |
-| `max_gap_minutes` | INT | The schedule limit in this environment. |
+| `max_gap_minutes` | INT | The schedule limit in this environment: between run starts for a scheduled job, with no run in progress for a continuous one. |
 | `max_runtime_minutes` | INT | The runtime limit in this environment. |
 | `max_retries` | INT | The retry limit in this environment. |
 | `min_attempt_minutes` | INT | The shortest allowed attempt before a retry in this environment. |
@@ -123,7 +123,7 @@ How the overrides apply:
 - A job switched off in an environment is not checked in that environment's workspaces, and gets no rows there.
 - A job is checked wherever it is switched on: `enabled: false` with `environments: {production: {enabled: true}}` checks it in production workspaces only.
 - A job switched on in some environment that a scan finds only where it is switched off still gets one `not_found` row, so it never drops out of the findings unnoticed. The system table scan says `Every job in this region that matches <regex> is in an environment where this job is switched off.` The Jobs API scan says `No workspace checked has <job_name> switched on: it is switched off in their environments, or no workspace could be checked.`
-- The system table scan uses `enabled`, `severity`, `owner`, `max_gap_minutes`, `max_runtime_minutes` and `job_ids`. The Jobs API scan, which has no schedule check, uses `enabled`, `severity`, `owner`, `max_runtime_minutes`, `max_retries`, `min_attempt_minutes` and `job_ids`.
+- The system table scan uses `enabled`, `severity`, `owner`, `max_gap_minutes`, `max_runtime_minutes` and `job_ids`. The Jobs API scan uses `enabled`, `severity`, `owner`, `max_gap_minutes` (continuous jobs only), `max_runtime_minutes`, `max_retries`, `min_attempt_minutes` and `job_ids`.
 
 ## job_dependencies
 
@@ -316,14 +316,14 @@ System tables cover every workspace in the account and region, and run about an 
 |---|---|---|---|
 | `last_run_result` | Scheduled jobs: the newest finished run in the lookback window. Continuous jobs: the newest run, so a stream that restarted and is running again is HEALTHY. | A continuous job's run still going is HEALTHY. SUCCEEDED is HEALTHY. FAILED, ERROR or TIMED_OUT is FAILED. CANCELLED, SKIPPED or BLOCKED is WARNING. No finished run is UNKNOWN. | always |
 | `task_failures` | Tasks in the job's newest run whose newest attempt ended FAILED, ERROR or TIMED_OUT. A task retried to success is not counted, and a newer run settles failures in older runs. | FAILED, with `failed_task_keys` | always |
-| `schedule_gap` | Minutes since the newest run started, against `max_gap_minutes` plus 60 minutes of allowance for system table lag. | FAILED for CRITICAL jobs, WARNING for WARNING jobs. UNKNOWN when no run is in the window and the limit is longer than the window. | scheduled jobs only |
+| `schedule_gap` | Scheduled jobs: minutes since the newest run started. Continuous jobs: minutes with no run in progress, since the newest run ended. Both against `max_gap_minutes` (30 for a continuous job that sets none) plus 60 minutes of allowance for system table lag. | FAILED for CRITICAL jobs, WARNING for WARNING jobs. A continuous job with a run in progress is HEALTHY. UNKNOWN when no run is in the window and the limit is longer than the window. The summary says when the job is paused. | scheduled and continuous jobs |
 | `long_runtime` | Runs still going, plus the newest finished run, against `max_runtime_minutes`, each measured up to its newest system table record. | WARNING | `max_runtime_minutes` is set |
 | `duplicate_name` | Jobs matched by name: two or more of them in one workspace with exactly the same name. The summary names each duplicated name and its job IDs. Jobs matched by `job_ids` are not checked. | WARNING, with no job ID | once per job and workspace with duplicates |
 | `not_found` | The regex matches no job in the region, or matches only in environments where the job is switched off, or listed job IDs that apply in this region are missing. The summary says which: for IDs, `2 of 3 listed job IDs were not found in this region: 111, 222.` | UNKNOWN, with no workspace or job ID | once per job switched on somewhere that has no match where it is switched on, or that misses a listed job ID |
 
 Run lengths come from the timeline rows, as described in [Run timing](#run-timing). That keeps a finished run whose last hourly row is late from looking long.
 
-The 60 minutes of allowance in `schedule_gap` makes a missed run show late for frequent jobs: a job that runs every 10 minutes, with `max_gap_minutes: 20`, is reported after 80 minutes without a run start. The Jobs API scan has no schedule check.
+The 60 minutes of allowance in `schedule_gap` makes a missed run show late for frequent jobs: a job that runs every 10 minutes, with `max_gap_minutes: 20`, is reported after 80 minutes without a run start. For a continuous job, the same allowance means a stopped stream shows here 90 minutes after its last run ended (30 plus 60); the Jobs API scan's `live_run_status` shows it after 30.
 
 ### From the Jobs API (notebook 06, source `JOBS_API`)
 
@@ -331,7 +331,7 @@ The Jobs API is live. It shows a run that started a minute ago, and the error te
 
 | check_id | What it checks | Status | Written when |
 |---|---|---|---|
-| `live_run_status` | The newest run's life cycle and result state. | Running or succeeded is HEALTHY. FAILED, TIMEDOUT or INTERNAL_ERROR is FAILED. CANCELED is WARNING. A job with no runs is UNKNOWN. | always |
+| `live_run_status` | The newest run's life cycle and result state. For a continuous job, also whether a run is going: a newest run that ended more than `max_gap_minutes` ago (30 by default) means the stream is not running. | Running or succeeded is HEALTHY. FAILED, TIMEDOUT or INTERNAL_ERROR is FAILED. CANCELED is WARNING. A continuous job that is not running is FAILED for CRITICAL jobs and WARNING for WARNING jobs, with failure_category `SCHEDULE_GAP` (a run that failed keeps its own category), and the summary says when the job is paused. A job with no runs is UNKNOWN. | always |
 | `live_task_failures` | Failed tasks in the newest run, even while the run continues, judged on each task's newest attempt. | FAILED, with `failed_task_keys` and the error text | the job has runs |
 | `live_long_runtime` | The newest run, if it is still going, against `max_runtime_minutes`. | WARNING | the job has runs and `max_runtime_minutes` is set |
 | `retry_loop` | In the newest run: each task's newest attempt number against `max_retries`, and each attempt that was then retried against `min_attempt_minutes`. | WARNING, with the tasks in `failed_task_keys` | the job has runs and `max_retries` or `min_attempt_minutes` is set |
