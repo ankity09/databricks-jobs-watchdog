@@ -197,6 +197,28 @@ One entry covers a job in every workspace where it runs. To treat its copies dif
 
 The two rules work together: either one makes the row a WARNING, and its summary names the rule and the tasks. Only the Jobs API scan checks retries, on each job's newest run.
 
+### Child jobs and jobs with no schedule
+
+A job that another job starts, for example with a Run Job task, has no schedule of its own. List it as a child of the job that starts it, and give it `schedule_type: triggered`:
+
+```yaml
+jobs:
+  - job_name: daily_revenue_export
+    schedule_type: triggered   # no schedule check, so no max_gap_minutes
+    max_runtime_minutes: 30
+dependencies:
+  - job_name: daily_revenue_export
+    depends_on: daily_revenue_report
+    dependency_type: child_job
+```
+
+- **No schedule check.** A triggered job gets no `schedule_gap` row, and setting `max_gap_minutes` on it stops the load, so nobody thinks it is checked. Its other checks run as usual. Use `triggered` too for a job that is only ever started by hand.
+- **Read with its parent.** Every finding about the child names the parent in `parent_job`, so alerts and dashboards can group a child's problems under the job that started it.
+- **Impact both ways.** A parent failure lists its children in `affected_jobs`, because they will not start. A child failure lists its parent, whose run fails, and everything downstream of the parent.
+- **One parent.** A job can be the child of only one job. It can still have `job` dependencies on others.
+
+When a job fails, `affected_jobs` lists every job downstream of it, through the whole chain, not only the jobs that depend on it directly. Notebook 02 shows what a failure of each job affects, and prints any loops, where two jobs depend on each other. A loop is allowed, but it is often a dependency written the wrong way round, so check it.
+
 ### Run Phase 1 by hand
 
 Open each notebook in `notebooks/`, attach it to serverless compute, run its first two code cells (this shows its input boxes), then run all cells, in order:

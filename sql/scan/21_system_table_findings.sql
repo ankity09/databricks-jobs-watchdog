@@ -4,8 +4,10 @@
 -- watchdog_new_findings, then adds it to the findings table with
 -- 30_merge_findings.sql. The query also reads the temp view
 -- watchdog_workspace_names (workspace names and URLs), which notebook 05
--- creates from sql/explore/11_workspace_names.sql first. To run this query in
--- the SQL editor, create that view yourself.
+-- creates from sql/explore/11_workspace_names.sql first, and the temp view
+-- watchdog_affected_jobs (each job's whole downstream chain and its parent),
+-- which notebook 05 creates with jobs_watchdog.dependencies.register_affected_jobs.
+-- To run this query in the SQL editor, create both views yourself.
 --
 -- For each workspace job that a monitored job's regex matches, it returns one
 -- row per check:
@@ -13,6 +15,7 @@
 --                    continuous jobs: the newest run, even while it runs
 --   task_failures    tasks whose newest attempt failed, in the newest run
 --   schedule_gap     scheduled jobs: time since the newest run started
+--                    (continuous and triggered jobs have no schedule check)
 --   long_runtime     the newest finished run, and any run still going,
 --                    measured up to its newest system table record
 -- A monitored job that matches no job in the region gets one not_found row.
@@ -26,6 +29,8 @@
 -- (monitored_workspaces), when and how the run it is about started, the job
 -- tags, the code version (the value of the job tag named :code_version_tag),
 -- and the CI pipeline link (the run's job parameter named :pipeline_url_parameter).
+-- FAILED rows list every job downstream of the failed one in affected_jobs, and
+-- rows about a child job name its parent in parent_job.
 -- Parameters: :catalog, :schema, :region, :lookback_hours, :scan_id, :code_version_tag, :pipeline_url_parameter
 WITH monitored AS (
   -- every configured job; whether it is checked is decided per environment below
@@ -43,13 +48,6 @@ active AS (
   SELECT m.job_name, m.job_name_regex
   FROM monitored m
   WHERE m.enabled OR EXISTS (SELECT 1 FROM overrides o WHERE o.job_name = m.job_name AND o.enabled)
-),
-dependents AS (
-  -- the jobs that directly depend on each job, listed on its FAILED rows
-  SELECT depends_on AS job_name, sort_array(collect_set(job_name)) AS affected_jobs
-  FROM IDENTIFIER(:catalog || '.' || :schema || '.job_dependencies')
-  WHERE dependency_type IN ('job', 'child_job')
-  GROUP BY depends_on
 ),
 latest_jobs AS (
   SELECT account_id, workspace_id, job_id, name, paused, tags
@@ -472,10 +470,12 @@ SELECT
   CASE WHEN :pipeline_url_parameter <> '' THEN coalesce(
     try_element_at(try_element_at(c.job_parameters, :pipeline_url_parameter), 'value'),
     try_element_at(try_element_at(c.job_parameters, :pipeline_url_parameter), 'default'))
-  END AS pipeline_url
+  END AS pipeline_url,
+  d.parent_job
 FROM checks c
 JOIN monitored m ON m.job_name = c.job_name
-LEFT JOIN dependents d ON d.job_name = c.job_name
+-- each job's whole downstream chain and its parent (temp view from notebook 05)
+LEFT JOIN watchdog_affected_jobs d ON d.job_name = c.job_name
 LEFT JOIN watchdog_workspace_names w ON w.workspace_id = c.workspace_id
 LEFT JOIN environments e ON e.workspace_id = c.workspace_id
 LEFT JOIN overrides so ON so.job_name = c.job_name AND so.environment = e.environment

@@ -338,3 +338,62 @@ def test_defaults_cannot_set_names_or_patterns(tmp_path):
     text = ENVIRONMENTS.replace("defaults:\n", "defaults:\n  job_name_regex: \"x\"\n")
     with pytest.raises(ConfigError, match="defaults.*job_name_regex"):
         load_monitored_jobs(write(tmp_path, text))
+
+
+TRIGGERED_JOB = """
+  - job_name: export
+    job_name_regex: "^export$"
+    schedule_type: triggered
+"""
+
+
+def test_triggered_jobs_need_no_gap_limit(tmp_path):
+    jobs, _ = load_monitored_jobs(write(tmp_path, "jobs:" + TRIGGERED_JOB))
+    assert (jobs[0].schedule_type, jobs[0].max_gap_minutes) == ("triggered", None)
+
+
+def test_triggered_jobs_reject_a_gap_limit(tmp_path):
+    path = write(tmp_path, "jobs:" + TRIGGERED_JOB + "    max_gap_minutes: 60\n")
+    with pytest.raises(ConfigError, match="triggered jobs have no schedule check"):
+        load_monitored_jobs(path)
+
+
+def test_triggered_jobs_reject_a_gap_limit_in_an_environment(tmp_path):
+    text = ("workspaces:\n  - workspace_id: \"1001\"\n    environment: lower\njobs:" + TRIGGERED_JOB
+            + "    environments:\n      lower: {max_gap_minutes: 60}\n")
+    with pytest.raises(ConfigError, match="environments lower"):
+        load_monitored_jobs(write(tmp_path, text))
+
+
+def test_triggered_jobs_ignore_a_gap_limit_from_defaults(tmp_path):
+    jobs, _ = load_monitored_jobs(write(tmp_path, "defaults:\n  max_gap_minutes: 90\njobs:" + TRIGGERED_JOB))
+    assert jobs[0].max_gap_minutes is None
+
+
+def _family(extra_dependencies):
+    return """
+jobs:
+  - job_name: parent_a
+    schedule_type: triggered
+  - job_name: parent_b
+    schedule_type: triggered
+  - job_name: child
+    schedule_type: triggered
+dependencies:
+  - job_name: child
+    depends_on: parent_a
+    dependency_type: child_job
+""" + extra_dependencies
+
+
+def test_a_job_can_have_only_one_parent(tmp_path):
+    second = "  - job_name: child\n    depends_on: parent_b\n    dependency_type: child_job\n"
+    with pytest.raises(ConfigError, match="only one parent"):
+        load_monitored_jobs(write(tmp_path, _family(second)))
+
+
+def test_a_child_job_may_also_depend_on_other_jobs(tmp_path):
+    other = "  - job_name: child\n    depends_on: parent_b\n    dependency_type: job\n"
+    _, deps = load_monitored_jobs(write(tmp_path, _family(other)))
+    assert len(deps) == 2
+

@@ -79,7 +79,7 @@ def test_new_scan_id_needs_a_timezone():
         new_scan_id(datetime(2026, 10, 28, 12, 0))
 
 
-def test_failed_rows_list_direct_job_dependents_only():
+def test_failed_rows_list_the_jobs_downstream():
     row = finalize([api_row("orders_ingest", "FAILED")])[0]
     assert row["affected_jobs"] == ["orders_enrich", "revenue"]
     assert row["severity"] == "CRITICAL"
@@ -87,7 +87,25 @@ def test_failed_rows_list_direct_job_dependents_only():
 
 
 def test_failed_row_without_dependents_gets_an_empty_list():
-    assert finalize([api_row("revenue", "FAILED")])[0]["affected_jobs"] == []
+    assert finalize([api_row("orders_enrich", "FAILED")])[0]["affected_jobs"] == []
+
+
+def test_failed_child_lists_its_parent_and_everything_downstream_of_it():
+    # revenue is a child_job of orders_ingest: its failure fails the parent's run
+    row = finalize([api_row("revenue", "FAILED")])[0]
+    assert row["affected_jobs"] == ["orders_enrich", "orders_ingest"]
+
+
+def test_affected_jobs_follow_the_whole_chain():
+    jobs = JOBS + [job("report")]
+    deps = DEPENDENCIES + [Dependency("report", "orders_enrich", "job", "")]
+    row = finalize_rows([api_row("orders_ingest", "FAILED")], "s", NOW, None, None, jobs, deps)[0]
+    assert row["affected_jobs"] == ["orders_enrich", "report", "revenue"]
+
+
+def test_rows_about_a_child_job_name_its_parent():
+    rows = finalize([api_row("revenue", "HEALTHY"), api_row("orders_ingest", "HEALTHY")])
+    assert [row["parent_job"] for row in rows] == ["orders_ingest", None]
 
 
 def test_healthy_rows_have_no_severity_or_affected_jobs():
@@ -202,7 +220,10 @@ def test_merge_only_inserts_rows_it_has_not_seen():
 def test_custom_service_rows_list_the_jobs_that_need_the_service():
     row = {"job_name": "kafka", "check_id": "service_connectivity", "status": "FAILED", "error_summary": "timeout",
            "source": "CUSTOM", "workspace_id": None}
-    assert finalize([row])[0]["affected_jobs"] == ["orders_ingest"]
+    # the jobs that need the service directly, as before, and no parent
+    complete = finalize([row])[0]
+    assert complete["affected_jobs"] == ["orders_ingest"]
+    assert complete["parent_job"] is None
 
 
 def test_custom_rows_for_unconfigured_names_keep_their_own_severity():

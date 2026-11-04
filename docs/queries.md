@@ -11,13 +11,13 @@ The notebooks run these files with named parameters (`jobs_watchdog/sqlfiles.py`
 3. Fill in the fields, for example `catalog` = `main`, `schema` = `watchdog`, `lookback_hours` = `48`. Numbers can be typed as text; the queries cast them.
 4. Run it.
 
-Seven files read a temp view that a notebook creates first (see the table below). Temp views live only in the session that created them, so those files run from their notebook, not on their own. To try `21_system_table_findings.sql` (or `20_resolve_monitored_jobs.sql`) in the SQL editor, put these two statements in one query and run them together, and fill in `code_version_tag` (`code_version` by default) with the other parameters:
+Seven files read a temp view that a notebook creates first (see the table below). Temp views live only in the session that created them, so those files run from their notebook, not on their own. To try `20_resolve_monitored_jobs.sql` in the SQL editor, put these two statements in one query and run them together. `21_system_table_findings.sql` also needs the temp view `watchdog_affected_jobs`, which Python builds from your dependencies, so run it from notebook 05, or first call `jobs_watchdog.dependencies.register_affected_jobs(spark, catalog, schema)` in a notebook. Fill in `code_version_tag` (`code_version` by default) with the other parameters:
 
 ```sql
 CREATE OR REPLACE TEMPORARY VIEW watchdog_workspace_names AS
 -- paste the text of sql/explore/11_workspace_names.sql here, without its final semicolon
 ;
--- then paste the text of sql/scan/21_system_table_findings.sql here
+-- then paste the text of sql/scan/20_resolve_monitored_jobs.sql here
 ```
 
 | File | Needs the temp view | Created by |
@@ -27,7 +27,7 @@ CREATE OR REPLACE TEMPORARY VIEW watchdog_workspace_names AS
 | `sql/config/03_load_monitored_workspaces.sql` | `watchdog_config_workspaces` | notebook 02 |
 | `sql/config/04_load_monitored_job_environments.sql` | `watchdog_config_environments` | notebook 02 |
 | `sql/scan/20_resolve_monitored_jobs.sql` | `watchdog_workspace_names` | notebook 02 (from `11_workspace_names.sql`) |
-| `sql/scan/21_system_table_findings.sql` | `watchdog_workspace_names` | notebooks 05 and 06 (from `11_workspace_names.sql`) |
+| `sql/scan/21_system_table_findings.sql` | `watchdog_workspace_names` and `watchdog_affected_jobs` | notebook 05 (from `11_workspace_names.sql`, and `register_affected_jobs` in `jobs_watchdog/dependencies.py`) |
 | `sql/scan/30_merge_findings.sql` | `watchdog_new_findings` | notebook 05 (system table rows), notebook 06 (Jobs API rows) and notebook 09 (custom rows) |
 
 ## How the system tables fit together
@@ -48,7 +48,7 @@ Run in order by notebook 01. Every statement is `IF NOT EXISTS`, so re-running c
 | `01_create_schema.sql` | `catalog`, `schema` | Creates the schema. Needs `USE CATALOG` and `CREATE SCHEMA` on the catalog. |
 | `02_create_monitored_jobs.sql` | `catalog`, `schema` | Creates `monitored_jobs`, the jobs to check. |
 | `03_create_job_dependencies.sql` | `catalog`, `schema` | Creates `job_dependencies`, what each job depends on. |
-| `04_create_findings.sql` | `catalog`, `schema` | Creates `findings`, the table both scans write. It has 29 columns. |
+| `04_create_findings.sql` | `catalog`, `schema` | Creates `findings`, the table both scans write. It has 30 columns. |
 | `05_create_monitored_workspaces.sql` | `catalog`, `schema` | Creates `monitored_workspaces`, the environment label for each workspace. |
 | `06_create_monitored_job_environments.sql` | `catalog`, `schema` | Creates `monitored_job_environments`, the settings each job changes in one environment. |
 
@@ -153,18 +153,19 @@ Which real jobs each monitored job matches. Notebook 02 shows it after loading t
 The system table checks, shaped as findings rows. Notebook 05 runs it, saves the result as `watchdog_new_findings`, and merges it with `30_merge_findings.sql`.
 
 - **Parameters:** `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `code_version_tag`, `pipeline_url_parameter`.
-- **Needs:** the temp view `watchdog_workspace_names`.
-- **Columns:** the 29 `findings` columns, in table order, with `source` = `SYSTEM_TABLES`. `triggered_by` is always empty here, because only the Jobs API knows who started a run.
+- **Needs:** the temp views `watchdog_workspace_names`, and `watchdog_affected_jobs` (job_name, affected_jobs, parent_job: each job's whole downstream chain and its parent), which notebook 05 creates with `register_affected_jobs` from the `job_dependencies` table.
+- **Columns:** the 30 `findings` columns, in table order, with `source` = `SYSTEM_TABLES`. `triggered_by` is always empty here, because only the Jobs API knows who started a run.
 - **Read it:** one row per check for each workspace job a monitored job matches where the job is switched on, plus one `not_found` row for each job, switched on in at least one environment, that has no such match:
-  - `last_run_result`: for scheduled jobs, the newest finished run in the window; for continuous jobs, the newest run, even while it runs (a healthy stream never finishes, so its last finished run is usually an old restart);
+  - `last_run_result`: for scheduled and triggered jobs, the newest finished run in the window; for continuous jobs, the newest run, even while it runs (a healthy stream never finishes, so its last finished run is usually an old restart);
   - `task_failures`: tasks whose newest attempt failed, in the job's newest run;
-  - `schedule_gap` (scheduled jobs): minutes since the newest run started, against `max_gap_minutes` plus 60 for system table lag; UNKNOWN when no run is in the window and the limit is longer than the window; the summary says so when the job is paused;
+  - `schedule_gap` (scheduled jobs only; triggered and continuous jobs have none): minutes since the newest run started, against `max_gap_minutes` plus 60 for system table lag; UNKNOWN when no run is in the window and the limit is longer than the window; the summary says so when the job is paused;
   - `long_runtime` (when `max_runtime_minutes` is set): runs still going and the newest finished run, measured up to their newest system table record, against the limit;
   - `not_found`: no job in the region matches the regex, or every match is in an environment where the job is switched off. The summary says which.
 
   [data-model.md](data-model.md#checks) lists the status each check gives.
 
 - **Exclusions:** a job whose name matches its `job_name_exclude_regex` is skipped, so it writes no rows.
+- **Impact:** FAILED rows take `affected_jobs` from `watchdog_affected_jobs`: every job downstream of the failed one, with `child_job` links counted both ways. Every row about a child job takes its parent from the same view, as `parent_job`.
 - **Environments:** `environment` comes from `monitored_workspaces`. An entry with the workspace's ID is used first. Otherwise an entry with no ID whose name matches the workspace name, ignoring case, is used.
 - **Overrides:** each match uses its environment's row in `monitored_job_environments`, when there is one: `enabled`, `max_gap_minutes`, `max_runtime_minutes`, `severity` and `owner`. An empty column there keeps the job's own setting. A match in an environment where the job is switched off writes no rows. A workspace with no label uses the job's own settings.
 - **Run timing and trigger:** `run_start_time`, `run_end_time` and `run_duration_seconds` describe the run each row is about, as explained in [Run timing](data-model.md#run-timing). When the first hourly slice of a run falls in the window's first hour, the run may have begun before the window, so `run_start_time` and `run_duration_seconds` are left empty. `trigger_type` uses the same mapping as the Jobs API scan, described in [trigger_type](data-model.md#trigger_type), and it maps `ONETIME_RETRY` to `RETRY`.

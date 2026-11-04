@@ -119,7 +119,7 @@ def test_rendered_queries_parse_as_databricks_sql():
 
 
 def test_rendered_queries_read_only_the_findings_tables_and_columns():
-    assert len(FINDINGS_COLUMNS) == 29
+    assert len(FINDINGS_COLUMNS) == 30
     for dataset in rendered()["datasets"]:
         tree = sqlglot.parse_one(sql_of(dataset), read="databricks")
         tables = list(tree.find_all(exp.Table))

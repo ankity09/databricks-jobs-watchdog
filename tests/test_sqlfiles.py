@@ -230,3 +230,18 @@ def test_resolve_query_shows_each_matches_environment_and_whether_it_is_checked(
 def test_validation_counts_jobs_switched_on_in_any_environment():
     text = load_sql("sql/validate/42_enabled_jobs_without_findings.sql")
     assert "monitored_job_environments" in text and "o.enabled" in text
+
+
+def test_scan_takes_affected_jobs_and_parent_job_from_the_impact_view():
+    exp, ctes = _scan_ctes()
+    assert "dependents" not in ctes
+    text = load_sql("sql/scan/21_system_table_findings.sql")
+    assert "LEFT JOIN watchdog_affected_jobs d ON d.job_name = c.job_name" in text
+    assert "job_dependencies" not in text.split("WITH", 1)[1]
+    assert "d.parent_job" in text
+
+
+def test_schedule_gap_checks_scheduled_jobs_only():
+    text = load_sql("sql/scan/21_system_table_findings.sql")
+    assert "WHERE mt.schedule_type = 'scheduled' AND mt.max_gap_minutes IS NOT NULL" in text
+

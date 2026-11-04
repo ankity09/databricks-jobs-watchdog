@@ -300,3 +300,10 @@ def test_demo_jobs_carry_a_code_version_tag_like_a_ci_deploy(name):
 def test_demo_jobs_carry_a_pipeline_url_parameter_like_a_ci_deploy(name):
     defaults = {p["name"]: p["default"] for p in demo_jobs()[name].get("parameters", [])}
     assert defaults["PIPELINE_URL"] == "${bundle.git.origin_url}"
+
+
+def test_example_config_marks_its_child_job_triggered():
+    jobs = {job.job_name: job for job in load_monitored_jobs(EXAMPLE_CONFIG)[0]}
+    export = jobs["daily_revenue_export"]
+    assert (export.schedule_type, export.max_gap_minutes) == ("triggered", None)
+

@@ -6,7 +6,7 @@
 # MAGIC
 # MAGIC **Inputs (widgets).** `catalog`, `schema`, `monitored_jobs_path`. Keep your own copy of the file outside the Git folder (your workspace home folder, or a Unity Catalog volume such as `/Volumes/<catalog>/<schema>/<volume>/monitored_jobs.yml`) so a pull never conflicts with your edits. Relative paths start at the repo root. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
-# MAGIC **What to look for.** Every enabled job matches at least one real job in the last table, and nothing you meant to skip (names matching `job_name_exclude_regex` are left out). The `environment` and `checked_here` columns show each match's environment label and whether the job is checked there, after any `environments` overrides. A monitored job with an empty `workspace_id` matches nothing: fix its `job_name_regex`. A job created in the last hour may not match yet, because system tables run about an hour behind; notebook 06 matches through the Jobs API and finds it straight away.
+# MAGIC **What to look for.** The impact table shows what a failure of each job affects: check it against how your jobs really depend on each other. Every enabled job matches at least one real job in the last table, and nothing you meant to skip (names matching `job_name_exclude_regex` are left out). The `environment` and `checked_here` columns show each match's environment label and whether the job is checked there, after any `environments` overrides. A monitored job with an empty `workspace_id` matches nothing: fix its `job_name_regex`. A job created in the last hour may not match yet, because system tables run about an hour behind; notebook 06 matches through the Jobs API and finds it straight away.
 
 # COMMAND ----------
 
@@ -44,6 +44,24 @@ display(spark.table(f"{s.catalog}.{s.schema}.monitored_jobs"))
 # COMMAND ----------
 
 display(spark.table(f"{s.catalog}.{s.schema}.job_dependencies"))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## What a failure of each job affects
+# MAGIC
+# MAGIC A FAILED finding lists these jobs in `affected_jobs`. `affects_directly` follows one dependency; `affects_in_all` follows the whole chain. A `child_job` link counts both ways: a parent failure stops its children, and a child failure fails its parent's run, so everything downstream of the parent is affected too. `service` dependencies are not listed here. Loops between jobs are printed below the table.
+
+# COMMAND ----------
+
+from jobs_watchdog.dependencies import IMPACT_SCHEMA, dependency_loops, impact_table
+
+display(spark.createDataFrame(impact_table(jobs, dependencies), schema=IMPACT_SCHEMA))
+loops = dependency_loops(dependencies)
+for loop in loops:
+    print("Loop in the job dependencies: " + " and ".join(loop) + " depend on each other")
+if not loops:
+    print("No loops in the job dependencies.")
 
 # COMMAND ----------
 

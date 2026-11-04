@@ -33,8 +33,8 @@ One row per job you want checked.
 | `job_name` | STRING, required | Short logical name. It appears on every finding and alert. Unique in the file. |
 | `job_name_regex` | STRING, required | Matches the job's real name in each workspace. Left out, it is `^<job_name>$`. |
 | `job_name_exclude_regex` | STRING | Optional. A job whose real name matches this is skipped, even when `job_name_regex` matches it. Use it for test copies. |
-| `schedule_type` | STRING, required | `scheduled` or `continuous`. Left out, it is `scheduled`. Only scheduled jobs get the `schedule_gap` check. |
-| `max_gap_minutes` | INT | Scheduled jobs: the longest allowed time between run starts. Required for scheduled jobs. |
+| `schedule_type` | STRING, required | `scheduled`, `continuous` or `triggered`. Left out, it is `scheduled`. Only scheduled jobs get the `schedule_gap` check. A triggered job is started by another job (a child job) or by hand, so it has no schedule to check: leave out `max_gap_minutes`, which is rejected on a triggered job and ignored when it comes from `defaults`. `last_run_result` judges a triggered job like a scheduled one. |
+| `max_gap_minutes` | INT | Scheduled jobs: the longest allowed time between run starts. Required for scheduled jobs, not allowed on triggered jobs. |
 | `max_runtime_minutes` | INT | The longest allowed run. Left out turns off `long_runtime` and `live_long_runtime`. |
 | `max_retries` | INT | A task retried more times than this is a retry loop. Set it below the job's own task retry limit: a job never retries past its own limit, so an equal value never fires. With `min_attempt_minutes` also left out, `retry_loop` is off. |
 | `min_attempt_minutes` | INT | A task attempt that ran shorter than this and was then retried is a retry loop: the task fails fast and restarts. The Jobs API scan checks it. With `max_retries` also left out, `retry_loop` is off. |
@@ -116,17 +116,17 @@ How the overrides apply:
 
 ## job_dependencies
 
-One row per dependency. A failure lists the jobs that depend on the failed job directly. Dependencies are between job names, not job IDs, so one row applies in every workspace where both jobs run.
+One row per dependency. A failure lists every job downstream of the failed job, through the whole chain (see [affected_jobs](#affected_jobs)). Dependencies are between job names, not job IDs, so one row applies in every workspace where both jobs run.
 
 | Column | Type | Meaning |
 |---|---|---|
 | `job_name` | STRING, required | The job that depends on something. Must be a job in `monitored_jobs`. |
 | `depends_on` | STRING, required | What it needs: another monitored job, the monitored job that starts it, or a service. |
-| `dependency_type` | STRING, required | `job`: `job_name` needs the output of `depends_on`. `child_job`: `depends_on` starts `job_name`, for example with a Run Job task. `service`: anything else the job needs, under any name, such as a message broker. Left out, it is `job`. For `job` and `child_job`, `depends_on` must be a monitored job. |
+| `dependency_type` | STRING, required | `job`: `job_name` needs the output of `depends_on`. `child_job`: `depends_on` starts `job_name`, for example with a Run Job task; `job_name` is the child and `depends_on` its parent. A job can be the child of only one parent. `service`: anything else the job needs, under any name, such as a message broker. Left out, it is `job`. For `job` and `child_job`, `depends_on` must be a monitored job. |
 | `notes` | STRING | Free text. |
 | `loaded_at` | TIMESTAMP, required | When notebook 02 loaded the row. |
 
-The scans fill `affected_jobs` from `job` and `child_job` rows. `service` rows are used by the custom check template (notebook 09), which lists the jobs that depend on a service it found down. Built-in service probes come in Phase 2.
+The scans fill `affected_jobs` from `job` and `child_job` rows, and `parent_job` from `child_job` rows. `service` rows are used by the custom check template (notebook 09), which lists the jobs that depend on a service it found down. Built-in service probes come in Phase 2. Notebook 02 shows what a failure of each job affects, and prints any loops between jobs.
 
 ## findings
 
@@ -150,11 +150,11 @@ One row per check, for each job a monitored job matches, in each scan, from each
 | `run_page_url` | STRING | A link to that run. |
 | `failed_task_keys` | ARRAY&lt;STRING&gt; | The tasks the row is about: failed tasks, or tasks in a retry loop. |
 | `error_summary` | STRING | What the check found, on every row. For failures, the start of the error text. At most 1,000 characters. |
-| `affected_jobs` | ARRAY&lt;STRING&gt; | On FAILED rows: the jobs that depend on this one (see [affected_jobs](#affected_jobs)). NULL on other rows. |
+| `affected_jobs` | ARRAY&lt;STRING&gt; | On FAILED rows: every job downstream of this one (see [affected_jobs](#affected_jobs)). NULL on other rows. |
 | `owner` | STRING | The job's owner from the config, for the row's environment. A row whose `job_name` is not a configured job keeps the owner it sets. |
 | `source` | STRING, required | `SYSTEM_TABLES`, `JOBS_API` or `CUSTOM` (your own checks). |
 | `environment` | STRING | The environment label of the workspace, from `monitored_workspaces`. Empty when the workspace has no label, and on rows with no workspace. |
-| `schedule_type` | STRING | `scheduled` or `continuous`, from the config. |
+| `schedule_type` | STRING | `scheduled`, `continuous` or `triggered`, from the config. |
 | `run_start_time` | TIMESTAMP | When the run the row is about started, in UTC. Empty on a system table row whose run may have begun before the lookback window. See [Run timing](#run-timing). |
 | `run_end_time` | TIMESTAMP | When that run ended, in UTC. Empty while it is still going, and on rows that are not about a run. |
 | `run_duration_seconds` | BIGINT | How long that run took, or has taken so far. Empty when the start is empty, and on a finished Jobs API run with no end time. Never negative. See [Run timing](#run-timing). |
@@ -163,6 +163,7 @@ One row per check, for each job a monitored job matches, in each scan, from each
 | `job_tags` | MAP&lt;STRING,STRING&gt; | The job's tags, as set on the job. |
 | `code_version` | STRING | The version deployed now: the tag named by `code_version_tag` on the job's current definition. On an untagged Jobs API row, it is the git commit of the run the row judged. See [Code version and job tags](#code-version-and-job-tags). |
 | `pipeline_url` | STRING | Link to the CI pipeline that deployed the code: the value of the job parameter named by `pipeline_url_parameter` (default `PIPELINE_URL`) in the run the row is about, or its default. Empty when the job has no such parameter. |
+| `parent_job` | STRING | On rows about a child job: the job that starts it, from its `child_job` dependency, so the child's findings can be read and routed with its parent's. Empty for every other job. |
 
 ### status
 
@@ -195,7 +196,7 @@ The termination type is the run's for run checks and the newest failed task's fo
 
 ### affected_jobs
 
-On a FAILED row, `affected_jobs` lists the monitored jobs with a `job` or `child_job` dependency on the failed job, sorted by name. Only direct dependents are listed. A FAILED job that nothing depends on gets an empty list. On a `CUSTOM` row about a service, it lists the jobs that depend on that service. Every other row gets NULL.
+On a FAILED row, `affected_jobs` lists every monitored job downstream of the failed job, through the whole chain, sorted by name: the jobs that depend on it, the jobs that depend on those, and so on. The failed job itself is never listed, and loops between jobs (two jobs that depend on each other) are fine. A `child_job` dependency counts both ways: a parent failure affects its children, which will not start, and a child failure affects its parent, whose run fails, and so everything downstream of the parent, including its other children. A FAILED job that nothing depends on gets an empty list. On a `CUSTOM` row about a service, it lists the jobs that depend on that service directly. Every other row gets NULL.
 
 ### error_summary
 
@@ -348,7 +349,7 @@ Illustrative values, one row per source. Both rows describe the same run.
 | `run_page_url` | https://&lt;workspace-host&gt;/jobs/123/runs/456 | https://&lt;workspace-host&gt;/jobs/123/runs/456 |
 | `failed_task_keys` | [load] | [load] |
 | `error_summary` | 1 task(s) failed in the newest run, judged by the newest attempt of each task. Newest termination code: RUN_EXECUTION_ERROR. | load: ValueError: order_id must not be null |
-| `affected_jobs` | [orders_enrich] | [orders_enrich] |
+| `affected_jobs` | [daily_revenue_export, daily_revenue_report, orders_enrich] | [daily_revenue_export, daily_revenue_report, orders_enrich] |
 | `owner` | ingestion-team | ingestion-team |
 | `source` | SYSTEM_TABLES | JOBS_API |
 | `environment` | production | production |
@@ -361,6 +362,7 @@ Illustrative values, one row per source. Both rows describe the same run.
 | `job_tags` | {"code_version": "main@3b1f0c2"} | {"code_version": "main@3b1f0c2"} |
 | `code_version` | main@3b1f0c2 | main@3b1f0c2 |
 | `pipeline_url` | https://ci.example.com/pipelines/1234 | https://ci.example.com/pipelines/1234 |
+| `parent_job` | (empty) | (empty) |
 
 The two rows describe the same failure from two sides. The Jobs API row is live and has the error text. The system table row has only the termination code, and it appears once the system tables catch up, about an hour after the run.
 

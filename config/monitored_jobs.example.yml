@@ -30,7 +30,8 @@
 #   job_name_exclude_regex  real names matching this are skipped, for example
 #                     test copies with "_test(_|$)". A bare "test" would also skip
 #                     names such as daily_revenue_report_latest.
-#   schedule_type     continuous or scheduled
+#   schedule_type     scheduled, continuous, or triggered (started by another
+#                     job or by hand: no schedule check, so no max_gap_minutes)
 #   max_gap_minutes   scheduled jobs: longest allowed gap between run starts
 #   max_runtime_minutes  longest allowed run before a warning
 #   max_retries       a task retried more times than this is a retry loop; set it
@@ -50,9 +51,13 @@
 # dependencies:  job_name depends on depends_on. dependency_type is job (another
 #                monitored job), child_job (a monitored job that the depends_on
 #                job starts) or service (anything else the job needs, such as a
-#                message broker; any name). Dependencies are between job names,
-#                so they apply in every workspace where the jobs run. When a job
-#                fails, affected_jobs lists the jobs that depend on it.
+#                message broker; any name). A child_job counts both ways: a
+#                parent failure stops the child, and a child failure fails the
+#                parent's run. A job has at most one parent, and the child's
+#                findings name it in parent_job. Dependencies are between job
+#                names, so they apply in every workspace where the jobs run.
+#                When a job fails, affected_jobs lists every job downstream of
+#                it, through the whole chain.
 
 defaults:
   schedule_type: scheduled
@@ -153,11 +158,11 @@ jobs:
 
   - job_name: daily_revenue_export
     job_name_regex: "^daily_revenue_export(_(eu|us))?_(prod|dev)$"
-    max_gap_minutes: 1500
+    schedule_type: triggered  # no schedule of its own, so no schedule check and no max_gap_minutes
     max_runtime_minutes: 30
     owner: analytics-team
     enabled: false
-    notes: Has no schedule of its own; daily_revenue_report starts it with a Run Job task.
+    notes: A child job; daily_revenue_report starts it with a Run Job task. Its rows name that parent in parent_job.
 
 dependencies:
   # Demo: when watchdog_demo_fails fails, affected_jobs lists watchdog_demo_succeeds.

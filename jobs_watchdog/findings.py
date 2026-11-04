@@ -2,7 +2,7 @@
 
 The Jobs API collector returns partial rows. finalize_rows fills the columns
 that come from the scan and the config: scan_id, observed_at, region,
-account_id, severity, owner and affected_jobs. write_findings puts the rows in
+account_id, severity, owner, affected_jobs and parent_job. write_findings puts the rows in
 the temp view watchdog_new_findings and runs sql/scan/30_merge_findings.sql,
 which skips any key already in the table. The system table scan builds its
 rows in SQL and merges through the same view and file.
@@ -11,6 +11,7 @@ rows in SQL and merges through the same view and file.
 from collections import defaultdict
 from datetime import timezone
 
+from jobs_watchdog.dependencies import affected_jobs, parent_jobs
 from jobs_watchdog.identifiers import validate_identifier
 from jobs_watchdog.sqlfiles import run_sql
 from jobs_watchdog.states import failure_category
@@ -47,6 +48,7 @@ FINDINGS_SCHEMA = (
     ("job_tags", "MAP<STRING,STRING>"),
     ("code_version", "STRING"),
     ("pipeline_url", "STRING"),
+    ("parent_job", "STRING"),
 )
 FINDINGS_COLUMNS = tuple(name for name, _ in FINDINGS_SCHEMA)
 NEW_FINDINGS_VIEW = "watchdog_new_findings"
@@ -66,6 +68,8 @@ def direct_dependents(dependencies):
 
     Services count too, so a CUSTOM row about a service (for example a
     connectivity check named kafka) lists the jobs that need that service.
+    Rows about a configured job use dependencies.affected_jobs instead: every
+    job downstream of it, through the whole chain.
     """
     dependents = defaultdict(set)
     for dependency in dependencies:
@@ -79,10 +83,15 @@ def finalize_rows(rows, scan_id, observed_at, region, account_id, jobs, dependen
     For a configured job, severity (on rows that are not HEALTHY) and owner
     come from the config; a row about anything else, such as a CUSTOM service
     check, keeps the severity and owner it set. failure_category is filled when
-    a row has none, and affected_jobs (direct dependents) only on FAILED rows.
+    a row has none. affected_jobs is filled only on FAILED rows: for a configured
+    job, every job downstream of it (dependencies.affected_jobs); for anything
+    else, such as a service, the jobs that depend on it directly. parent_job is
+    the parent of a child job (its child_job dependency).
     """
     by_name = {job.job_name: job for job in jobs}
     dependents = direct_dependents(dependencies)
+    downstream = affected_jobs(dependencies)
+    parents = parent_jobs(dependencies)
     complete = []
     for row in rows:
         job = by_name.get(row["job_name"])
@@ -101,11 +110,19 @@ def finalize_rows(rows, scan_id, observed_at, region, account_id, jobs, dependen
             severity=None if status == "HEALTHY" else (job.severity if job is not None else row.get("severity")),
             owner=job.owner if job is not None else row.get("owner"),
             failure_category=row.get("failure_category") or failure_category(row["check_id"], status),
-            affected_jobs=sorted(dependents.get(row["job_name"], ())) if status == "FAILED" else None,
+            affected_jobs=_affected(row["job_name"], by_name, downstream, dependents) if status == "FAILED" else None,
+            parent_job=parents.get(row["job_name"]),
             error_summary=None if summary is None else str(summary)[:SUMMARY_CHARS],
         )
         complete.append({column: filled.get(column) for column in FINDINGS_COLUMNS})
     return complete
+
+
+def _affected(name, by_name, downstream, dependents):
+    """What a FAILED row lists: a configured job's whole downstream chain, or a service's direct dependents."""
+    if name in by_name:
+        return list(downstream.get(name, []))
+    return sorted(dependents.get(name, ()))
 
 
 def schema_ddl():

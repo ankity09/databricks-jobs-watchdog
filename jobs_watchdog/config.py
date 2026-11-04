@@ -8,7 +8,8 @@ import yaml
 
 from jobs_watchdog.identifiers import validate_identifier
 
-SCHEDULE_TYPES = {"continuous", "scheduled"}
+# triggered: started by another job or by hand, so it has no schedule to check
+SCHEDULE_TYPES = {"continuous", "scheduled", "triggered"}
 SEVERITIES = {"CRITICAL", "WARNING"}
 DEPENDENCY_TYPES = {"job", "child_job", "service"}
 AUTH_MODES = {"current_workspace", "service_principal"}
@@ -172,6 +173,7 @@ def _parse_job(raw, defaults=None, labels=()):
     if unknown:
         raise ConfigError(f"job {name}: unknown keys {unknown}; allowed: {sorted(JOB_KEYS)}")
     environments = _parse_environments(raw.get("environments"), name, set(labels))
+    own = raw
     raw = {**(defaults or {}), **raw}
     regex = _compiled(raw.get("job_name_regex") or f"^{re.escape(name)}$", name, "job_name_regex")
     exclude = raw.get("job_name_exclude_regex")
@@ -184,6 +186,13 @@ def _parse_job(raw, defaults=None, labels=()):
     max_gap = _optional_int(raw.get("max_gap_minutes"), name, "max_gap_minutes")
     if schedule_type == "scheduled" and max_gap is None:
         raise ConfigError(f"job {name}: scheduled jobs need max_gap_minutes")
+    if schedule_type == "triggered":
+        # a triggered job has no schedule check; a gap limit set on it would look checked when it is not
+        gap_labels = sorted(label for label, values in environments.items() if "max_gap_minutes" in values)
+        if "max_gap_minutes" in own or gap_labels:
+            where = f" (environments {', '.join(gap_labels)})" if gap_labels else ""
+            raise ConfigError(f"job {name}: triggered jobs have no schedule check, so remove max_gap_minutes{where}")
+        max_gap = None  # a gap limit from defaults does not apply to a triggered job
     return MonitoredJob(
         job_name=name,
         job_name_regex=regex,
@@ -238,6 +247,14 @@ def load_monitored_jobs(path):
             raise ConfigError(f"duplicate job_name {job.job_name!r} in {path}")
         seen.add(job.job_name)
     deps = [_parse_dependency(raw, seen) for raw in data.get("dependencies") or []]
+    parents = {}
+    for dep in deps:
+        if dep.dependency_type != "child_job":
+            continue
+        if dep.job_name in parents and parents[dep.job_name] != dep.depends_on:
+            raise ConfigError(f"job {dep.job_name} is a child_job of both {parents[dep.job_name]} and "
+                              f"{dep.depends_on}; a job can have only one parent")
+        parents[dep.job_name] = dep.depends_on
     return jobs, deps
 
 

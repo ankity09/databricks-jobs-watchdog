@@ -6,15 +6,15 @@
 # MAGIC
 # MAGIC | check_id | What it checks |
 # MAGIC |---|---|
-# MAGIC | `last_run_result` | scheduled jobs: the newest finished run in the window; continuous jobs: the newest run, even while it is still going |
+# MAGIC | `last_run_result` | scheduled and triggered jobs: the newest finished run in the window; continuous jobs: the newest run, even while it is still going |
 # MAGIC | `task_failures` | tasks whose newest attempt failed, in the job's newest run |
-# MAGIC | `schedule_gap` | scheduled jobs: no run started within `max_gap_minutes` (plus 60 for system table lag) |
+# MAGIC | `schedule_gap` | scheduled jobs only: no run started within `max_gap_minutes` (plus 60 for system table lag); triggered and continuous jobs have no schedule check |
 # MAGIC | `long_runtime` | the newest finished run, or a run still going, over `max_runtime_minutes`, measured up to its newest system table record |
 # MAGIC | `not_found` | the job's regex matches no job in this region |
 # MAGIC
 # MAGIC **Inputs (widgets).** `catalog`, `schema`, `region`, `lookback_hours`, `scan_id`, `code_version_tag` (the job tag that holds the deployed code version), `pipeline_url_parameter` (the job parameter that holds the CI pipeline link). With `scan_id` empty, a new one is made from the current UTC time. Re-running with the same `scan_id` adds nothing. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
-# MAGIC **What to look for.** One row per check for each matched job. System tables run about an hour behind, so a brand-new job shows `not_found` here until it lands.
+# MAGIC **What to look for.** One row per check for each matched job. A FAILED row's `affected_jobs` lists every job downstream of it, and rows about a child job name its parent in `parent_job`. System tables run about an hour behind, so a brand-new job shows `not_found` here until it lands.
 
 # COMMAND ----------
 
@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 
 from pyspark.sql import functions as F
 
+from jobs_watchdog.dependencies import register_affected_jobs
 from jobs_watchdog.findings import MERGE_SQL, NEW_FINDINGS_VIEW, new_scan_id
 from jobs_watchdog.sqlfiles import run_sql
 from jobs_watchdog.upgrade import require_current_tables
@@ -48,6 +49,8 @@ print(f"scan_id: {scan_id}")
 names, names_error = register_workspace_names(spark)
 if names_error:
     print(f"Workspace names are unavailable, so findings get no names or run links: {names_error}")
+# what a failure of each job affects, through the whole chain, for affected_jobs and parent_job
+register_affected_jobs(spark, s.catalog, s.schema)
 
 new_rows = run_sql(
     spark,

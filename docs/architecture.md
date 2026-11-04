@@ -130,5 +130,5 @@ The scheduled scan (`watchdog_scan`) first runs notebook 01, then steps 2, 3 and
 - `status`: HEALTHY, WARNING, FAILED or UNKNOWN. UNKNOWN means the Watchdog could not tell: no matching job, no access, no finished run in the window, or a window too short to judge.
 - `severity`: CRITICAL or WARNING from your config, on rows that are not HEALTHY.
 - `failure_category`: FUNCTIONAL (the code or its inputs), INFRASTRUCTURE (the platform or cloud), SLA_EXCEEDED, SCHEDULE_GAP, RETRY_LOOP, COVERAGE, or NONE for healthy rows.
-- `affected_jobs`: on FAILED rows, the jobs that depend directly on this one.
+- `affected_jobs`: on FAILED rows, every job downstream of this one, through the whole dependency chain.
 - `environment`, `trigger_type`, `code_version` and the run timing columns say where and how the run happened. [data-model.md](data-model.md) has the full rules.

@@ -31,9 +31,9 @@ Inside a scan, step 1 reads the system tables, step 2 calls the Jobs API, and st
 
 | Source | `check_id` | Finds |
 |---|---|---|
-| System tables | `last_run_result` | scheduled jobs: the newest finished run in the lookback window; continuous jobs: the newest run, even while it runs |
+| System tables | `last_run_result` | scheduled and triggered jobs: the newest finished run in the lookback window; continuous jobs: the newest run, even while it runs |
 | | `task_failures` | tasks whose newest attempt failed, in the job's newest run |
-| | `schedule_gap` | a scheduled job with no run started within `max_gap_minutes` (plus 60 minutes for system table lag) |
+| | `schedule_gap` | a scheduled job with no run started within `max_gap_minutes` (plus 60 minutes for system table lag); triggered jobs, such as child jobs another job starts, have no schedule check |
 | | `long_runtime` | the newest finished run, or a run still going, over `max_runtime_minutes`, measured up to its newest system table record |
 | | `not_found` | a monitored job whose name pattern matches no job in the region, or matches only where the job is switched off |
 | Jobs API | `live_run_status` | the state of the newest run, right now |

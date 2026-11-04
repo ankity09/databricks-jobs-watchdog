@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema || '.findings')
   triggered_by STRING COMMENT 'Who started a one-time run, from the Jobs API',
   job_tags MAP<STRING,STRING> COMMENT 'The job tags, for example the deployed code version',
   code_version STRING COMMENT 'Code version deployed now: the configured tag on the current job definition; Jobs API rows of untagged jobs fall back to the git commit of the run they judged',
-  pipeline_url STRING COMMENT 'Link to the CI pipeline that deployed the code: the job parameter named by pipeline_url_parameter, from the run this row is about'
+  pipeline_url STRING COMMENT 'Link to the CI pipeline that deployed the code: the job parameter named by pipeline_url_parameter, from the run this row is about',
+  parent_job STRING COMMENT 'For a child job: the job that starts it, from its child_job dependency; empty for other jobs'
 )
 COMMENT 'Watchdog findings: one row per job, check and source in each scan'
