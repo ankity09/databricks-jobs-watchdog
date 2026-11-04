@@ -2,6 +2,48 @@
 
 What changed, for people who already run the Watchdog. After every pull: restart Python on any open notebook, then run notebook 01 once. It creates any new table, adds any new columns to your existing tables (your rows stay) and brings the view up to date. If you deployed the jobs with the bundle, deploy it again right after the pull, so the jobs run the new code; each scheduled run of `watchdog_scan` then runs notebook 01 too.
 
+## Phase 1.3 (2026-11-04)
+
+### Pin jobs by job ID
+
+- **`job_ids`** on a job, or in one environment of its `environments` section, lists the exact jobs to check. In each workspace the environment's list applies, otherwise the job's own. Where IDs apply, the name pattern and the exclusion are not used; everywhere else the job still matches by name. Keep name patterns for jobs that get a new ID each time, such as jobs created by code.
+- **Missing IDs are reported.** The system table scan writes a `not_found` row naming listed job IDs that apply in this region but were not found, for example `1 of 3 listed job IDs were not found in this region: 111.` The Jobs API scan reports a pinned job only when it finds none of its IDs.
+- **New check `duplicate_name`** (system tables, WARNING, failure_category `COVERAGE`): two or more jobs that one name pattern matches in a workspace have exactly the same name. Rename the extra job, or pin the right one by ID.
+- Notebook 02's match table shows `job_ids`, `matched_by` (`job_id` or `name`) and `same_name_jobs`.
+
+### Child jobs, and impact through the whole chain
+
+- **`schedule_type: triggered`** is for jobs that another job starts, or that run only by hand. They get no `schedule_gap` row, and `max_gap_minutes` on such a job stops the load (one from `defaults` is ignored).
+- **`affected_jobs` now lists every job downstream** of a failed job, through the whole chain, not only its direct dependents. A `child_job` link counts both ways: a parent failure lists its children, and a child failure lists its parent and everything downstream of it. Loops between jobs are allowed, and notebook 02 prints them.
+- **New `findings` column `parent_job`:** on rows about a child job, the job that starts it, so a child's findings can be read and routed with its parent's. A job can be the child of only one job.
+- Notebook 02 shows what a failure of each job affects.
+
+### Delete old findings
+
+- **`scan.retention_days`** (default 30; `0` keeps everything) and a daily **`watchdog_cleanup`** job (03:30 UTC, paused and unpaused with the scan through `scan.schedule_status`). It runs the new notebook `10_delete_old_findings` (`sql/maintenance/50_delete_old_findings.sql`), which deletes whole scans older than the limit and always keeps each source's newest scan, so `findings_latest` never goes empty.
+
+### A shorter main path
+
+- Notebooks 03 and 04 moved to `notebooks/explore`, to run by hand when you want to look at the raw data. `watchdog_phase_1` now runs 00, 01, 02, 05, 06 and 07.
+
+### Changed behavior
+
+- `affected_jobs` lists the whole downstream chain, so it can be longer than before.
+- Running `sql/scan/21_system_table_findings.sql` by hand now also needs the temp view `watchdog_affected_jobs`, which notebook 05 creates. Run it from notebook 05.
+
+### Docs
+
+- The runbook has four new sections: "First run, step by step", "Child jobs and jobs with no schedule", "Pin jobs by job ID" and "Delete old findings".
+
+### How to upgrade from Phase 1.2
+
+1. In the Git folder, click Pull. If Pull reports a conflict in a notebook you have run, keep the incoming version: Databricks saves the serverless environment into a notebook when it runs it, and that is the only local change.
+2. If you deployed the jobs with the bundle, deploy it again. This also creates `watchdog_cleanup`, paused unless `scan.schedule_status` is UNPAUSED.
+3. Restart Python on any open notebook (detach and reattach).
+4. Run notebook 01. It adds `job_ids` to `monitored_jobs` and `monitored_job_environments`, adds `parent_job` to `findings`, and prints `view findings_latest: replaced`. Your rows stay.
+5. Run notebook 02. Job lists without `job_ids` or `triggered` jobs work unchanged. Optionally pin jobs by ID, mark child jobs and jobs with no schedule as `triggered`, and set `scan.retention_days`.
+6. Run notebooks 05 and 06, and check that notebook 07 prints only PASS lines. Open notebooks 03 and 04 from `notebooks/explore` from now on.
+
 ## Phase 1.2 (2026-10-29)
 
 ### One job list for many workspaces and environments

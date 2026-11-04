@@ -35,8 +35,10 @@ Delivered in this release:
 - **The CI pipeline link.** `pipeline_url` on every finding, from a job parameter.
 - **A dashboard fix.** Notebook 08 creates the dashboard through the dashboards REST API, so it works on every SDK version.
 
-## Phase 1.3 (built)
+## Phase 1.3: job IDs, child jobs and retention (built)
 
+- **Pin jobs by job ID.** `job_ids` on a job, or per environment, lists the exact jobs to check; name patterns still cover jobs without stable IDs. Missing IDs get a `not_found` row, and a `duplicate_name` check warns when one pattern finds two jobs with the same name.
+- **Child jobs and the whole chain.** `schedule_type: triggered` for jobs another job starts; `affected_jobs` lists everything downstream, with `child_job` links counted both ways; findings carry `parent_job`.
 - **Retention.** The daily `watchdog_cleanup` job (notebook 10) deletes `findings` scans older than `scan.retention_days` (30 by default), always keeping each source's newest scan.
 - **A shorter main path.** The read-only exploration notebooks moved to `notebooks/explore`, and `watchdog_phase_1` now runs 00, 01, 02, 05, 06 and 07.
 

@@ -96,7 +96,7 @@ After every pull, restart Python on any notebook you have open, so it loads the 
 
 [CHANGELOG.md](../CHANGELOG.md) lists what each release changed. To move to a new release:
 
-1. In the Git folder, click Pull.
+1. In the Git folder, click Pull. If Pull reports a conflict in a notebook you have run, keep the incoming version (see [First run, step by step](#first-run-step-by-step)).
 2. If you deployed the jobs with the bundle, deploy it again from your updated clone (the `eval` line, then `databricks bundle deploy`). The jobs run their own copy of the code, and an older copy cannot load the job list once notebook 01 has added a column: notebook 02 stops with `DELTA_INSERT_COLUMN_ARITY_MISMATCH`.
 3. Restart Python on any open notebook (detach and reattach).
 4. Run notebook 01. It prints the columns it added to each table, and `view findings_latest:` followed by created, replaced or current. Your existing rows stay.
@@ -235,6 +235,17 @@ A name pattern finds every copy of a job, in every workspace, without a list of 
 - The system table scan reports listed IDs it cannot find where they apply: `2 of 3 listed job IDs were not found in this region: 111, 222.` The Jobs API scan reports a pinned job as `not_found` only when it finds none of its IDs in the workspaces it checked.
 - Notebook 02's match table shows `matched_by` (`job_id` or `name`) for each match, so you can check which rule found it.
 - With a name pattern, two jobs in one workspace with exactly the same name are both checked, and the system table scan writes a `duplicate_name` WARNING naming their IDs. Rename or delete the extra job, or pin the right one by ID. Notebook 02's `same_name_jobs` column shows how many jobs share each matched name.
+
+### First run, step by step
+
+The order a new operator follows, and what to check at each step:
+
+1. **Pull, then restart Python.** If Pull reports a conflict in a notebook you have run, keep the incoming version: Databricks saves the serverless environment into a notebook when it runs it, and that is the only local change.
+2. **Notebook 01.** Fill in `catalog` and `schema`, then run it. A Pull resets the input boxes to their defaults (the `schema` box then says `watchdog`), so check them first, or keep your values in `accelerator.local.yaml`. Expect six `exists: True` lines.
+3. **Notebook 00.** Every line says PASS, and section 3 lists the workspaces this Watchdog covers. Note the `Workspace ID` line for your job list. A workspace's name is not proof of its region: `SELECT current_metastore()` returns the metastore's cloud and region, for example `aws:us-east-2:...`.
+4. **The job list.** Create `monitored_jobs.yml` outside the Git folder (Create, then File) and start with one job you know runs. In the workspace browser, the file's menu has Copy full path, for the `monitored_jobs_path` box.
+5. **Notebook 02.** The match table shows the job's real name and job ID, with `checked_here` true. An empty row means the pattern found nothing.
+6. **Notebooks 05 and 06, then 07.** Notebook 07 prints five PASS lines. Then add the rest of your jobs and run 02, 05 and 06 again.
 
 ### Run Phase 1 by hand
 

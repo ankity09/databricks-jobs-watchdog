@@ -1,6 +1,6 @@
 # Watchdog: job monitoring across Databricks workspaces
 
-Watchdog checks your Databricks jobs in every workspace of a cloud region and writes what it finds into one Unity Catalog table. It is built in phases. **Phase 1.2**, in this repo today, creates the tables, loads your list of jobs to watch (with shared defaults and per-environment settings), runs the scans on a schedule (paused until you turn it on), and adds a first dashboard.
+Watchdog checks your Databricks jobs in every workspace of a cloud region and writes what it finds into one Unity Catalog table. It is built in phases. **Phase 1.3**, in this repo today, creates the tables, loads your list of jobs to watch (by name or by job ID, with shared defaults and per-environment settings), runs the scans on a schedule (paused until you turn it on), lists what a failure affects through the whole dependency chain, deletes old findings, and adds a first dashboard.
 
 > **Already running the first release?** [CHANGELOG.md](CHANGELOG.md) lists everything that changed and how to upgrade: pull, restart Python on open notebooks, then run notebook 01 once.
 
@@ -104,6 +104,8 @@ Both paths use the same notebooks. Settings come from `accelerator.yaml`: copy i
 
 ### By hand, in a Git folder
 
+The runbook's [First run, step by step](docs/phase-1-runbook.md#first-run-step-by-step) has the order, and what to check at each step.
+
 1. Clone this repo into a Databricks Git folder ([docs/git-folder-setup.md](docs/git-folder-setup.md)).
 2. Open `notebooks/` and run, in order, on serverless compute. Run each notebook's first two code cells before you fill in its input boxes.
 
@@ -169,8 +171,9 @@ Both targets use development mode, so deployed names start with `[dev <your name
 |---|---|---|
 | 1 | Tables, config, both scans into one `findings` table, validation, and an on-demand job | Built |
 | 1.1 | A scan every 20 minutes (paused until you unpause it), the `findings_latest` view, a first dashboard, environment labels, run timing, trigger and code version on each finding, and a template for your own checks | Built |
-| 1.2 | Shared `defaults` and per-environment settings in the job list, a retry rule for tasks that fail fast and restart, and the CI pipeline link on each finding | Built: this repo |
-| 2 | An incident view that changes only when a status changes, more checks such as stuck batches and service probes, and a retention rule for `findings` | Planned |
+| 1.2 | Shared `defaults` and per-environment settings in the job list, a retry rule for tasks that fail fast and restart, and the CI pipeline link on each finding | Built |
+| 1.3 | Jobs pinned by job ID, a duplicate-name check, child jobs read with their parent, impact through the whole dependency chain, and a daily job that deletes old findings | Built: this repo |
+| 2 | An incident view that changes only when a status changes, and more checks such as stuck batches and service probes | Planned |
 | 3 | Databricks SQL alerts on `findings`, sent to Slack, email, Microsoft Teams, PagerDuty or a webhook, with severity routing, alerts on change and recovery, and routing by environment | Planned |
 | 4 | The Watchdog app, a Databricks App reading `findings` and `findings_latest`: health, incidents, impact, coverage, and Genie questions | Planned |
 | 5 | Other regions and production, and a cross-region roll-up if your security team approves | Planned |
