@@ -156,7 +156,7 @@ def test_open_runs_are_measured_to_their_newest_system_table_record():
 
 def test_scan_skips_names_matching_the_exclude_regex():
     exp, ctes = _scan_ctes()
-    calls = [call for call in ctes["regex_matched"].find_all(exp.RegexpLike)]
+    calls = [call for call in ctes["candidates"].find_all(exp.RegexpLike)]
     assert {call.expression.name for call in calls} >= {"job_name_regex", "job_name_exclude_regex"}
     assert any(isinstance(call.parent, exp.Not) for call in calls)
 
@@ -216,7 +216,7 @@ def test_scan_reads_pipeline_url_from_the_runs_job_parameters():
 def test_scan_applies_environment_overrides_and_reports_jobs_switched_off_everywhere():
     exp, ctes = _scan_ctes()
     assert "monitored_job_environments" in {t.name for t in ctes["overrides"].find_all(exp.Table)}
-    assert {"regex_matched", "overrides"} <= {t.name for t in ctes["matched"].find_all(exp.Table)}
+    assert {"all_matched", "overrides"} <= {t.name for t in ctes["matched"].find_all(exp.Table)}
     text = load_sql("sql/scan/21_system_table_findings.sql")
     assert "coalesce(o.enabled, r.enabled)" in text
     assert "switched off" in text
@@ -260,3 +260,43 @@ def test_cleanup_deletes_whole_old_scans_but_never_a_sources_newest_scan():
     assert "timestampadd(DAY, -CAST(:retention_days AS INT), current_timestamp())" in code
     # whole scans go: rows are matched on source and scan_id only
     assert "ON t.source = old.source AND t.scan_id = old.scan_id WHEN MATCHED THEN DELETE" in code
+
+
+def test_scan_matches_by_job_id_where_job_ids_apply_and_by_name_elsewhere():
+    exp, ctes = _scan_ctes()
+    assert {"monitored", "overrides"} <= {t.name for t in ctes["candidates"].find_all(exp.Table)}
+    text = load_sql("sql/scan/21_system_table_findings.sql")
+    assert "explode(job_ids)" in text
+    assert "array_contains(coalesce(o.job_ids, m.job_ids), c.job_id)" in text
+    assert "(c.matched_by = 'job_id') = (coalesce(size(coalesce(o.job_ids, m.job_ids)), 0) > 0)" in text
+    assert "matched_by" in ctes["all_matched"].named_selects
+
+
+def test_scan_reports_listed_job_ids_it_cannot_find():
+    exp, ctes = _scan_ctes()
+    assert "environments" in {t.name for t in ctes["expected_ids"].find_all(exp.Table)}
+    assert {"expected", "missing"} <= set(ctes["id_check"].named_selects)
+    text = load_sql("sql/scan/21_system_table_findings.sql")
+    assert "listed job IDs were not found in this region" in text
+    assert "OR coalesce(size(i.missing), 0) > 0" in text
+
+
+def test_scan_warns_about_jobs_sharing_one_name_when_matched_by_name():
+    exp, ctes = _scan_ctes()
+    assert "matched_by = 'name'" in ctes["same_name"].sql(dialect="databricks")
+    assert ctes["same_name"].args.get("having") is not None
+    text = load_sql("sql/scan/21_system_table_findings.sql")
+    assert "'duplicate_name'," in text and "WHEN c.check_id = 'duplicate_name' THEN 'COVERAGE'" in text
+
+
+def test_resolve_query_shows_how_each_job_matched():
+    sqlglot = pytest.importorskip("sqlglot")
+    tree = sqlglot.parse_one(for_parsing(load_sql("sql/scan/20_resolve_monitored_jobs.sql")), read="databricks")
+    assert {"job_ids", "matched_by", "same_name_jobs"} <= set(tree.named_selects)
+    text = load_sql("sql/scan/20_resolve_monitored_jobs.sql")
+    assert "array_contains(coalesce(o.job_ids, m.job_ids), c.job_id)" in text
+
+
+def test_config_loads_carry_job_ids():
+    assert "job_ids" in load_sql("sql/config/01_load_monitored_jobs.sql")
+    assert "job_ids" in load_sql("sql/config/04_load_monitored_job_environments.sql")

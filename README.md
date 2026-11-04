@@ -35,7 +35,8 @@ Inside a scan, step 1 reads the system tables, step 2 calls the Jobs API, and st
 | | `task_failures` | tasks whose newest attempt failed, in the job's newest run |
 | | `schedule_gap` | a scheduled job with no run started within `max_gap_minutes` (plus 60 minutes for system table lag); triggered jobs, such as child jobs another job starts, have no schedule check |
 | | `long_runtime` | the newest finished run, or a run still going, over `max_runtime_minutes`, measured up to its newest system table record |
-| | `not_found` | a monitored job whose name pattern matches no job in the region, or matches only where the job is switched off |
+| | `not_found` | a monitored job whose name pattern matches no job in the region, or matches only where the job is switched off, or whose listed job IDs are missing |
+| | `duplicate_name` | two jobs in one workspace with exactly the same name, both matched by one name pattern |
 | Jobs API | `live_run_status` | the state of the newest run, right now |
 | | `live_task_failures` | failed tasks in the newest run, with their error text, even while the run continues |
 | | `live_long_runtime` | a run still going past `max_runtime_minutes` |
@@ -99,7 +100,7 @@ Phase 1 creates no clusters, apps, alerts or secrets. The dashboard uses a SQL w
 
 ## Run Phase 1 by hand, or as a job
 
-Both paths use the same notebooks. Settings come from `accelerator.yaml`: copy it to `accelerator.local.yaml` (git-ignored) and fill in `target.catalog` and `target.region`. Copy `config/monitored_jobs.example.yml` somewhere outside the repo, list your own jobs, and point `scan.monitored_jobs_path` at it. One entry covers a job in every workspace where it runs, each copy with its own job ID, so you never list job IDs. Use `defaults` for settings most jobs share, `job_name_exclude_regex` to skip test copies, the optional `workspaces` section to label each workspace with an environment, and a job's `environments` section to change its settings in one environment, for example `WARNING` instead of `CRITICAL` in lower environments, or not checked there at all. The example file works as is with the demo jobs.
+Both paths use the same notebooks. Settings come from `accelerator.yaml`: copy it to `accelerator.local.yaml` (git-ignored) and fill in `target.catalog` and `target.region`. Copy `config/monitored_jobs.example.yml` somewhere outside the repo, list your own jobs, and point `scan.monitored_jobs_path` at it. One entry covers a job in every workspace where it runs, each copy with its own job ID, so you do not have to list job IDs; `job_ids` pins exact jobs when you want to. Use `defaults` for settings most jobs share, `job_name_exclude_regex` to skip test copies, the optional `workspaces` section to label each workspace with an environment, and a job's `environments` section to change its settings in one environment, for example `WARNING` instead of `CRITICAL` in lower environments, or not checked there at all. The example file works as is with the demo jobs.
 
 ### By hand, in a Git folder
 

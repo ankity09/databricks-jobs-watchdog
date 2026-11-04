@@ -7,7 +7,8 @@
 # One entry covers one job everywhere it runs. When the same job is deployed to
 # several workspaces, each copy with its own job ID, job_name_regex finds the
 # copy in each workspace, and every finding says which workspace and job ID it
-# is about. You never list job IDs.
+# is about. You do not have to list job IDs, but you can: job_ids checks exact
+# jobs by ID instead of matching names.
 #
 # The file has four sections. Only jobs is required.
 #
@@ -30,6 +31,10 @@
 #   job_name_exclude_regex  real names matching this are skipped, for example
 #                     test copies with "_test(_|$)". A bare "test" would also skip
 #                     names such as daily_revenue_report_latest.
+#   job_ids           optional: the exact jobs to check, by job ID, instead of
+#                     matching names. Where job IDs apply, the name pattern and
+#                     the exclusion are not used. A job deleted and created again
+#                     gets a new ID, so keep name patterns for jobs created by code.
 #   schedule_type     scheduled, continuous, or triggered (started by another
 #                     job or by hand: no schedule check, so no max_gap_minutes)
 #   max_gap_minutes   scheduled jobs: longest allowed gap between run starts
@@ -45,7 +50,8 @@
 #   environments      settings for one environment label, for example
 #                     lower: {severity: WARNING} or lower: {enabled: false}. It can
 #                     set severity, owner, enabled, max_gap_minutes,
-#                     max_runtime_minutes, max_retries and min_attempt_minutes.
+#                     max_runtime_minutes, max_retries, min_attempt_minutes and
+#                     job_ids (the job IDs to check in that environment).
 #                     Each label must be defined in the workspaces section.
 #
 # dependencies:  job_name depends on depends_on. dependency_type is job (another
@@ -144,6 +150,8 @@ jobs:
     notes: Runs hourly, once per variant.
     environments:
       lower: {enabled: false}  # production only for now
+      # in production, check these two jobs by ID: the pinned IDs replace the name pattern there
+      production: {job_ids: ["123456789012345", "234567890123456"]}
 
   - job_name: daily_revenue_report
     job_name_regex: "^daily_revenue_report(_(eu|us))?_(prod|dev)$"

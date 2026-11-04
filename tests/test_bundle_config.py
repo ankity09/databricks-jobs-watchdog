@@ -353,3 +353,11 @@ def test_example_config_marks_its_child_job_triggered():
     export = jobs["daily_revenue_export"]
     assert (export.schedule_type, export.max_gap_minutes) == ("triggered", None)
 
+
+def test_example_config_pins_one_environment_by_job_id():
+    jobs = {job.job_name: job for job in load_monitored_jobs(EXAMPLE_CONFIG)[0]}
+    enrich = jobs["orders_enrich"]
+    assert enrich.settings_for("production").job_ids == ("123456789012345", "234567890123456")
+    assert enrich.settings_for("lower").job_ids == ()
+    assert "job_ids" in EXAMPLE_CONFIG.read_text().split("\ndefaults:")[0]  # documented in the header
+

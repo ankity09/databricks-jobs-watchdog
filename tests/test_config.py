@@ -397,3 +397,60 @@ def test_a_child_job_may_also_depend_on_other_jobs(tmp_path):
     _, deps = load_monitored_jobs(write(tmp_path, _family(other)))
     assert len(deps) == 2
 
+
+PINNED = """
+workspaces:
+  - workspace_id: "1111"
+    environment: production
+  - workspace_id: "2222"
+    environment: lower
+jobs:
+  - job_name: orders_ingest
+    job_ids: [123456789012345, "234567890123456"]
+    max_gap_minutes: 60
+    environments:
+      lower: {job_ids: ["345678901234567"]}
+  - job_name: orders_enrich
+    job_name_regex: "^orders_enrich_(prod|dev)$"
+    max_gap_minutes: 60
+"""
+
+
+def test_job_ids_load_as_digit_strings(tmp_path):
+    ingest, enrich = load_monitored_jobs(write(tmp_path, PINNED))[0]
+    assert ingest.job_ids == ("123456789012345", "234567890123456")
+    assert ingest.settings_for("lower").job_ids == ("345678901234567",)
+    assert ingest.settings_for("production").job_ids == ingest.job_ids
+    assert ingest.listed_job_ids == ("123456789012345", "234567890123456", "345678901234567")
+    assert ingest.job_name_regex == "^orders_ingest$"  # the default pattern stays, used only where no IDs apply
+    assert enrich.job_ids == () and enrich.listed_job_ids == ()
+
+
+@pytest.mark.parametrize(
+    "job_ids,message",
+    [
+        ("[]", "one or more"),
+        ("123", "list"),
+        ("[12a]", "whole numbers"),
+        ("[true]", "whole numbers"),
+        ("[-5]", "whole numbers"),
+        ("[1.5]", "whole numbers"),
+        ("[7, \"7\"]", "listed twice"),
+    ],
+)
+def test_bad_job_ids_are_rejected(tmp_path, job_ids, message):
+    text = PINNED.replace('job_ids: [123456789012345, "234567890123456"]', f"job_ids: {job_ids}")
+    with pytest.raises(ConfigError, match=message):
+        load_monitored_jobs(write(tmp_path, text))
+
+
+def test_bad_job_ids_in_an_environment_name_the_environment(tmp_path):
+    text = PINNED.replace('lower: {job_ids: ["345678901234567"]}', "lower: {job_ids: [x1]}")
+    with pytest.raises(ConfigError, match="environments.lower.*whole numbers"):
+        load_monitored_jobs(write(tmp_path, text))
+
+
+def test_defaults_cannot_set_job_ids(tmp_path):
+    text = "defaults:\n  job_ids: [1]\n" + PINNED
+    with pytest.raises(ConfigError, match="defaults.*job_ids"):
+        load_monitored_jobs(write(tmp_path, text))

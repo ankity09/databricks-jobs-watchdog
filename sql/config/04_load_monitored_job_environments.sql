@@ -13,5 +13,6 @@ SELECT
   max_runtime_minutes,
   max_retries,
   min_attempt_minutes,
-  current_timestamp() AS loaded_at
+  current_timestamp() AS loaded_at,
+  job_ids
 FROM watchdog_config_environments

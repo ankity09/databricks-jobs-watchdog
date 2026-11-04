@@ -219,6 +219,23 @@ dependencies:
 
 When a job fails, `affected_jobs` lists every job downstream of it, through the whole chain, not only the jobs that depend on it directly. Notebook 02 shows what a failure of each job affects, and prints any loops, where two jobs depend on each other. A loop is allowed, but it is often a dependency written the wrong way round, so check it.
 
+### Pin jobs by job ID
+
+A name pattern finds every copy of a job, in every workspace, without a list of IDs. To check exact jobs instead, list their IDs in `job_ids`, for the whole job or for one environment:
+
+```yaml
+  - job_name: orders_enrich
+    job_name_regex: "^orders_enrich_(web|mobile)_(prod|dev)$"
+    environments:
+      production: {job_ids: ["123456789012345", "234567890123456"]}  # exact jobs in production
+```
+
+- In each workspace, the IDs that apply are the environment's `job_ids`, otherwise the job's own. Where IDs apply, the job matches exactly those jobs and the name pattern is not used; everywhere else the pattern still finds the job. Here, production checks two exact jobs and lower environments still match by name.
+- Use IDs for jobs that keep theirs: a job keeps its ID until it is deleted, and a bundle that updates an existing job (or binds to one) keeps it. Keep name patterns for jobs that get a new ID each time, such as jobs created by code: a pinned ID that disappears shows as `not_found`.
+- The system table scan reports listed IDs it cannot find where they apply: `2 of 3 listed job IDs were not found in this region: 111, 222.` The Jobs API scan reports a pinned job as `not_found` only when it finds none of its IDs in the workspaces it checked.
+- Notebook 02's match table shows `matched_by` (`job_id` or `name`) for each match, so you can check which rule found it.
+- With a name pattern, two jobs in one workspace with exactly the same name are both checked, and the system table scan writes a `duplicate_name` WARNING naming their IDs. Rename or delete the extra job, or pin the right one by ID. Notebook 02's `same_name_jobs` column shows how many jobs share each matched name.
+
 ### Run Phase 1 by hand
 
 Open each notebook in `notebooks/`, attach it to serverless compute, run its first two code cells (this shows its input boxes), then run all cells, in order:
@@ -395,6 +412,8 @@ The history is what lets the alerts in Phase 3 fire once when a job breaks and o
 | `FAIL  both sources wrote findings: no rows from ...` | that scan did not run, or ran with a different `scan_id` | run notebook 05 or 06; clear the `scan_id` widget in notebook 07 |
 | `FAIL  every enabled job has findings: <job> (<source>)` | a scan wrote nothing for that job | re-run that scan and read its output |
 | `FAIL  no duplicate keys` | a key was inserted twice | should not happen; open an issue with the output of query 41 |
+| `not_found`: "... listed job IDs were not found in this region ..." (SYSTEM_TABLES) | a pinned job was deleted and created again with a new ID, or its ID was copied wrong, or it runs in another region | look up the job's current ID in the Jobs UI and update `job_ids`, or match it by name |
+| `duplicate_name` WARNING | two jobs in one workspace have exactly the same name, and the name pattern matches both | rename or delete the extra job, or pin the right one with `job_ids` |
 | `not_found` from SYSTEM_TABLES only | the job is new (system tables are about an hour behind), the regex is wrong, or the job is in another region | wait an hour; check the regex with notebook 02; check the workspace list in notebook 00 for the region |
 | `not_found` from JOBS_API only: "No job that this identity can see ... matches ..." | the identity cannot see the job (no CAN VIEW), the regex is wrong, or the job is in another workspace while you run in `current_workspace` mode | grant CAN VIEW; check the regex with notebook 02; use service principal mode for other workspaces |
 | `not_found`: "Every job in this region that matches ... is in an environment where this job is switched off." (SYSTEM_TABLES) or "No workspace checked has ... switched on ..." (JOBS_API) | the job is switched off in the environment of every workspace that has it, in this region | nothing, if that is what you meant; otherwise check the job's `environments` section and the labels in the `workspaces` section |

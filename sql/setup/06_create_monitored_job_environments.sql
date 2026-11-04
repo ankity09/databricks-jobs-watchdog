@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema || '.monitored_
   max_runtime_minutes INT COMMENT 'Longest allowed run in this environment',
   max_retries INT COMMENT 'Retry limit in this environment',
   min_attempt_minutes INT COMMENT 'Shortest allowed attempt before a retry in this environment',
-  loaded_at TIMESTAMP NOT NULL COMMENT 'When this row was loaded from the YAML file'
+  loaded_at TIMESTAMP NOT NULL COMMENT 'When this row was loaded from the YAML file',
+  job_ids ARRAY<STRING> COMMENT 'Job IDs to check in this environment instead of the job level IDs or the name pattern'
 )
 COMMENT 'Watchdog config: per-environment overrides for monitored jobs'

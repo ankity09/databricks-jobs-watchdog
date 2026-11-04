@@ -507,3 +507,59 @@ def test_merge_not_found_reports_a_job_no_workspace_checked():
     assert [(r["job_name"], r["check_id"], r["status"], r["workspace_id"]) for r in rows] == [
         ("orders", "not_found", "UNKNOWN", None)]
     assert "switched off" in rows[0]["error_summary"]
+
+
+def pinned(name="orders", ids=("2",), environments=None, regex="orders"):
+    from dataclasses import replace
+
+    return replace(monitored(name, regex, environments=environments), job_ids=tuple(ids))
+
+
+def test_resolve_jobs_matches_listed_job_ids_and_ignores_the_regex():
+    client = FakeClient(jobs=[(1, "orders"), (2, "orders_v2"), (3, "unrelated")])
+    resolved = resolve_jobs(client, [pinned(ids=("2", "3"))])
+    assert [(job_id, name) for _job, job_id, name, _tags in resolved] == [(2, "orders_v2"), (3, "unrelated")]
+
+
+def test_an_environment_can_list_its_own_job_ids():
+    client = FakeClient(jobs=[(1, "orders"), (2, "orders")], runs={2: [run(21, "TERMINATED", "SUCCESS")]})
+    job = pinned(ids=("1",), environments={"lower": {"job_ids": ("2",)}})
+    target = Target(workspace_id="1001", workspace_name="dev", host=None, environment="lower")
+    rows = collect_target(client, target, [job], NOW)
+    assert {row["job_id"] for row in rows} == {"2"}
+
+
+def test_listed_job_ids_not_in_the_workspace_are_not_found_by_id():
+    client = FakeClient(jobs=[(1, "orders")])
+    rows = collect_target(client, TARGET, [pinned(ids=("8", "9"))], NOW)
+    (row,) = rows
+    assert row["check_id"] == "not_found"
+    assert "listed job IDs (8, 9)" in row["error_summary"]
+
+
+def test_merge_not_found_drops_a_pinned_job_found_by_id_in_another_workspace():
+    job = pinned(ids=("2",))
+    here = [{"job_name": "orders", "check_id": "not_found", "job_id": None, "workspace_id": "1001"}]
+    there = [{"job_name": "orders", "check_id": "live_run_status", "job_id": "2", "workspace_id": "1002"}]
+    assert merge_not_found(here + there, [job]) == there
+
+
+def test_merge_not_found_names_the_listed_job_ids_when_found_nowhere():
+    job = pinned(ids=("8",), environments={"lower": {"job_ids": ("9",)}})
+    rows = [
+        {"job_name": "orders", "check_id": "not_found", "job_id": None, "workspace_id": "1001", "error_summary": "a"},
+        {"job_name": "orders", "check_id": "not_found", "job_id": None, "workspace_id": "1002", "error_summary": "b"},
+    ]
+    (row,) = merge_not_found(rows, [job])
+    assert row["workspace_id"] is None
+    assert "the listed job IDs (8)" in row["error_summary"] and "2 workspaces" in row["error_summary"]
+
+
+def test_merge_not_found_mentions_both_regex_and_environment_ids():
+    job = monitored(environments={"lower": {"job_ids": ("9",)}})
+    rows = [
+        {"job_name": "orders", "check_id": "not_found", "job_id": None, "workspace_id": "1001", "error_summary": "a"},
+        {"job_name": "orders", "check_id": "not_found", "job_id": None, "workspace_id": "1002", "error_summary": "b"},
+    ]
+    (row,) = merge_not_found(rows, [job])
+    assert "orders or the listed job IDs (9)" in row["error_summary"]

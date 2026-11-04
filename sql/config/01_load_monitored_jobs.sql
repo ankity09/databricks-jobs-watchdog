@@ -16,5 +16,6 @@ SELECT
   notes,
   current_timestamp() AS loaded_at,
   job_name_exclude_regex,
-  min_attempt_minutes
+  min_attempt_minutes,
+  job_ids
 FROM watchdog_config_jobs

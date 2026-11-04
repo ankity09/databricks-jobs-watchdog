@@ -1,10 +1,12 @@
 """Write the monitored-jobs file into the config tables, and read it back.
 
 Notebook 02 loads the YAML file into the temp views watchdog_config_jobs,
-watchdog_config_dependencies and watchdog_config_workspaces, then
-sql/config/01 to 03 replace the rows of monitored_jobs, job_dependencies and
-monitored_workspaces. The scans read the tables, so both scans always use the
-config that was loaded last.
+watchdog_config_dependencies, watchdog_config_workspaces and
+watchdog_config_environments, then sql/config/01 to 04 replace the rows of
+monitored_jobs, job_dependencies, monitored_workspaces and
+monitored_job_environments. The scans read the tables, so both scans always
+use the config that was loaded last. job_ids are stored as ARRAY<STRING>, NULL
+when a job or an environment lists none.
 """
 
 from jobs_watchdog.config import Dependency, MonitoredJob, MonitoredWorkspace
@@ -24,6 +26,7 @@ JOB_COLUMNS = (
     ("notes", "STRING"),
     ("job_name_exclude_regex", "STRING"),
     ("min_attempt_minutes", "INT"),
+    ("job_ids", "ARRAY<STRING>"),
 )
 DEPENDENCY_COLUMNS = (
     ("job_name", "STRING"),
@@ -47,6 +50,7 @@ ENVIRONMENT_COLUMNS = (
     ("max_runtime_minutes", "INT"),
     ("max_retries", "INT"),
     ("min_attempt_minutes", "INT"),
+    ("job_ids", "ARRAY<STRING>"),
 )
 ENVIRONMENTS_VIEW = "watchdog_config_environments"
 JOBS_VIEW = "watchdog_config_jobs"
@@ -64,6 +68,18 @@ def _ddl(columns):
     return ", ".join(f"{name} {data_type}" for name, data_type in columns)
 
 
+def _cell(value, data_type):
+    """A config value as Spark takes it: job ID tuples become lists, and no IDs becomes NULL."""
+    if data_type.startswith("ARRAY"):
+        return list(value) if value else None
+    return value
+
+
+def _ids(value):
+    """A job_ids column as the config keeps it: a tuple of strings, empty when NULL."""
+    return tuple(str(item) for item in value) if value else ()
+
+
 def write_config(spark, jobs, dependencies, catalog, schema, workspaces=()):
     """Replace the rows of the three config tables with these jobs, dependencies and workspaces."""
     validate_identifier(catalog, "catalog")
@@ -71,10 +87,11 @@ def write_config(spark, jobs, dependencies, catalog, schema, workspaces=()):
     sets = ((jobs, JOB_COLUMNS, JOBS_VIEW), (dependencies, DEPENDENCY_COLUMNS, DEPENDENCIES_VIEW),
             (workspaces, WORKSPACE_COLUMNS, WORKSPACES_VIEW))
     for items, columns, view in sets:
-        data = [tuple(getattr(item, name) for name, _ in columns) for item in items]
+        data = [tuple(_cell(getattr(item, name), data_type) for name, data_type in columns) for item in items]
         spark.createDataFrame(data, schema=_ddl(columns)).createOrReplaceTempView(view)
     overrides = [
-        (job.job_name, environment, *(settings.get(name) for name, _ in ENVIRONMENT_COLUMNS[2:]))
+        (job.job_name, environment,
+         *(_cell(settings.get(name), data_type) for name, data_type in ENVIRONMENT_COLUMNS[2:]))
         for job in jobs
         for environment, settings in sorted(job.environments.items())
     ]
@@ -90,12 +107,15 @@ def read_config(spark, catalog, schema):
     environments = {}
     for row in spark.table(f"{catalog}.{schema}.monitored_job_environments").collect():
         settings = {name: row[name] for name, _ in ENVIRONMENT_COLUMNS[2:] if row[name] is not None}
+        if "job_ids" in settings:
+            settings["job_ids"] = _ids(settings["job_ids"])
         environments.setdefault(row["job_name"], {})[row["environment"]] = settings
     jobs = []
     for row in spark.table(f"{catalog}.{schema}.monitored_jobs").collect():
         values = {name: row[name] for name, _ in JOB_COLUMNS}
         values["owner"] = values["owner"] or ""
         values["notes"] = values["notes"] or ""
+        values["job_ids"] = _ids(values["job_ids"])
         jobs.append(MonitoredJob(**values, environments=environments.get(values["job_name"], {})))
     dependencies = []
     for row in spark.table(f"{catalog}.{schema}.job_dependencies").collect():

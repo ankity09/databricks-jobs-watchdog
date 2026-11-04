@@ -9,8 +9,10 @@
 -- which notebook 05 creates with jobs_watchdog.dependencies.register_affected_jobs.
 -- To run this query in the SQL editor, create both views yourself.
 --
--- For each workspace job that a monitored job's regex matches, it returns one
--- row per check:
+-- For each workspace job that a monitored job matches, it returns one row per
+-- check. In each workspace a monitored job matches by job ID when job_ids
+-- apply there (its environment's job_ids, otherwise the job's own), and by
+-- name (job_name_regex) everywhere else. The checks:
 --   last_run_result  scheduled jobs: the newest finished run in the window;
 --                    continuous jobs: the newest run, even while it runs
 --   task_failures    tasks whose newest attempt failed, in the newest run
@@ -18,7 +20,10 @@
 --                    (continuous and triggered jobs have no schedule check)
 --   long_runtime     the newest finished run, and any run still going,
 --                    measured up to its newest system table record
--- A monitored job that matches no job in the region gets one not_found row.
+--   duplicate_name   jobs matched by name: two or more jobs in one workspace
+--                    with exactly the same name (one WARNING row per workspace)
+-- A monitored job that matches no job in the region gets one not_found row,
+-- and so does a job whose listed job IDs are not all found where they apply.
 -- System tables run about an hour behind, so a job created in the last hour
 -- is not_found here while the Jobs API scan (notebook 06) already sees it.
 -- Job names matching a job's job_name_exclude_regex (for example test copies)
@@ -35,12 +40,12 @@
 WITH monitored AS (
   -- every configured job; whether it is checked is decided per environment below
   SELECT job_name, job_name_regex, job_name_exclude_regex, schedule_type, max_gap_minutes, max_runtime_minutes,
-         severity, owner, enabled
+         severity, owner, enabled, job_ids
   FROM IDENTIFIER(:catalog || '.' || :schema || '.monitored_jobs')
 ),
 overrides AS (
   -- per-environment settings from the environments sections of the job list
-  SELECT job_name, environment, severity, owner, enabled, max_gap_minutes, max_runtime_minutes
+  SELECT job_name, environment, severity, owner, enabled, max_gap_minutes, max_runtime_minutes, job_ids
   FROM IDENTIFIER(:catalog || '.' || :schema || '.monitored_job_environments')
 ),
 active AS (
@@ -66,8 +71,36 @@ environments AS (
   LEFT JOIN IDENTIFIER(:catalog || '.' || :schema || '.monitored_workspaces') by_name
     ON by_name.workspace_id IS NULL AND lower(by_name.workspace_name) = lower(n.workspace_name)
 ),
-regex_matched AS (
-  -- every job in the region a monitored job's patterns match, with its workspace's environment
+jobs_here AS (
+  -- every job in the region with its workspace's environment label
+  SELECT j.*, e.environment
+  FROM latest_jobs j
+  LEFT JOIN environments e ON e.workspace_id = j.workspace_id
+),
+candidates AS (
+  -- jobs whose name a monitored job's pattern matches, and jobs whose ID it lists
+  SELECT m.job_name, j.account_id, j.workspace_id, j.job_id, j.name, j.paused, j.tags, j.environment,
+         'name' AS matched_by
+  FROM monitored m
+  JOIN jobs_here j
+    ON regexp_like(j.name, m.job_name_regex)
+    AND (m.job_name_exclude_regex IS NULL OR NOT regexp_like(j.name, m.job_name_exclude_regex))
+  UNION ALL
+  SELECT l.job_name, j.account_id, j.workspace_id, j.job_id, j.name, j.paused, j.tags, j.environment, 'job_id'
+  FROM (
+    -- distinct before the join: DISTINCT cannot compare the tags map
+    SELECT DISTINCT job_name, job_id FROM (
+      SELECT job_name, explode(job_ids) AS job_id FROM monitored
+      UNION ALL
+      SELECT job_name, explode(job_ids) AS job_id FROM overrides
+    )
+  ) l
+  JOIN jobs_here j ON j.job_id = l.job_id
+),
+all_matched AS (
+  -- every job in the region a monitored job matches, with its workspace's
+  -- environment: by job ID where job_ids apply in that environment (the
+  -- environment's own list, otherwise the job's), by name everywhere else
   SELECT
     m.job_name,
     m.schedule_type,
@@ -75,17 +108,19 @@ regex_matched AS (
     m.max_runtime_minutes,
     m.severity,
     m.enabled,
-    j.account_id,
-    j.workspace_id,
-    j.job_id,
-    j.paused,
-    j.tags,
-    e.environment
-  FROM monitored m
-  JOIN latest_jobs j
-    ON regexp_like(j.name, m.job_name_regex)
-    AND (m.job_name_exclude_regex IS NULL OR NOT regexp_like(j.name, m.job_name_exclude_regex))
-  LEFT JOIN environments e ON e.workspace_id = j.workspace_id
+    c.account_id,
+    c.workspace_id,
+    c.job_id,
+    c.name,
+    c.paused,
+    c.tags,
+    c.environment,
+    c.matched_by
+  FROM candidates c
+  JOIN monitored m ON m.job_name = c.job_name
+  LEFT JOIN overrides o ON o.job_name = c.job_name AND o.environment = c.environment
+  WHERE (c.matched_by = 'job_id') = (coalesce(size(coalesce(o.job_ids, m.job_ids)), 0) > 0)
+    AND (c.matched_by = 'name' OR array_contains(coalesce(o.job_ids, m.job_ids), c.job_id))
 ),
 matched AS (
   -- the matches switched on in their environment, with that environment's settings
@@ -98,15 +133,59 @@ matched AS (
     r.account_id,
     r.workspace_id,
     r.job_id,
+    r.name,
     r.paused,
-    r.tags
-  FROM regex_matched r
+    r.tags,
+    r.matched_by
+  FROM all_matched r
   LEFT JOIN overrides o ON o.job_name = r.job_name AND o.environment = r.environment
   WHERE coalesce(o.enabled, r.enabled)
 ),
 switched_off AS (
   -- monitored jobs found in the region only where they are switched off
-  SELECT DISTINCT job_name FROM regex_matched
+  SELECT DISTINCT job_name FROM all_matched
+),
+expected_ids AS (
+  -- the listed job IDs each job expects in this region: the IDs that apply in
+  -- at least one workspace here where the job is switched on
+  SELECT DISTINCT job_name, job_id
+  FROM (
+    SELECT m.job_name, explode(coalesce(o.job_ids, m.job_ids)) AS job_id
+    FROM monitored m
+    CROSS JOIN environments e
+    LEFT JOIN overrides o ON o.job_name = m.job_name AND o.environment = e.environment
+    WHERE coalesce(o.enabled, m.enabled)
+  )
+),
+id_check AS (
+  -- per job: how many listed job IDs apply here, and which of them were not found where they apply
+  SELECT
+    x.job_name,
+    COUNT(*) AS expected,
+    sort_array(collect_list(CASE WHEN f.job_id IS NULL THEN x.job_id END)) AS missing
+  FROM expected_ids x
+  LEFT JOIN (SELECT DISTINCT job_name, job_id FROM all_matched WHERE matched_by = 'job_id') f
+    ON f.job_name = x.job_name AND f.job_id = x.job_id
+  GROUP BY x.job_name
+),
+same_name AS (
+  -- jobs matched by name that share exactly the same name with another job in their workspace
+  SELECT job_name, workspace_id, MAX(account_id) AS account_id, name, sort_array(collect_list(job_id)) AS ids
+  FROM matched
+  WHERE matched_by = 'name'
+  GROUP BY job_name, workspace_id, name
+  HAVING COUNT(*) > 1
+),
+duplicates AS (
+  -- one row per monitored job and workspace, naming every duplicated name
+  SELECT
+    job_name,
+    workspace_id,
+    MAX(account_id) AS account_id,
+    concat_ws('; ', sort_array(collect_list(
+      format_string('%d jobs are named %s (job IDs %s)', size(ids), name, array_join(ids, ', '))))) AS summary
+  FROM same_name
+  GROUP BY job_name, workspace_id
 ),
 runs AS (
   -- one row per run; a run longer than an hour spans several timeline rows,
@@ -384,6 +463,28 @@ checks AS (
   UNION ALL
 
   SELECT
+    d.job_name,
+    d.account_id,
+    d.workspace_id,
+    CAST(NULL AS STRING),
+    'duplicate_name',
+    'WARNING',
+    CAST(NULL AS STRING),
+    CAST(NULL AS STRING),
+    CAST(NULL AS ARRAY<STRING>),
+    concat('In this workspace, ', d.summary, '. Each one is checked as a copy of this job: rename or delete ',
+           'the extra job, or list the right one in job_ids.'),
+    CAST(NULL AS MAP<STRING, STRING>),
+    CAST(NULL AS TIMESTAMP),
+    CAST(NULL AS TIMESTAMP),
+    CAST(NULL AS BIGINT),
+    CAST(NULL AS STRING),
+    CAST(NULL AS MAP<STRING, MAP<STRING, STRING>>)
+  FROM duplicates d
+
+  UNION ALL
+
+  SELECT
     a.job_name,
     (SELECT MAX(account_id) FROM latest_jobs),
     CAST(NULL AS STRING),
@@ -394,6 +495,10 @@ checks AS (
     CAST(NULL AS STRING),
     CAST(NULL AS ARRAY<STRING>),
     CASE
+      WHEN coalesce(size(i.missing), 0) > 0 THEN format_string(
+        concat('%d of %d listed job IDs were not found in this region: %s. A job deleted and created again ',
+               'gets a new ID, and a new job takes about an hour to appear.'),
+        size(i.missing), i.expected, array_join(i.missing, ', '))
       WHEN s.job_name IS NOT NULL THEN format_string(
         'Every job in this region that matches %s is in an environment where this job is switched off.',
         a.job_name_regex)
@@ -409,7 +514,9 @@ checks AS (
     CAST(NULL AS MAP<STRING, MAP<STRING, STRING>>)
   FROM active a
   LEFT JOIN switched_off s ON s.job_name = a.job_name
+  LEFT JOIN id_check i ON i.job_name = a.job_name
   WHERE NOT EXISTS (SELECT 1 FROM matched mt WHERE mt.job_name = a.job_name)
+     OR coalesce(size(i.missing), 0) > 0
 )
 SELECT
   current_timestamp() AS observed_at,
@@ -426,6 +533,7 @@ SELECT
   CASE
     WHEN c.status = 'HEALTHY' THEN 'NONE'
     WHEN c.status = 'UNKNOWN' THEN 'COVERAGE'
+    WHEN c.check_id = 'duplicate_name' THEN 'COVERAGE'
     WHEN c.check_id = 'long_runtime' THEN 'SLA_EXCEEDED'
     WHEN c.check_id = 'schedule_gap' THEN 'SCHEDULE_GAP'
     WHEN c.termination_type IN ('INTERNAL_ERROR', 'CLOUD_FAILURE') THEN 'INFRASTRUCTURE'

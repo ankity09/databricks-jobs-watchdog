@@ -94,6 +94,7 @@ def test_termination_type_to_category(termination_type, expected):
         ("live_long_runtime", "WARNING", None, "SLA_EXCEEDED"),
         ("schedule_gap", "FAILED", None, "SCHEDULE_GAP"),
         ("retry_loop", "WARNING", None, "RETRY_LOOP"),
+        ("duplicate_name", "WARNING", None, "COVERAGE"),
         ("live_task_failures", "FAILED", "CLOUD_FAILURE", "INFRASTRUCTURE"),
         ("last_run_result", "FAILED", "INTERNAL_ERROR", "INFRASTRUCTURE"),
         ("task_failures", "FAILED", "CLIENT_ERROR", "FUNCTIONAL"),
