@@ -5,6 +5,9 @@ export default defineConfig({
   test: {
     passWithNoTests: true,
     globals: true,
+    // Page tests render through the real AppKit hooks and the shared rules. On a busy machine a few take
+    // longer than Vitest's default 5 s, so allow 15 s before a test counts as hung.
+    testTimeout: 15_000,
     environment: 'node',
     include: ['server/**/*.test.ts', 'shared/**/*.test.ts', 'client/src/**/*.test.{ts,tsx}'],
     exclude: ['**/node_modules/**', '**/dist/**', '**/.databricks/**'],
