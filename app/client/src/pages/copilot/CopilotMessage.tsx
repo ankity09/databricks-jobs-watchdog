@@ -18,6 +18,12 @@ export interface CopilotMessageProps {
   onAsk?: (question: string) => void;
   /** Another answer is on its way, so follow-ups wait. */
   busy?: boolean;
+  /** The saved chat is still loading, so rows that have not come yet are on their way. */
+  loadingChat?: boolean;
+  /** The rows of this answer are being fetched again. */
+  loadingRows?: boolean;
+  /** Fetches this answer's rows again. */
+  onRetryRows?: () => void;
 }
 
 /** Markdown elements for Genie's answers: links open in a new tab, tables scroll, single line breaks stay. */
@@ -66,7 +72,7 @@ function AnswerShell({ children }: { children: ReactNode }) {
 }
 
 /** One turn of the chat: the person's question, or Genie's answer with the SQL behind it. */
-export function CopilotMessage({ message, ranAs, statusLabel, onRetry, onAsk, busy = false }: CopilotMessageProps) {
+export function CopilotMessage({ message, ranAs, statusLabel, onRetry, onAsk, busy = false, loadingChat = false, loadingRows = false, onRetryRows }: CopilotMessageProps) {
   if (message.role === "user") {
     return (
       <article aria-label="Your question" className="flex justify-end">
@@ -77,6 +83,7 @@ export function CopilotMessage({ message, ranAs, statusLabel, onRetry, onAsk, bu
 
   const inProgress = message.status !== null;
   const hasAnswer = message.text !== "" || message.queries.length > 0;
+  const rowsComing = inProgress || loadingChat || loadingRows;
 
   return (
     <AnswerShell>
@@ -106,7 +113,13 @@ export function CopilotMessage({ message, ranAs, statusLabel, onRetry, onAsk, bu
       ) : null}
 
       {message.queries.map((query) => (
-        <SqlDisclosure key={query.id} query={query} ranAs={ranAs} resultState={inProgress ? "loading" : query.result ? "ready" : "missing"} />
+        <SqlDisclosure
+          key={query.id}
+          query={query}
+          ranAs={ranAs}
+          resultState={rowsComing ? "loading" : query.result ? "ready" : "missing"}
+          onRetryRows={onRetryRows}
+        />
       ))}
 
       {message.error ? (

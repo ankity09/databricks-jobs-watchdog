@@ -53,9 +53,13 @@ export interface UseCopilotResult {
   /** Why the saved chat could not be loaded, when it could not. */
   loadError: string | null;
   conversationId: string | null;
+  /** IDs of the answers whose rows are being fetched again. */
+  loadingRows: string[];
   send(text: string): Promise<void>;
   /** Asks the failed question again, or loads the saved chat again. */
   retry(): Promise<void>;
+  /** Fetches the rows of one finished answer again, without asking the question again. */
+  retryRows(messageId: string): Promise<void>;
 }
 
 const STATUS_LABELS = new Map([
@@ -164,13 +168,19 @@ function answerFrom(message: GenieMessage, status: string | null): CopilotMessag
       result: null,
     });
   }
+  const written = attachments
+    .map((a) => a.text?.content?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n\n");
+  // An answer that is only a query reads as the query's description.
+  const described = queries
+    .map((q) => q.description?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n\n");
   return {
     id: message.messageId,
     role: "assistant",
-    text: attachments
-      .map((a) => a.text?.content?.trim() ?? "")
-      .filter(Boolean)
-      .join("\n\n"),
+    text: written || described,
     status,
     queries,
     suggestions: attachments.flatMap((a) => a.suggestedQuestions ?? []),
@@ -195,6 +205,8 @@ interface ChatState {
   loading: boolean;
   loadError: string | null;
   error: string | null;
+  /** Answers whose rows are being fetched again. */
+  loadingRows: string[];
 }
 
 type Action =
@@ -208,6 +220,8 @@ type Action =
   | { type: "status"; id: string; status: string }
   | { type: "answer"; id: string; message: GenieMessage }
   | { type: "rows"; attachmentId: string; rows: QueryRows }
+  | { type: "rows-start"; id: string }
+  | { type: "rows-end"; id: string }
   | { type: "failed"; id: string; error: string }
   | { type: "done"; id: string };
 
@@ -275,6 +289,10 @@ function reducer(state: ChatState, action: Action): ChatState {
             : m,
         ),
       };
+    case "rows-start":
+      return { ...state, loadingRows: state.loadingRows.includes(action.id) ? state.loadingRows : [...state.loadingRows, action.id] };
+    case "rows-end":
+      return { ...state, loadingRows: state.loadingRows.filter((id) => id !== action.id) };
     case "failed":
       return {
         ...state,
@@ -288,7 +306,7 @@ function reducer(state: ChatState, action: Action): ChatState {
 }
 
 function initialState(conversationId: string | null): ChatState {
-  return { conversationId, messages: [], streaming: false, loading: conversationId !== null, loadError: null, error: null };
+  return { conversationId, messages: [], streaming: false, loading: conversationId !== null, loadError: null, error: null, loadingRows: [] };
 }
 
 const encode = encodeURIComponent;
@@ -301,12 +319,19 @@ export function useCopilot(options: UseCopilotOptions = {}): UseCopilotResult {
   const stateRef = useRef(state);
   const conversationRef = useRef(openedId);
   const runRef = useRef<AbortController | null>(null);
+  const rowRunsRef = useRef(new Set<AbortController>());
   const onStartRef = useRef(options.onConversationStart);
   useEffect(() => {
     stateRef.current = state;
     onStartRef.current = options.onConversationStart;
   });
-  useEffect(() => () => runRef.current?.abort(), []);
+  useEffect(() => {
+    const rowRuns = rowRunsRef.current;
+    return () => {
+      runRef.current?.abort();
+      for (const run of rowRuns) run.abort();
+    };
+  }, []);
 
   /**
    * Streams events about one Genie message into the chat. `id` is the chat's
@@ -440,6 +465,28 @@ export function useCopilot(options: UseCopilotOptions = {}): UseCopilotResult {
 
   const send = useCallback((text: string) => ask(text, false), [ask]);
 
+  /** The message route sends a finished answer again with its rows; only the rows are kept. */
+  const retryRows = useCallback(
+    async (messageId: string) => {
+      const conversationId = conversationRef.current;
+      if (conversationId === null || stateRef.current.loadingRows.includes(messageId)) return;
+      const controller = new AbortController();
+      rowRunsRef.current.add(controller);
+      dispatch({ type: "rows-start", id: messageId });
+      try {
+        await follow(conversationId, messageId, controller.signal, (event) => {
+          if (event.type === "query_result") dispatch({ type: "rows", attachmentId: event.attachmentId, rows: toQueryRows(event.data) });
+        });
+      } catch {
+        // The rows stay missing; the Retry button is still there.
+      } finally {
+        rowRunsRef.current.delete(controller);
+        if (!controller.signal.aborted) dispatch({ type: "rows-end", id: messageId });
+      }
+    },
+    [follow],
+  );
+
   const retry = useCallback(async () => {
     const current = stateRef.current;
     if (current.loadError !== null) {
@@ -460,7 +507,9 @@ export function useCopilot(options: UseCopilotOptions = {}): UseCopilotResult {
     error: state.error,
     loadError: state.loadError,
     conversationId: state.conversationId,
+    loadingRows: state.loadingRows,
     send,
     retry,
+    retryRows,
   };
 }

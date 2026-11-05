@@ -1,75 +1,47 @@
-import React, { Component } from 'react';
-import type { ReactNode } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@databricks/appkit-ui/react';
+import { Button } from "@databricks/appkit-ui/react";
+import { RotateCw } from "lucide-react";
+import { Component, type ErrorInfo, type ReactNode } from "react";
 
-interface Props {
+interface ErrorBoundaryProps {
   children: ReactNode;
 }
 
-interface State {
-  hasError: boolean;
+interface ErrorBoundaryState {
   error: Error | null;
-  errorInfo: React.ErrorInfo | null;
+  componentStack: string | null;
 }
 
-export class ErrorBoundary extends Component<Props, State> {
-  constructor(props: Props) {
-    super(props);
-    this.state = {
-      hasError: false,
-      error: null,
-      errorInfo: null,
-    };
+/** Catches an error while a page draws, so the person sees a short message and a Reload button, not a blank screen. */
+export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { error: null, componentStack: null };
+
+  static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
+    return { error };
   }
 
-  static getDerivedStateFromError(error: Error): Partial<State> {
-    return { hasError: true, error };
-  }
-
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error('ErrorBoundary caught an error:', error);
-    console.error('Error details:', errorInfo);
-    this.setState({
-      error,
-      errorInfo,
-    });
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("The page failed to draw.", error, info.componentStack);
+    this.setState({ componentStack: info.componentStack ?? null });
   }
 
   render() {
-    if (this.state.hasError) {
-      return (
-        <div className="min-h-screen bg-background p-4">
-          <Card className="max-w-2xl mx-auto mt-8">
-            <CardHeader>
-              <CardTitle className="text-destructive">Application Error</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div>
-                  <h3 className="font-semibold mb-2">Error Message:</h3>
-                  <pre className="bg-muted p-3 rounded text-sm overflow-auto">{this.state.error?.toString()}</pre>
-                </div>
-                {this.state.errorInfo && (
-                  <div>
-                    <h3 className="font-semibold mb-2">Component Stack:</h3>
-                    <pre className="bg-muted p-3 rounded text-sm overflow-auto">
-                      {this.state.errorInfo.componentStack}
-                    </pre>
-                  </div>
-                )}
-                {this.state.error?.stack && (
-                  <div>
-                    <h3 className="font-semibold mb-2">Stack Trace:</h3>
-                    <pre className="bg-muted p-3 rounded text-sm overflow-auto max-h-96">{this.state.error.stack}</pre>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      );
-    }
-
-    return this.props.children;
+    const { error, componentStack } = this.state;
+    if (error === null) return this.props.children;
+    return (
+      <div role="alert" className="mx-auto flex min-h-screen max-w-xl flex-col items-start justify-center gap-3 p-6">
+        <h1 className="text-lg font-semibold text-foreground">Something went wrong on this page.</h1>
+        <p className="text-sm text-muted-foreground">Reload the page to try again. If it keeps happening, tell the person who runs Watchdog.</p>
+        <Button type="button" variant="outline" size="sm" onClick={() => window.location.reload()} className="gap-1.5">
+          <RotateCw aria-hidden="true" className="size-3.5" />
+          Reload
+        </Button>
+        {import.meta.env.DEV ? (
+          <pre className="mt-2 max-h-96 w-full overflow-auto rounded-md bg-muted p-3 font-mono text-xs">
+            {error.stack ?? error.toString()}
+            {componentStack}
+          </pre>
+        ) : null}
+      </div>
+    );
   }
 }

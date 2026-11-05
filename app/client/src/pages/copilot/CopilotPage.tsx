@@ -20,6 +20,9 @@ function chatKeyOf(state: unknown): string | null {
   return null;
 }
 
+/** Closer to the bottom than this, the list keeps following new content. */
+const NEAR_BOTTOM_PX = 80;
+
 function ChatSkeleton() {
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-5 py-6" aria-label="Loading the chat">
@@ -60,21 +63,34 @@ function CopilotChat({ chatKey, conversationId }: CopilotChatProps) {
     },
   });
 
+  // Follow new content only while the reader is at, or near, the bottom; a status change adds none.
+  const followRef = useRef(true);
+  const onScroll = () => {
+    const list = listRef.current;
+    if (list) followRef.current = list.scrollHeight - list.scrollTop - list.clientHeight <= NEAR_BOTTOM_PX;
+  };
+  const contentSize = chat.messages.reduce(
+    (sum, m) => sum + 1 + m.text.length + m.suggestions.length + (m.error ? 1 : 0) + (m.status === null ? 1 : 0) + m.queries.reduce((n, q) => n + 1 + (q.result ? q.result.rows.length + 1 : 0), 0),
+    chat.loading ? 0 : 1,
+  );
   useEffect(() => {
     const list = listRef.current;
-    if (list) list.scrollTop = list.scrollHeight;
-  }, [chat.messages, chat.status]);
+    if (list && followRef.current) list.scrollTop = list.scrollHeight;
+  }, [contentSize]);
 
   const busy = chat.streaming || chat.loading;
   // A chat that could not be loaded takes no question until Retry loads it: one sent then would go to that conversation without showing on the page.
   const canAsk = !busy && chat.loadError === null;
   const ask = (question: string) => {
-    if (canAsk) void chat.send(question);
+    if (!canAsk) return;
+    followRef.current = true;
+    void chat.send(question);
   };
   const submit = () => {
     const question = draft.trim();
     if (!question || !canAsk) return;
     setDraft("");
+    followRef.current = true;
     void chat.send(question);
   };
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -124,6 +140,9 @@ function CopilotChat({ chatKey, conversationId }: CopilotChatProps) {
             onRetry={canRetry && message === newest ? () => void chat.retry() : undefined}
             onAsk={ask}
             busy={busy}
+            loadingChat={chat.loading}
+            loadingRows={chat.loadingRows.includes(message.id)}
+            onRetryRows={() => void chat.retryRows(message.id)}
           />
         ))}
       </div>
@@ -132,7 +151,7 @@ function CopilotChat({ chatKey, conversationId }: CopilotChatProps) {
 
   return (
     <section aria-label="Chat" className="flex min-h-[24rem] flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card">
-      <div ref={listRef} role="log" aria-label="Messages" aria-busy={busy} className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={listRef} onScroll={onScroll} role="log" aria-label="Messages" aria-busy={busy} className="min-h-0 flex-1 overflow-y-auto">
         {body}
       </div>
       <form onSubmit={onSubmit} className="border-t border-border bg-background px-4 py-3">
