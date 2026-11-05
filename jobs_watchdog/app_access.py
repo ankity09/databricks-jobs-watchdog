@@ -15,6 +15,14 @@ scripts/deploy_regions.py runs after a deploy that gave the app a new service
 principal while the Lakebase project was kept). When the app owns the schema,
 or has those rights already, it changes nothing.
 
+AppKit keeps a cache of query results in its own schema, appkit, in the same
+database, and that schema changes hands in a teardown too. Grants cannot fix it:
+AppKit's start runs CREATE INDEX IF NOT EXISTS on its table, which only the
+table's owner may run, and the deploying identity cannot make the app's role the
+owner. So when appkit belongs to someone else, grant_app_access drops it, as its
+owner after the teardown; the app creates it again at its next start, and caches
+in memory until then. It holds nothing but cached query results.
+
 The caller passes in an open database connection (psycopg's), so the tests
 run without one.
 """
@@ -23,6 +31,7 @@ import re
 from dataclasses import dataclass
 
 APP_SCHEMA = "watchdog_app"
+APPKIT_CACHE_SCHEMA = "appkit"  # AppKit's persistent cache (lakebaseStorageDefaults in @databricks/appkit)
 _APP_ROLE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
@@ -50,18 +59,43 @@ def app_service_principal(api, app_name):
     return client_id
 
 
-def grant_app_access(connection, role, schema=APP_SCHEMA):
+def grant_app_access(connection, role, schema=APP_SCHEMA, cache_schema=APPKIT_CACHE_SCHEMA):
     """Give the role (the app's service principal) the rights the app needs on its schema. Returns what it did.
 
-    It commits its work, or rolls it back on an error, so it never leaves a transaction open.
+    It also drops AppKit's cache schema when another role owns it, so that the app creates it again. It commits
+    its work, or rolls it back on an error, so it never leaves a transaction open.
     """
     try:
         result = _grant(connection, role, schema)
+        cache = _reset_cache(connection, role, cache_schema)
     except BaseException:
         connection.rollback()
         raise
     connection.commit()
-    return result
+    if not cache.message:
+        return result
+    return AccessResult(result.changed or cache.changed, f"{result.message.rstrip('.')}. {cache.message}")
+
+
+def _reset_cache(connection, role, schema):
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = %s", (schema,))
+        row = cursor.fetchone()
+        if row is None or row[0] == role:
+            return AccessResult(False, "")
+        owner = row[0]
+        cursor.execute("SELECT current_user, pg_has_role(current_user, %s, 'USAGE')", (owner,))
+        me, can_drop = cursor.fetchone()
+        if not can_drop:
+            hint = (f", or delete that old app role and give its objects to you (databricks postgres delete-role "
+                    f"<branch>/roles/dbrx-apps-{owner} --reassign-owned-to \"{me}\") and run this again"
+                    if _APP_ROLE.match(owner) else "")
+            return AccessResult(False, f"AppKit's cache schema {schema} belongs to {owner}, so the app caches query "
+                                       f"results in memory: {owner} can drop it (DROP SCHEMA {schema} CASCADE){hint}, "
+                                       "and the app creates it again at its next start")
+        cursor.execute(f"DROP SCHEMA {quote_ident(schema)} CASCADE")
+    return AccessResult(True, f"Dropped AppKit's cache schema {schema}, which belonged to {owner}: the app creates "
+                              "it again at its next start and caches query results in memory until then")
 
 
 def _grant(connection, role, schema):

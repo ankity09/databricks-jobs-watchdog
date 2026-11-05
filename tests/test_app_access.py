@@ -22,7 +22,8 @@ class FakeCursor:
     def execute(self, sql, params=()):
         self.db.statements.append((" ".join(sql.split()), params))
         if "FROM pg_namespace" in sql:
-            self.rows = [(self.db.owner,)] if self.db.owner else []
+            owner = self.db.cache_owner if params[0] == "appkit" else self.db.owner
+            self.rows = [(owner,)] if owner else []
         elif "FROM pg_roles" in sql:
             self.rows = [(1,)] if params[0] in self.db.roles else []
         elif "FROM pg_class" in sql:
@@ -30,7 +31,7 @@ class FakeCursor:
         elif "has_schema_privilege" in sql:
             self.rows = [(self.db.has_access,) * 4]
         elif "pg_has_role" in sql:
-            self.rows = [(ME, self.db.owner in self.db.mine)]
+            self.rows = [(ME, params[0] in self.db.mine)]
         else:
             self.rows = []
 
@@ -42,8 +43,9 @@ class FakeCursor:
 
 
 class FakeDb:
-    def __init__(self, owner=ME, roles=(SP, ME), tables=("job_list_versions",), has_access=False, mine=(ME,)):
+    def __init__(self, owner=ME, roles=(SP, ME), tables=("job_list_versions",), has_access=False, mine=(ME,), cache_owner=None):
         self.owner, self.roles, self.tables, self.has_access, self.mine = owner, set(roles), list(tables), has_access, set(mine)
+        self.cache_owner = cache_owner  # who owns AppKit's cache schema appkit, None when it does not exist
         self.statements = []
         self.committed = False
         self.rolled_back = False
@@ -59,6 +61,9 @@ class FakeDb:
 
     def grants(self):
         return [sql for sql, _ in self.statements if sql.startswith("GRANT")]
+
+    def drops(self):
+        return [sql for sql, _ in self.statements if sql.startswith("DROP")]
 
 
 def test_after_a_teardown_the_new_service_principal_gets_the_rights_the_app_needs():
@@ -116,6 +121,49 @@ def test_role_names_are_quoted_so_they_cannot_break_out_of_the_statement():
     db = FakeDb(roles=('a"b', ME))
     grant_app_access(db, 'a"b')
     assert db.grants()[0].endswith('TO "a""b"')
+
+
+# AppKit's cache schema appkit: grants cannot give the app what AppKit's start runs on it (CREATE INDEX IF NOT
+# EXISTS needs the table's owner), and the deploying identity cannot hand it over, so the handover drops it.
+
+
+def test_after_a_teardown_appkit_s_cache_schema_is_dropped_so_the_app_creates_it_again():
+    db = FakeDb(cache_owner=ME)
+    result = grant_app_access(db, SP)
+    assert db.drops() == ['DROP SCHEMA "appkit" CASCADE'] and db.committed
+    assert result.changed and "appkit" in result.message and "next start" in result.message
+
+
+def test_the_cache_schema_is_dropped_also_when_the_job_list_needs_nothing():
+    for db in (FakeDb(owner=SP, cache_owner=ME), FakeDb(has_access=True, cache_owner=ME)):
+        result = grant_app_access(db, SP)
+        assert db.drops() == ['DROP SCHEMA "appkit" CASCADE'] and result.changed
+
+
+def test_a_cache_schema_the_app_owns_or_that_does_not_exist_is_left_alone():
+    for db in (FakeDb(cache_owner=SP), FakeDb(cache_owner=None), FakeDb(owner=SP, cache_owner=SP)):
+        grant_app_access(db, SP)
+        assert db.drops() == []
+    assert not grant_app_access(FakeDb(owner=SP, cache_owner=SP), SP).changed
+
+
+def test_one_message_says_what_happened_to_the_job_list_and_to_the_cache():
+    result = grant_app_access(FakeDb(cache_owner=ME), SP)
+    assert result.message.count("..") == 0 and result.message.startswith(f"granted {SP} USAGE and CREATE")
+
+
+def test_a_cache_schema_an_old_app_role_still_owns_gets_the_delete_role_hint():
+    old = "00000000-0000-4000-8000-000000000002"
+    result = grant_app_access(FakeDb(cache_owner=old), SP)
+    assert f"dbrx-apps-{old}" in result.message and "--reassign-owned-to" in result.message
+
+
+def test_a_cache_schema_this_identity_cannot_drop_is_named_and_does_not_stop_the_grants():
+    other = "someone-else@example.com"
+    db = FakeDb(cache_owner=other)
+    result = grant_app_access(db, SP)
+    assert db.drops() == [] and len(db.grants()) == 2 and db.committed
+    assert other in result.message and "DROP SCHEMA appkit CASCADE" in result.message and "in memory" in result.message
 
 
 class FakeApi:

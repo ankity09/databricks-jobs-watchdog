@@ -168,7 +168,7 @@ A plain teardown deletes the app and its service principal, but keeps the Lakeba
 
 1. Bind the kept Lakebase resources to the bundle again. Teardown prints the three `databricks bundle deployment bind` commands at the end; without them the next deploy fails on the project that already exists.
 2. Deploy and start the app: `databricks bundle deploy -t <target>`, then `databricks bundle run watchdog_app -t <target>`.
-3. Give the new service principal access: `databricks bundle run watchdog_app_access -t <target>`. The job runs notebook 11, which grants it `USAGE` and `CREATE` on `watchdog_app` and `SELECT` and `INSERT` on its tables. It changes nothing when the app already has access.
+3. Give the new service principal access: `databricks bundle run watchdog_app_access -t <target>`. The job runs notebook 11, which grants it `USAGE` and `CREATE` on `watchdog_app` and `SELECT` and `INSERT` on its tables. It changes nothing when the app already has access. AppKit's query cache lives in its own schema, `appkit`, which changes hands too, and grants cannot fix it: AppKit's start runs `CREATE INDEX IF NOT EXISTS` on its table, which only the owner may run, and you cannot make the app's role the owner. So the job drops `appkit` when someone else owns it; the app creates it again at its next start and caches query results in memory until then.
 
 `scripts/deploy_regions.py` does steps 2 and 3 for each region. Until step 3, the app's job list says "The app has no access to its job list in Lakebase", and the app log names the job. The app tries again on each request, so it needs no restart. The scans keep reading the list meanwhile, because they run as the deploying identity.
 
