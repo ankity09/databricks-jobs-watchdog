@@ -78,7 +78,7 @@ deploy:
 - `deploy.workspace_host` is the workspace where this region's Watchdog runs. A bundle target cannot take its host from a variable, so the script passes it to the CLI as `DATABRICKS_HOST`.
 - `deploy.profile` is optional. With a profile, the script passes `--profile` to every command and does not set `DATABRICKS_HOST`. Without one, the script sets `DATABRICKS_HOST` from `deploy.workspace_host` and the CLI signs in with OAuth M2M (`DATABRICKS_CLIENT_ID` and `DATABRICKS_CLIENT_SECRET`). CI signs in the same way and takes the host from the region file, not from a CI variable. The script drops `DATABRICKS_CONFIG_PROFILE` from the environment it gives the CLI, so a profile set in your shell cannot send a region's deploy to another workspace. Whichever you choose, the profile must be for the same identity that CI deploys as (see the rule below).
 - A file with no `target.warehouse_id` or no valid `deploy.workspace_host` fails before anything runs. The message names the file and the key.
-- With `config_source: lakebase`, every scan fails at its first step (load the job list) until the app holds a job list. So the examples ship with the schedule paused: deploy, import or add your jobs in the app, then set `schedule_status: UNPAUSED` and deploy again.
+- With `config_source: lakebase`, every scan's `load_config` task (the second task) fails until the app holds a job list. So the examples ship with the schedule paused: deploy, import or add your jobs in the app, then set `schedule_status: UNPAUSED` and deploy again.
 
 [config/regions](../config/regions) holds two examples with placeholders. Real region files hold workspace details, so keep them in your own repo or a private one. A file named `accelerator.<region>.local.yaml` is git-ignored here.
 

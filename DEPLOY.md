@@ -106,7 +106,7 @@ Known degradations:
 
 ## Step 6. Install the app
 
-The bundle deploys the Watchdog app, its Lakebase project and the copilot's Genie agent in step 5. This step puts your job list in the app and points the scan at it. [docs/app.md](docs/app.md) explains the app.
+This step is for path B, the bundle. Path A, notebooks only, deploys no app, so skip this step there. The bundle deploys the Watchdog app, its Lakebase project and the copilot's Genie agent in step 5. This step puts your job list in the app and points the scan at it. [docs/app.md](docs/app.md) explains the app.
 
 **Prerequisites.** Check these before step 5, and report any that fail:
 
@@ -131,7 +131,7 @@ The bundle deploys the Watchdog app, its Lakebase project and the copilot's Geni
 
    `bundle run watchdog_app` deploys the app's code and starts it. The platform installs the app's packages and builds it, so the workspace needs access to an npm registry or a mirror. The first start creates the app's Lakebase schema.
 3. Open the app (the `watchdog_app` link in the Apps page) and go to Jobs and dependencies, then Job list. Click Import YAML, choose your monitored-jobs file, read the preview of the differences, and confirm. A file that breaks a rule is not imported, and the message names the job and the field.
-4. Set `scan.config_source: lakebase` in `accelerator.local.yaml`, run the `eval "$(python3 scripts/bundle_vars.py --export accelerator.local.yaml)"` line again, and deploy again. Run `watchdog_scan` once, or click Scan now in the app. The banner on the Job list should clear, and the `config_loads` table should have an `OK` row with `source` `lakebase`. Keep `scan.schedule_status` at `PAUSED` until the app holds the job list: with `lakebase`, a scan fails at its first step until it does.
+4. Set `scan.config_source: lakebase` in `accelerator.local.yaml`, run the `eval "$(python3 scripts/bundle_vars.py --export accelerator.local.yaml)"` line again, and deploy again. Run `watchdog_scan` once, or click Scan now in the app. The banner on the Job list should clear, and the `config_loads` table should have an `OK` row with `source` `lakebase`. Keep `scan.schedule_status` at `PAUSED` until the app holds the job list: with `lakebase`, the scan's `load_config` task (notebook 02, the second task) fails until it does. The other tasks still run, on the last config that loaded.
 
 Until step 4, the scan keeps reading the YAML file, and the app says so in a banner. To go back, set `scan.config_source` to `yaml` and deploy again. Export YAML in the app gives you the newest list as a file.
 

@@ -4,10 +4,10 @@ The Watchdog keeps six Delta tables and one view in one schema, `<catalog>.<sche
 
 | Object | What it holds | How it changes |
 |---|---|---|
-| `monitored_jobs` | the jobs to check, with their limits | replaced each time notebook 02 loads your YAML file |
-| `job_dependencies` | what each job depends on | replaced each time notebook 02 loads your YAML file |
-| `monitored_workspaces` | an environment label for each workspace | replaced each time notebook 02 loads your YAML file |
-| `monitored_job_environments` | the settings a job changes in one environment, such as a lower severity | replaced each time notebook 02 loads your YAML file |
+| `monitored_jobs` | the jobs to check, with their limits | replaced each time notebook 02 loads your job list (from the YAML file or the Watchdog app) |
+| `job_dependencies` | what each job depends on | replaced each time notebook 02 loads your job list (from the YAML file or the Watchdog app) |
+| `monitored_workspaces` | an environment label for each workspace | replaced each time notebook 02 loads your job list (from the YAML file or the Watchdog app) |
+| `monitored_job_environments` | the settings a job changes in one environment, such as a lower severity | replaced each time notebook 02 loads your job list (from the YAML file or the Watchdog app) |
 | `findings` | what every scan found, from every source | rows are added, never updated or deleted |
 | `config_loads` | one row per load of the job list: where from, which version, how many jobs, and whether it worked | a row is added by every run of notebook 02 |
 | `findings_latest` (view) | the newest scan from each source | computed from `findings` each time it is read |
@@ -18,7 +18,7 @@ The YAML file has four sections, and only `jobs` is required. `config/monitored_
 
 | Section | Loaded into | What it holds |
 |---|---|---|
-| `defaults` | no table of its own | settings every job gets unless it sets its own: any job setting except `job_name`, `job_name_regex` and `environments` |
+| `defaults` | no table of its own | settings every job gets unless it sets its own: any job setting except `job_name`, `job_name_regex`, `environments` and `job_ids` |
 | `workspaces` | `monitored_workspaces` | an environment label for each workspace |
 | `jobs` | `monitored_jobs`, and each job's `environments` section into `monitored_job_environments` | the jobs to check |
 | `dependencies` | `job_dependencies` | what each job depends on |
