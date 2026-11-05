@@ -1,5 +1,6 @@
 import { Skeleton, ToggleGroup, ToggleGroupItem } from "@databricks/appkit-ui/react";
 import { memo, type PointerEvent, useCallback, useMemo, useState } from "react";
+import { useNow } from "../../hooks/useNow";
 import { useRefreshKey } from "../../hooks/useRefreshKey";
 import { useWatchdogLocation } from "../../hooks/useWatchdogRows";
 import type { HistoryRow } from "../../lib/rows";
@@ -7,7 +8,7 @@ import { type Status, STATUSES, statusTone } from "../../lib/status";
 import { formatUtc, parseTime } from "../../lib/time";
 import { cn } from "../../lib/utils";
 import { STATUS_LABEL, TONE_FILL } from "./format";
-import { compareText, jobKey, type JobRef, workspaceLabel } from "./jobs";
+import { jobKey, type JobRef, workspaceLabel } from "./jobs";
 import { ProblemAlert } from "./ProblemAlert";
 import { useJobHistory } from "./queries";
 
@@ -21,50 +22,64 @@ export interface HistoryStripProps {
   jobs: readonly HistoryJob[];
 }
 
+/**
+ * The ranges to pick, each with the length of one window. The strip has one column per window, so it has
+ * at most 25, 37 or 43 columns however often the scan runs. Windows start on multiples of their length from
+ * the Unix epoch (job_history.obo.sql), so a 2-hour window starts at an even UTC hour.
+ */
 const RANGES = [
-  { hours: 24, label: "24 h", phrase: "24 hours" },
-  { hours: 72, label: "3 days", phrase: "3 days" },
-  { hours: 168, label: "7 days", phrase: "7 days" },
+  { hours: 24, label: "24 h", phrase: "24 hours", bucketMinutes: 60, windowPhrase: "1-hour" },
+  { hours: 72, label: "3 days", phrase: "3 days", bucketMinutes: 120, windowPhrase: "2-hour" },
+  { hours: 168, label: "7 days", phrase: "7 days", bucketMinutes: 240, windowPhrase: "4-hour" },
 ] as const;
 type Range = (typeof RANGES)[number];
 const DEFAULT_RANGE: Range = RANGES[1];
 
-/** One scan: a column of the strip. */
+/** The label columns: job name, then workspace from 1024 px up (below that the track needs the room). */
+const GRID = "grid grid-cols-[minmax(0,9rem)_minmax(0,1fr)] lg:grid-cols-[minmax(0,13rem)_minmax(0,8rem)_minmax(0,1fr)]";
+
+/** One window: a column of the strip. */
 interface Column {
-  scanId: string;
   at: string;
   ms: number;
 }
 
 interface Cell {
   status: Status;
+  /** When the window starts. */
   at: string;
+  scans: number;
 }
 
-/** The scans in time order, and each job's cell per scan (null when that scan did not see the job). */
-function buildModel(jobs: readonly HistoryJob[], history: readonly HistoryRow[]) {
+/**
+ * Every window of the range, oldest first (also the ones in which no scan ran, which show as gaps), and each
+ * job's cell per window (null when no scan in that window saw the job). Rows outside the range are dropped.
+ */
+function buildModel(jobs: readonly HistoryJob[], history: readonly HistoryRow[], range: Range, nowMs: number) {
+  const size = range.bucketMinutes * 60_000;
+  const first = Math.floor((nowMs - range.hours * 3_600_000) / size);
   const shown = new Set(jobs.map(jobKey));
   const rows = history.filter((row) => shown.has(jobKey(row)));
-  const firstSeen = new Map<string, Column>();
-  for (const row of rows) {
-    const ms = parseTime(row.observed_at) ?? 0;
-    const known = firstSeen.get(row.scan_id);
-    if (!known || ms < known.ms) firstSeen.set(row.scan_id, { scanId: row.scan_id, at: row.observed_at, ms });
-  }
-  const columns = [...firstSeen.values()].sort((a, b) => a.ms - b.ms || compareText(a.scanId, b.scanId));
-  const position = new Map(columns.map((column, index) => [column.scanId, index]));
+  // The clock of this browser may run behind the warehouse's: never drop the newest window.
+  let last = Math.floor(nowMs / size);
+  for (const row of rows) last = Math.max(last, Math.floor((parseTime(row.observed_at) ?? 0) / size));
+  const columns: Column[] = [];
+  for (let index = first; index <= last; index += 1) columns.push({ at: new Date(index * size).toISOString(), ms: index * size });
   const cells = new Map<string, Array<Cell | null>>();
+  let drawn = 0;
   for (const row of rows) {
+    const index = Math.floor((parseTime(row.observed_at) ?? 0) / size) - first;
+    if (index < 0 || index >= columns.length) continue;
     const key = jobKey(row);
     const line = cells.get(key) ?? columns.map(() => null);
-    const index = position.get(row.scan_id);
-    if (index !== undefined) line[index] = { status: row.status, at: row.observed_at };
+    line[index] = { status: row.status, at: row.observed_at, scans: row.scans };
     cells.set(key, line);
+    drawn += 1;
   }
-  return { columns, cells };
+  return { columns, cells, drawn };
 }
 
-/** "3 scans: 1 failed, 2 healthy. Newest: Healthy at 2026-11-05 10:05 UTC." */
+/** "3 windows with scans: 1 failed, 2 healthy. Newest: Healthy in the window from 2026-11-05 10:00 UTC." */
 function summarize(cells: ReadonlyArray<Cell | null>): string {
   const seen = cells.filter((cell): cell is Cell => cell !== null);
   if (seen.length === 0) return "No scans in this range.";
@@ -72,17 +87,20 @@ function summarize(cells: ReadonlyArray<Cell | null>): string {
     .filter(([, count]) => count > 0)
     .map(([status, count]) => `${count} ${STATUS_LABEL[status].toLowerCase()}`);
   const newest = seen[seen.length - 1];
-  const newestText = newest ? ` Newest: ${STATUS_LABEL[newest.status]} at ${formatUtc(newest.at)}.` : "";
-  return `${seen.length} ${seen.length === 1 ? "scan" : "scans"}: ${counts.join(", ")}.${newestText}`;
+  const newestText = newest ? ` Newest: ${STATUS_LABEL[newest.status]} in the window from ${formatUtc(newest.at)}.` : "";
+  return `${seen.length} ${seen.length === 1 ? "window" : "windows"} with scans: ${counts.join(", ")}.${newestText}`;
 }
 
-function Tooltip({ cell, index, count }: { cell: Cell; index: number; count: number }) {
+function Tooltip({ cell, index, count, windowPhrase }: { cell: Cell; index: number; count: number; windowPhrase: string }) {
   // Keep the tip inside the strip at both ends.
   const align = index < count * 0.15 ? "left-0" : index > count * 0.85 ? "right-0" : "left-1/2 -translate-x-1/2";
   return (
     <span role="tooltip" className={cn("pointer-events-none absolute bottom-full z-50 mb-2 w-max rounded-md bg-foreground px-2.5 py-1.5 text-xs text-background shadow-md", align)}>
       <span className="block font-mono tabular-nums">{formatUtc(cell.at)}</span>
       <span className="block font-medium">{STATUS_LABEL[cell.status]}</span>
+      <span className="block text-background/80">
+        {cell.scans} {cell.scans === 1 ? "scan" : "scans"} in this {windowPhrase} window
+      </span>
     </span>
   );
 }
@@ -94,29 +112,30 @@ interface LineProps {
   columns: readonly Column[];
   /** The hovered cell of this line, if any. */
   hovered: number | null;
+  windowPhrase: string;
 }
 
-const Line = memo(function Line({ job, lineKey, cells, columns, hovered }: LineProps) {
+const Line = memo(function Line({ job, lineKey, cells, columns, hovered, windowPhrase }: LineProps) {
   return (
-    <li className="grid grid-cols-[minmax(0,13rem)_minmax(0,8rem)_minmax(0,1fr)] items-center gap-3 py-[3px]">
-      <span className="truncate font-mono text-xs text-foreground" title={job.job_name}>
+    <li className={cn(GRID, "items-center gap-3 py-[3px]")}>
+      <span className="truncate font-mono text-xs text-foreground" title={`${job.job_name} in ${workspaceLabel(job)}`}>
         {job.job_name}
       </span>
-      <span className="truncate text-xs text-muted-foreground">{workspaceLabel(job)}</span>
-      <span className="flex h-[18px] min-w-0 items-stretch gap-px">
+      <span className="hidden truncate text-xs text-muted-foreground lg:block">{workspaceLabel(job)}</span>
+      <span className="flex h-[18px] min-w-0 items-stretch gap-px overflow-hidden">
         {columns.map((column, index) => {
           const cell = cells[index] ?? null;
-          if (cell === null) return <span key={column.scanId} data-slot="history-gap" className="min-w-0 flex-1 rounded-[2px] bg-muted" />;
+          if (cell === null) return <span key={column.ms} data-slot="history-gap" className="min-w-0 flex-1 rounded-[2px] bg-muted" />;
           return (
             <span
-              key={column.scanId}
+              key={column.ms}
               data-slot="history-cell"
               data-status={cell.status}
               data-line={lineKey}
               data-index={index}
               className={cn("relative min-w-0 flex-1 rounded-[2px]", TONE_FILL[statusTone(cell.status)], hovered === index && "ring-2 ring-foreground/70 ring-offset-1")}
             >
-              {hovered === index ? <Tooltip cell={cell} index={index} count={columns.length} /> : null}
+              {hovered === index ? <Tooltip cell={cell} index={index} count={columns.length} windowPhrase={windowPhrase} /> : null}
             </span>
           );
         })}
@@ -137,7 +156,7 @@ function Legend() {
       ))}
       <li className="flex items-center gap-1.5">
         <span className="size-2.5 rounded-[2px] bg-muted ring-1 ring-border ring-inset" aria-hidden="true" />
-        Not in that scan
+        No scan saw the job in that window
       </li>
     </ul>
   );
@@ -146,19 +165,24 @@ function Legend() {
 const NO_CELLS: ReadonlyArray<Cell | null> = [];
 
 /**
- * Each job's status at every scan in the chosen range (3 days at first; 24 h
- * and 7 days to pick), from findings. The scans line up across jobs. Hovering
- * a cell shows when that scan ran and what it found; each line also has a text
- * summary for screen readers.
+ * Each job's worst status in every fixed time window of the chosen range (3 days
+ * in 2-hour windows at first; 24 h in 1-hour and 7 days in 4-hour windows to
+ * pick), from findings. The windows line up across jobs, and the number of
+ * columns does not depend on how often the scan runs. Hovering a cell shows
+ * the window, what it found and how many scans it holds; each line also has a
+ * text summary for screen readers.
  */
 export function HistoryStrip({ jobs }: HistoryStripProps) {
   const { bump } = useRefreshKey();
   const where = useWatchdogLocation();
   const [range, setRange] = useState<Range>(DEFAULT_RANGE);
-  const history = useJobHistory(where, range.hours);
+  const history = useJobHistory(where, range.hours, range.bucketMinutes);
+  // The start of the current window: the model changes when a new window begins, not every minute.
+  const size = range.bucketMinutes * 60_000;
+  const windowStart = Math.floor(useNow().getTime() / size) * size;
   const [hovered, setHovered] = useState<{ line: string; index: number } | null>(null);
 
-  const model = useMemo(() => (history.rows === null ? null : buildModel(jobs, history.rows)), [jobs, history.rows]);
+  const model = useMemo(() => (history.rows === null ? null : buildModel(jobs, history.rows, range, windowStart)), [jobs, history.rows, range, windowStart]);
 
   const onPointerOver = useCallback((event: PointerEvent<HTMLUListElement>) => {
     const cell = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-line][data-index]") : null;
@@ -185,7 +209,7 @@ export function HistoryStrip({ jobs }: HistoryStripProps) {
     );
   } else if (jobs.length === 0) {
     body = <p className="py-2 text-[13px] text-muted-foreground">No history to show for these filters.</p>;
-  } else if (model.columns.length === 0) {
+  } else if (model.drawn === 0) {
     body = <p className="py-2 text-[13px] text-muted-foreground">No scans in the last {range.phrase}.</p>;
   } else {
     const first = model.columns[0];
@@ -206,13 +230,14 @@ export function HistoryStrip({ jobs }: HistoryStripProps) {
                 cells={model.cells.get(key) ?? NO_CELLS}
                 columns={model.columns}
                 hovered={hovered?.line === key ? hovered.index : null}
+                windowPhrase={range.windowPhrase}
               />
             );
           })}
         </ul>
-        <div className="mt-1 grid grid-cols-[minmax(0,13rem)_minmax(0,8rem)_minmax(0,1fr)] gap-3" aria-hidden="true">
+        <div className={cn(GRID, "mt-1 gap-3")} aria-hidden="true">
           <span />
-          <span />
+          <span className="hidden lg:block" />
           <span className="flex justify-between font-mono text-[11px] text-muted-foreground tabular-nums">
             <span>{first ? formatUtc(first.at) : ""}</span>
             <span>{last ? formatUtc(last.at) : ""}</span>
@@ -246,10 +271,10 @@ export function HistoryStrip({ jobs }: HistoryStripProps) {
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
-        <p className="basis-full text-xs text-pretty text-muted-foreground">Each cell is one scan, oldest on the left. Hover a cell to see when it ran and what it found.</p>
+        <p className="basis-full text-xs text-pretty text-muted-foreground">Each cell is the worst status in one {range.windowPhrase} window, oldest on the left. Hover a cell to see the window and what it found.</p>
       </div>
       {body}
-      {model !== null && model.columns.length > 0 && jobs.length > 0 ? (
+      {model !== null && model.drawn > 0 && jobs.length > 0 ? (
         <div className="mt-3 border-t border-border pt-3">
           <Legend />
         </div>

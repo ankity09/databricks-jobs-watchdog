@@ -91,14 +91,17 @@ export const CheckRow = z.object({
 });
 export type CheckRow = z.infer<typeof CheckRow>;
 
-/** One job's worst status at one scan, from job_history.obo.sql. */
+/**
+ * One job's worst status in one fixed time window, from job_history.obo.sql.
+ * `observed_at` is when the window starts; `scans` is how many scans saw the job in it.
+ */
 export const HistoryRow = z.object({
   job_name: z.string(),
   workspace_id: NullableString,
   job_id: NullableString,
-  scan_id: z.string(),
   observed_at: Time,
   status: Status,
+  scans: z.preprocess((value) => (typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value), z.number().int().nonnegative()),
 });
 export type HistoryRow = z.infer<typeof HistoryRow>;
 
