@@ -53,6 +53,7 @@ import {
   toEntry,
   toFormValues,
 } from "../../lib/job-form";
+import { type EntryJobIds, entryJobIds } from "../../lib/picker";
 import { EnvironmentOverridesFields } from "./EnvironmentOverridesFields";
 import { FormRow } from "./FormRow";
 import { JobIdsInput } from "./JobIdsInput";
@@ -67,8 +68,12 @@ export interface JobEditorSheetProps {
   /** The saved job list the draft is checked against. */
   document: JobListDocument;
   onSave: (entry: JobEntry) => Promise<SaveOutcome>;
-  /** Rendered under the pattern fields with the patterns the scan would use (Task 7 shows the matching jobs here). */
-  renderPatternPreview?: (pattern: string, exclude: string) => ReactNode;
+  /**
+   * Rendered under the pattern fields with the patterns the scan would use, and
+   * the entry's job IDs, which the scan uses instead where they apply (Task 7
+   * shows the matching jobs here, or that the scan finds the job by its ID).
+   */
+  renderPatternPreview?: (pattern: string, exclude: string, jobIds: EntryJobIds) => ReactNode;
   /**
    * Reloads the job list after a conflict. In edit mode the form then starts
    * again from the newest saved job. Without it there is no Reload button, and
@@ -169,7 +174,7 @@ interface EditorFormProps {
   initial: JobEntry;
   document: JobListDocument;
   onSave: (entry: JobEntry) => Promise<SaveOutcome>;
-  renderPatternPreview?: (pattern: string, exclude: string) => ReactNode;
+  renderPatternPreview?: (pattern: string, exclude: string, jobIds: EntryJobIds) => ReactNode;
   onReload?: ReloadJobList;
   onReloaded: () => void;
   notice: string | null;
@@ -258,6 +263,7 @@ function EditorForm({
   const scheduleType = values.schedule_type === INHERIT ? inherited.schedule_type : values.schedule_type;
   const enabled = values.enabled ?? inherited.enabled;
   const patterns = useMemo(() => effectivePatterns(checked.value, inherited), [checked.value, inherited]);
+  const jobIds = useMemo(() => entryJobIds(checked.value), [checked.value]);
 
   const save = async () => {
     // Check the entry as it is now, in case the last change was less than 200 ms ago.
@@ -405,7 +411,7 @@ function EditorForm({
           {inherited.exclude !== null || values.exclude_off ? (
             <NoExclusion checked={values.exclude_off} onChange={(on) => update({ exclude_off: on })} />
           ) : null}
-          {renderPatternPreview ? <div className="min-w-0">{renderPatternPreview(patterns.pattern, patterns.exclude)}</div> : null}
+          {renderPatternPreview ? <div className="min-w-0">{renderPatternPreview(patterns.pattern, patterns.exclude, jobIds)}</div> : null}
           <FormRow
             label="Job IDs"
             yamlKey="job_ids"

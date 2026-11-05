@@ -116,6 +116,9 @@
   "valid_example.yml": {
     "ok": true
   },
+  "valid_explicit_values.yml": {
+    "ok": true
+  },
   "valid_job_ids_numbers_and_strings.yml": {
     "ok": true
   },

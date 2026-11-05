@@ -19,6 +19,7 @@ const PAGES = [
 /** Each job page's empty state, with no jobs and no versions saved. */
 const EMPTY_STATES = [
   ["/jobs", "The job list is empty"],
+  ["/jobs/map", "Nothing on the map yet"],
   ["/jobs/changes", "Nothing is saved yet"],
   ["/jobs/settings", "Add jobs first"],
 ] as const;

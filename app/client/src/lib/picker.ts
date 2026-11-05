@@ -175,6 +175,41 @@ export function isMonitored(row: RegionJobRow, document: JobListDocument): strin
   return null;
 }
 
+/** The job IDs an entry carries, for the pattern preview: its own list, and each environment's own list where it sets one, an empty one too. */
+export interface EntryJobIds {
+  jobIds: string[];
+  environments: Record<string, string[]>;
+}
+
+export function entryJobIds(job: JobEntry): EntryJobIds {
+  const environments: Record<string, string[]> = {};
+  for (const [name, overrides] of Object.entries(job.environments ?? {})) {
+    if (overrides.job_ids !== undefined) environments[name] = overrides.job_ids;
+  }
+  return { jobIds: job.job_ids ?? [], environments };
+}
+
+/**
+ * Where the scan finds a job by its job ID instead of its name, as jobIdsIn
+ * and the scan's SQL decide it per workspace: the environment's own list when
+ * it sets one, otherwise the job's, and by ID when that list has any. byId is
+ * the answer where the environment sets no list (and in unlabeled workspaces);
+ * except names the environments whose own list gives the other answer.
+ */
+export interface IdUse {
+  byId: boolean;
+  except: string[];
+}
+
+export function idUse(ids: EntryJobIds): IdUse {
+  const byId = ids.jobIds.length > 0;
+  const except = Object.entries(ids.environments)
+    .filter(([, list]) => list.length > 0 !== byId)
+    .map(([name]) => name)
+    .sort();
+  return { byId, except };
+}
+
 /**
  * What a failed system table query means. AppKit sends only a generic message
  * and the warehouse's error code, and the warehouse reports a missing grant and

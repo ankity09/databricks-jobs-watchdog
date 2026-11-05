@@ -3,6 +3,8 @@ import type { JobListDocument } from "../../../shared/joblist/types";
 import {
   RegionJobRow,
   draftFromRegionJob,
+  entryJobIds,
+  idUse,
   isMonitored,
   jobNameFromRealName,
   queryFailure,
@@ -210,5 +212,34 @@ describe("queryFailure", () => {
   it("reads anything else as another failure", () => {
     expect(queryFailure("Network error. Please check your connection.", null)).toBe("other");
     expect(queryFailure("Query execution failed", "WAREHOUSE_UNAVAILABLE")).toBe("other");
+  });
+});
+
+describe("entryJobIds", () => {
+  it("takes the job's IDs, and each environment's own list where it sets one, an empty one too", () => {
+    expect(
+      entryJobIds({
+        job_name: "orders_ingest",
+        job_ids: ["9007199254740993"],
+        environments: { lower: { job_ids: [] }, production: { job_ids: ["123"] }, staging: { enabled: false } },
+      }),
+    ).toEqual({ jobIds: ["9007199254740993"], environments: { lower: [], production: ["123"] } });
+    expect(entryJobIds({ job_name: "orders_ingest" })).toEqual({ jobIds: [], environments: {} });
+  });
+});
+
+describe("idUse", () => {
+  it("finds the job by ID everywhere when it has IDs and no environment says otherwise", () => {
+    expect(idUse({ jobIds: ["123"], environments: { production: ["456"] } })).toEqual({ byId: true, except: [] });
+  });
+
+  it("finds the job by name everywhere when no list has an ID", () => {
+    expect(idUse({ jobIds: [], environments: { lower: [] } })).toEqual({ byId: false, except: [] });
+  });
+
+  it("names the environments whose own list turns the answer around, as the scan's coalesce does", () => {
+    // An environment's empty list falls back to the name; its own IDs win over none.
+    expect(idUse({ jobIds: ["123"], environments: { staging: [], lower: [] } })).toEqual({ byId: true, except: ["lower", "staging"] });
+    expect(idUse({ jobIds: [], environments: { production: ["456"] } })).toEqual({ byId: false, except: ["production"] });
   });
 });

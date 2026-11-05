@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JobEntry, JobListDocument } from "../../../../shared/joblist/types";
 import type { SaveOutcome } from "../../hooks/useJobList";
 import { ApiError } from "../../lib/api";
+import type { EntryJobIds } from "../../lib/picker";
 import { JobEditorSheet, type JobEditorSheetProps } from "./JobEditorSheet";
 
 const ORDERS_ENRICH: JobEntry = {
@@ -135,6 +136,27 @@ describe("JobEditorSheet", () => {
     await vi.waitFor(() => expect(save).toBeEnabled());
   });
 
+  it("keeps a job's explicit values through an edit: Save stays off with no change, and a notes change saves them as they were", async () => {
+    // Values the loader accepts and the form has no field state for: an empty environment mapping and text with spaces.
+    const explicit: JobEntry = {
+      job_name: " padded name ",
+      schedule_type: "triggered",
+      owner: " ingestion-team ",
+      environments: { lower: {}, production: { owner: " prod-team " } },
+    };
+    const { onSave } = renderSheet({ initial: explicit, document: { ...DOC, jobs: [...DOC.jobs, explicit] } });
+    const save = screen.getByRole("button", { name: "Save changes" });
+    // Let the first check run, so Save is off for no change rather than for a check still to come.
+    await vi.waitFor(() => expect(field("Notes")).toBeInTheDocument());
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(save).toBeDisabled();
+    await userEvent.type(field("Notes"), "Checked by hand.");
+    await vi.waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0]?.[0]).toEqual({ ...explicit, notes: "Checked by hand." });
+  });
+
   it("makes the job name read-only in edit mode, with the rename hint", () => {
     renderSheet();
     expect(field("Job name")).toHaveAttribute("readonly");
@@ -237,6 +259,20 @@ describe("JobEditorSheet", () => {
     renderSheet({ renderPatternPreview });
     expect(await screen.findByText("preview of ^orders_enrich_(web|mobile)_(prod|dev)$ without _test(_|$)")).toBeInTheDocument();
     await userEvent.clear(field("Name pattern"));
-    await vi.waitFor(() => expect(renderPatternPreview).toHaveBeenLastCalledWith("^orders_enrich$", "_test(_|$)"));
+    // orders_enrich has no job IDs, and its lower override sets none.
+    await vi.waitFor(() => expect(renderPatternPreview).toHaveBeenLastCalledWith("^orders_enrich$", "_test(_|$)", { jobIds: [], environments: {} }));
+  });
+
+  it("passes the job's IDs and each environment's own IDs to the pattern preview, so it can say where the scan finds the job by ID", async () => {
+    const renderPatternPreview = vi.fn((_pattern: string, _exclude: string, ids: EntryJobIds) => (
+      <p>
+        preview by [{ids.jobIds.join(",")}] and lower [{(ids.environments.lower ?? []).join(",")}]
+      </p>
+    ));
+    renderSheet({
+      initial: { ...ORDERS_ENRICH, job_ids: ["9007199254740993"], environments: { lower: { enabled: false, job_ids: ["123"] } } },
+      renderPatternPreview,
+    });
+    expect(await screen.findByText("preview by [9007199254740993] and lower [123]")).toBeInTheDocument();
   });
 });
