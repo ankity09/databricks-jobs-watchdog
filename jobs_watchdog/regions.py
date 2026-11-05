@@ -90,9 +90,26 @@ def _load_region(path):
     )
 
 
-def load_regions(paths):
-    """The checked regions in the given files and folders, sorted by file name."""
-    regions = [_load_region(path) for path in _files(paths)]
+def region_names(paths):
+    """The region names the given files and folders hold, read from the file names only."""
+    names = []
+    for path in _files(paths):
+        try:
+            names.append(_region_name(path))
+        except ConfigError:
+            continue
+    return names
+
+
+def load_regions(paths, only=None):
+    """The checked regions in the given files and folders, sorted by file name.
+
+    With only, just the region of that name is loaded and checked; the other files are not read.
+    """
+    files = _files(paths)
+    if only:
+        files = [path for path in files if path.name == f"accelerator.{only}.yaml"]
+    regions = [_load_region(path) for path in files]
     seen = set()
     for region in regions:
         if region.name in seen:

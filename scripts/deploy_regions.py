@@ -33,9 +33,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from jobs_watchdog.config import ConfigError  # noqa: E402
-from jobs_watchdog.regions import STATEMENTS_API, deploy_steps, load_regions, region_env  # noqa: E402
+from jobs_watchdog.regions import STATEMENTS_API, deploy_steps, load_regions, region_env, region_names  # noqa: E402
 
 POLL_LIMIT_SECONDS = 600
+POLL_INTERVAL_SECONDS = 5.0  # between two checks of a statement that has not finished; tests set it to 0
 _SECRET_NAME = re.compile(r"SECRET|TOKEN|PASSWORD|CREDENTIAL", re.IGNORECASE)
 _TOKEN_SHAPE = re.compile(r"\bdapi[0-9a-zA-Z]{16,}\b")
 
@@ -49,7 +50,10 @@ def redact(text, env):
 
 
 def _run(argv, env):
-    done = subprocess.run(argv, capture_output=True, text=True, env=env)
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, env=env)
+    except OSError as err:
+        return 127, "", f"could not run {argv[0]!r}: {err}. Install the Databricks CLI and put it on PATH."
     return done.returncode, done.stdout, done.stderr
 
 
@@ -58,7 +62,6 @@ def _statement_result(argv, env, profile_args):
     code, out, err = _run(argv, env)
     if code != 0:
         return False, (err or out).strip(), None
-    interval = float(os.environ.get("DEPLOY_REGIONS_POLL_SECONDS", "5"))
     deadline = time.monotonic() + POLL_LIMIT_SECONDS
     while True:
         try:
@@ -72,7 +75,7 @@ def _statement_result(argv, env, profile_args):
         if state in ("PENDING", "RUNNING"):
             if time.monotonic() > deadline:
                 return False, "the statement did not finish in 10 minutes", None
-            time.sleep(interval)
+            time.sleep(POLL_INTERVAL_SECONDS)
             code, out, err = _run(["databricks", "api", "get", f"{STATEMENTS_API}/{response.get('statement_id', '')}"]
                                   + profile_args, env)
             if code != 0:
@@ -103,6 +106,10 @@ def run_step(step, env):
 
 def deploy_region(region, args, results):
     env = region_env(region, os.environ)
+    # A profile named in the environment could send this deploy to another workspace than the region's host.
+    if env.pop("DATABRICKS_CONFIG_PROFILE", None):
+        print(f"[{region.name}] ignoring DATABRICKS_CONFIG_PROFILE from the environment; "
+              f"this region deploys to {region.host}.", file=sys.stderr, flush=True)
     steps = deploy_steps(region, args.validate_only, not args.no_app_run, not args.skip_ensure_tables)
     failed = False
     for step in steps:
@@ -129,24 +136,22 @@ def summary(results):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("paths", nargs="+", help="region files, or folders holding accelerator.<region>.yaml files")
-    parser.add_argument("--only", help="deploy one region: the part of the file name between accelerator. and .yaml")
+    parser.add_argument("--only", help="deploy one region: the part of the file name between accelerator. and .yaml; "
+                        "only that region's file is read and checked")
     parser.add_argument("--validate-only", action="store_true", help="run bundle validate and nothing else")
     parser.add_argument("--no-app-run", action="store_true", help="deploy the bundle but do not run bundle run watchdog_app")
     parser.add_argument("--skip-ensure-tables", action="store_true",
                         help="do not create the Watchdog tables and views before the deploy")
     args = parser.parse_args(argv)
     try:
-        regions = load_regions(args.paths)
+        regions = load_regions(args.paths, only=args.only)
+        if args.only and not regions:
+            print(f"deploy_regions: no region named {args.only!r}; found {', '.join(region_names(args.paths))}",
+                  file=sys.stderr)
+            return 2
     except ConfigError as err:
         print(f"deploy_regions: {err}", file=sys.stderr)
         return 2
-    if args.only:
-        picked = [region for region in regions if region.name == args.only]
-        if not picked:
-            print(f"deploy_regions: no region named {args.only!r}; found {', '.join(r.name for r in regions)}",
-                  file=sys.stderr)
-            return 2
-        regions = picked
     results = []
     all_ok = True
     for region in regions:

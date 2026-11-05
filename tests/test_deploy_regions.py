@@ -29,7 +29,7 @@ deploy:
 # FAKE_VIEW_EXISTS=1 answers the view check with a row.
 # FAKE_STATE overrides the statement state (FAILED, or PENDING once, then SUCCEEDED).
 FAKE_DATABRICKS = """#!/usr/bin/env bash
-echo "$* | host=${DATABRICKS_HOST:-} catalog=${BUNDLE_VAR_catalog:-} warehouse=${BUNDLE_VAR_warehouse_id:-}" >> "$FAKE_LOG"
+echo "$* | host=${DATABRICKS_HOST:-} profile_env=${DATABRICKS_CONFIG_PROFILE:-} catalog=${BUNDLE_VAR_catalog:-} warehouse=${BUNDLE_VAR_warehouse_id:-}" >> "$FAKE_LOG"
 if [[ "$1 $2" == "api post" ]]; then
   if [[ "${FAKE_STATE:-}" == "FAILED" ]]; then
     echo '{"statement_id":"s1","status":{"state":"FAILED","error":{"message":"PERMISSION_DENIED on the catalog"}}}'
@@ -83,7 +83,7 @@ def sandbox(tmp_path):
 def run(sandbox, *args, **extra_env):
     log = sandbox / "calls.log"
     env = dict(os.environ, PATH=f"{sandbox / 'bin'}:{os.environ['PATH']}", FAKE_LOG=str(log),
-               DEPLOY_REGIONS_POLL_SECONDS="0", DATABRICKS_CLIENT_SECRET="s3cr3t-value-123", FAKE_TOKEN=TOKEN, **extra_env)
+               DATABRICKS_CLIENT_SECRET="s3cr3t-value-123", FAKE_TOKEN=TOKEN, **extra_env)
     result = subprocess.run([sys.executable, str(sandbox / "scripts" / "deploy_regions.py"), *args],
                             capture_output=True, text=True, env=env, cwd=sandbox)
     calls = log.read_text().splitlines() if log.exists() else []
@@ -152,10 +152,47 @@ def test_a_failed_statement_stops_that_region_before_the_deploy(sandbox):
     assert "bundle deploy -t production" not in bundle_calls(calls)
 
 
-def test_a_pending_statement_is_polled_until_it_finishes(sandbox):
-    result, calls = run(sandbox, str(sandbox / "regions" / "accelerator.lower.yaml"), FAKE_STATE="PENDING")
+def test_a_pending_statement_is_polled_until_it_finishes(sandbox, monkeypatch, capsys):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("deploy_regions_under_test", repo_root() / "scripts" / "deploy_regions.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "POLL_INTERVAL_SECONDS", 0)
+    log = sandbox / "calls.log"
+    monkeypatch.setenv("PATH", f"{sandbox / 'bin'}:{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_LOG", str(log))
+    monkeypatch.setenv("FAKE_STATE", "PENDING")
+    code = module.main([str(sandbox / "regions" / "accelerator.lower.yaml")])
+    capsys.readouterr()
+    assert code == 0
+    assert any(call.startswith("api get /api/2.0/sql/statements/s1") for call in log.read_text().splitlines())
+
+
+def test_the_poll_interval_is_not_read_from_the_environment(sandbox):
+    # A test-only setting must not change production behavior.
+    assert "DEPLOY_REGIONS_POLL_SECONDS" not in (repo_root() / "scripts" / "deploy_regions.py").read_text()
+
+
+def test_a_missing_databricks_binary_is_reported_in_the_summary(sandbox):
+    empty = sandbox / "empty-bin"
+    empty.mkdir()
+    env = dict(os.environ, PATH=str(empty))
+    result = subprocess.run([sys.executable, str(sandbox / "scripts" / "deploy_regions.py"),
+                             str(sandbox / "regions" / "accelerator.lower.yaml"), "--validate-only"],
+                            capture_output=True, text=True, env=env, cwd=sandbox)
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    assert "databricks" in result.stderr and "PATH" in result.stderr
+    assert any("lower" in line and "FAILED" in line for line in result.stdout.splitlines())
+
+
+def test_a_profile_from_the_environment_cannot_redirect_a_region(sandbox):
+    result, calls = run(sandbox, str(sandbox / "regions"), "--validate-only", DATABRICKS_CONFIG_PROFILE="other-workspace")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert any(call.startswith("api get /api/2.0/sql/statements/s1") for call in calls)
+    assert calls and all("profile_env= " in call for call in calls)
+    assert all("host=https://" in call for call in calls)
+    assert "DATABRICKS_CONFIG_PROFILE" in result.stderr  # one line says it was ignored
 
 
 def test_a_failure_in_one_region_does_not_stop_the_others(sandbox):
@@ -189,6 +226,23 @@ def test_only_picks_one_region_by_the_name_in_the_file(sandbox):
     result, calls = run(sandbox, str(sandbox / "regions"), "--validate-only", "--only", "prod-eu")
     assert result.returncode == 0
     assert len(calls) == 1 and "host=https://prod-eu.example.com" in calls[0]
+
+
+def test_only_ignores_a_broken_file_for_another_region(sandbox):
+    bad = sandbox / "regions" / "accelerator.prod-us.yaml"
+    bad.write_text("target: [not, a, mapping\n")
+    result, calls = run(sandbox, str(sandbox / "regions"), "--validate-only", "--only", "prod-eu")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(calls) == 1 and "host=https://prod-eu.example.com" in calls[0]
+
+
+def test_only_still_checks_the_named_region(sandbox):
+    bad = sandbox / "regions" / "accelerator.prod-eu.yaml"
+    bad.write_text(bad.read_text().replace("  warehouse_id: whprod-eu\n", ""))
+    result, calls = run(sandbox, str(sandbox / "regions"), "--validate-only", "--only", "prod-eu")
+    assert result.returncode == 2
+    assert "target.warehouse_id" in result.stderr
+    assert calls == []
 
 
 def test_only_with_an_unknown_name_lists_the_known_ones(sandbox):
@@ -228,3 +282,12 @@ def test_the_json_body_is_valid_for_the_statement_api(sandbox):
     post = next(call for call in calls if call.startswith("api post"))
     body = json.loads(post.split("--json ", 1)[1].split(" | ")[0])
     assert body["warehouse_id"] == "whlower"
+
+
+def test_the_docs_do_not_say_the_targets_are_both_development_mode_or_that_ci_sets_the_host():
+    readme = (repo_root() / "README.md").read_text()
+    assert "Both targets use development mode" not in readme
+    docs = (repo_root() / "docs" / "multi-region.md").read_text()
+    remove = docs.split("## Remove one region", 1)[1]
+    assert "same identity" in remove
+    assert "from a CI variable" in docs  # CI takes the host from the region file

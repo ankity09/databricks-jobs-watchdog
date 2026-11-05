@@ -221,3 +221,26 @@ def test_config_option_reads_another_accelerator_file(sandbox):
     assert result.returncode == 0, result.stderr
     assert "schemas delete main.other_schema --force" in calls
     assert any(call.startswith("bundle destroy -t production --auto-approve") for call in calls)
+
+
+def test_config_with_a_missing_directory_says_so_and_changes_nothing(sandbox):
+    result, calls = run(sandbox, [], "-c", str(sandbox / "no-such-dir" / "accelerator.x.yaml"), "-y")
+    assert result.returncode == 2
+    assert "no-such-dir" in result.stderr and "does not exist" in result.stderr
+    assert calls == []
+
+
+def test_config_with_a_missing_file_says_so_and_changes_nothing(sandbox):
+    result, calls = run(sandbox, [], "-c", str(sandbox / "accelerator.nope.yaml"), "-y")
+    assert result.returncode == 2
+    assert "accelerator.nope.yaml" in result.stderr and "does not exist" in result.stderr
+    assert calls == []
+
+
+@pytest.mark.parametrize("option", ["-c", "-t", "-p"])
+def test_an_option_without_a_value_gets_a_clear_message(sandbox, option):
+    result, calls = run(sandbox, [], "-y", option)
+    assert result.returncode == 2
+    assert f"{option} needs a value" in result.stderr
+    assert "unbound variable" not in result.stderr
+    assert calls == []
