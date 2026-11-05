@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { z } from "zod";
 import { type Status, toStatus } from "../lib/status";
 import { useAppConfig } from "./useAppConfig";
+import { useLastGood } from "./useLastGood";
 import { useRefreshKey } from "./useRefreshKey";
 
 const LiveStatusRows = z.array(z.object({ job_name: z.string(), status: z.string().nullable() }));
@@ -14,9 +15,13 @@ export interface LiveStatus {
   error: string | null;
 }
 
-/** Each job's worst status in the newest scans (job_live_status.obo.sql, run as the signed-in person). */
+/**
+ * Each job's worst status in the newest scans (job_live_status.obo.sql, run as
+ * the signed-in person). While a newer query loads (after a refresh or bump()),
+ * `loading` is true and `byJob` keeps the last result.
+ */
 export function useLiveStatus(): LiveStatus {
-  const { config, loading: configLoading, error: configError } = useAppConfig();
+  const { config, error: configError } = useAppConfig();
   const { refresh } = useRefreshKey();
   const ready = config !== null && config.catalog !== "";
   const parameters = useMemo(
@@ -24,17 +29,20 @@ export function useLiveStatus(): LiveStatus {
     [config, refresh],
   );
   const query = useAnalyticsQuery("job_live_status", parameters, { autoStart: ready });
-  const rows = useMemo(() => LiveStatusRows.safeParse(query.data ?? []), [query.data]);
-  const byJob = useMemo(
-    () => new Map(rows.success ? rows.data.map((row) => [row.job_name, toStatus(row.status)] as const) : []),
-    [rows],
+  // null until the current query answers (see useLastGood for why that includes an idle first render).
+  const parsed = useMemo(() => (query.data === null ? null : LiveStatusRows.safeParse(query.data)), [query.data]);
+  const fresh = useMemo(
+    () => (parsed?.success ? new Map(parsed.data.map((row) => [row.job_name, toStatus(row.status)] as const)) : null),
+    [parsed],
   );
+  const empty = useMemo(() => new Map<string, Status>(), []);
+  const byJob = useLastGood(fresh) ?? empty;
 
   if (configError) return { byJob, loading: false, error: configError.message };
-  if (config !== null && !ready) {
-    return { byJob, loading: false, error: "The scan job has no catalog, so the app cannot find the Watchdog tables." };
-  }
+  if (config === null) return { byJob, loading: true, error: null };
+  if (!ready) return { byJob, loading: false, error: "The scan job has no catalog, so the app cannot find the Watchdog tables." };
   if (query.error) return { byJob, loading: false, error: query.error };
-  if (!rows.success) return { byJob, loading: false, error: "The live status rows had an unexpected shape." };
-  return { byJob, loading: configLoading || (ready && query.loading), error: null };
+  if (parsed === null) return { byJob, loading: true, error: null };
+  if (!parsed.success) return { byJob, loading: false, error: "The live status rows had an unexpected shape." };
+  return { byJob, loading: false, error: null };
 }

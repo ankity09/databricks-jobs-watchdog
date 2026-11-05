@@ -51,7 +51,8 @@ export default tseslint.config(
       ...reactPlugin.configs.recommended.rules,
       ...reactPlugin.configs['jsx-runtime'].rules,
       ...reactHooksPlugin.configs.recommended.rules,
-      'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      // useRefreshKey.tsx exports its provider and its hook together, as the app's plan lays it out.
+      'react-refresh/only-export-components': ['warn', { allowConstantExport: true, allowExportNames: ['useRefreshKey'] }],
       'react/prop-types': 'off', // Using TypeScript for prop validation
       'react/no-array-index-key': 'warn',
     },

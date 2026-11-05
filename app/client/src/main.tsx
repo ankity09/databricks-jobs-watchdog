@@ -1,10 +1,11 @@
-import { ResourceStatusIndicator, ResourceStatusProvider } from "@databricks/appkit-ui/react";
+import { ResourceStatusProvider } from "@databricks/appkit-ui/react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter } from "react-router";
 import "./index.css";
 import App from "./App.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
+import { StatusToasts } from "./layout/StatusToasts.tsx";
 import { routes } from "./routes.tsx";
 
 const router = createBrowserRouter(routes);
@@ -17,7 +18,7 @@ createRoot(container).render(
     <ErrorBoundary>
       {/* Shows a toast while the SQL warehouse starts, for every query on the page. */}
       <ResourceStatusProvider>
-        <ResourceStatusIndicator />
+        <StatusToasts />
         <App router={router} />
       </ResourceStatusProvider>
     </ErrorBoundary>

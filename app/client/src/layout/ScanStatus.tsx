@@ -12,6 +12,7 @@ import { RotateCw } from "lucide-react";
 import { type JSX, useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { useAppConfig } from "../hooks/useAppConfig";
+import { useLastGood } from "../hooks/useLastGood";
 import { useRefreshKey } from "../hooks/useRefreshKey";
 import { cn } from "../lib/utils";
 import { formatAgo, formatUtc, parseTime } from "../lib/time";
@@ -60,7 +61,7 @@ function LiveDot({ fresh }: { fresh: boolean }) {
 export function ScanStatus(): JSX.Element {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
-  const { config, loading: configLoading, error: configError } = useAppConfig();
+  const { config, error: configError } = useAppConfig();
   const { refresh, bump } = useRefreshKey();
   const ready = config !== null && config.catalog !== "";
   const parameters = useMemo(
@@ -70,10 +71,15 @@ export function ScanStatus(): JSX.Element {
   const query = useAnalyticsQuery("scan_freshness", parameters, { autoStart: ready });
   const now = useNow();
 
-  const rows = FreshnessRows.safeParse(query.data ?? []);
-  const loading = configLoading || (ready && query.loading);
-  const failed = configError !== null || (config !== null && !ready) || query.error !== null || !rows.success;
-  const newest = rows.success ? newestScan(rows.data) : null;
+  // null until the current query answers; AppKit's first render for new parameters is idle, not loading.
+  const parsed = useMemo(() => (query.data === null ? null : FreshnessRows.safeParse(query.data)), [query.data]);
+  const answer = useMemo(() => (parsed?.success ? { newest: newestScan(parsed.data) } : null), [parsed]);
+  // While a newer query loads, keep showing the last answer.
+  const shown = useLastGood(answer);
+
+  const failed = configError !== null || (config !== null && !ready) || query.error !== null || parsed?.success === false;
+  const loading = !failed && shown === null;
+  const newest = failed ? null : (shown?.newest ?? null);
 
   let label: string;
   let detail: string;

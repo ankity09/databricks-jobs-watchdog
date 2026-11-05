@@ -8,7 +8,8 @@
 @import "@fontsource/dm-mono/500.css";
 
 /*
- * Light theme only, in the Databricks workspace (DuBois) colors. The dark
+ * Light theme only, in the Databricks workspace (DuBois) colors. The warning
+ * amber is #9A5C00 with white text, which passes WCAG AA (5.4:1). The dark
  * values are overridden with the light ones below, index.html sets class="light"
  * so appkit-ui's dark media block never applies, and dark: utilities only
  * match a .dark class, which the app never sets.
@@ -46,7 +47,8 @@
   --sidebar-border: #E3E2DE;
   --input: #D7D6D2;
   --destructive: #C42B1C;
-  --warning: #B26B00;
+  --warning: #9A5C00;
+  --warning-foreground: #FFFFFF;
   --success: #1E7F4F;
   --sidebar-foreground: #1B3139;
   --sidebar-accent-foreground: #1B3139;
@@ -82,7 +84,8 @@
     --sidebar-border: #E3E2DE;
     --input: #D7D6D2;
     --destructive: #C42B1C;
-    --warning: #B26B00;
+    --warning: #9A5C00;
+    --warning-foreground: #FFFFFF;
     --success: #1E7F4F;
     --sidebar-foreground: #1B3139;
     --sidebar-accent-foreground: #1B3139;
