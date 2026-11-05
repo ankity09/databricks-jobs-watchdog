@@ -154,7 +154,7 @@ databricks bundle run watchdog_demo_retries -t demo --profile <your-profile>
 databricks bundle run watchdog_phase_1 -t demo --profile <your-profile>
 ```
 
-Both targets use development mode, so deployed names start with `[dev <your name>]`. Every schedule starts paused, so nothing runs on a timer until you unpause it. To run the demo jobs on their schedules, set `BUNDLE_VAR_demo_schedule_status=UNPAUSED` before you deploy the demo target. The example config's patterns match the sample jobs with that prefix.
+The `dev` and `demo` targets use development mode, so deployed names start with `[dev <your name>]`. The `production` target does not, so its names have no prefix. Every schedule starts paused, so nothing runs on a timer until you unpause it. To run the demo jobs on their schedules, set `BUNDLE_VAR_demo_schedule_status=UNPAUSED` before you deploy the demo target. The example config's patterns match the sample jobs with that prefix.
 
 ### Remove it
 

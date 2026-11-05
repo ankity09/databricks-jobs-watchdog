@@ -11,7 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@databricks/appkit-ui/react";
-import { Check, ChevronRight, Copy } from "lucide-react";
+import { Check, ChevronRight, Copy, RotateCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { CopilotQuery } from "../../hooks/useCopilot";
 import { cn } from "../../lib/utils";
@@ -24,6 +24,8 @@ export interface SqlDisclosureProps {
   /** The signed-in person's email. Genie runs each query as the person asking. */
   ranAs: string | null;
   resultState: ResultState;
+  /** Fetches the rows again. Without it, only asking again brings them back. */
+  onRetryRows?: () => void;
 }
 
 /** The table shows at most this many rows of a result. */
@@ -39,7 +41,7 @@ function contentKeys(values: string[]): string[] {
   });
 }
 
-function ResultTable({ query, resultState }: Pick<SqlDisclosureProps, "query" | "resultState">) {
+function ResultTable({ query, resultState, onRetryRows }: Pick<SqlDisclosureProps, "query" | "resultState" | "onRetryRows">) {
   if (resultState === "loading" && !query.result) {
     return (
       <div className="space-y-1.5 px-3 py-3" aria-label="Loading the rows">
@@ -49,7 +51,16 @@ function ResultTable({ query, resultState }: Pick<SqlDisclosureProps, "query" | 
     );
   }
   if (!query.result) {
-    return <p className="px-3 py-2.5 text-xs text-muted-foreground">The rows are not available. Ask again to run the query again.</p>;
+    if (!onRetryRows) return <p className="px-3 py-2.5 text-xs text-muted-foreground">The rows are not available. Ask again to run the query again.</p>;
+    return (
+      <div className="flex items-center gap-3 px-3 py-2">
+        <p className="text-xs text-muted-foreground">The rows are not available.</p>
+        <Button type="button" variant="outline" size="sm" onClick={onRetryRows} className="h-7 gap-1.5 px-2.5 text-xs">
+          <RotateCw aria-hidden="true" className="size-3.5" />
+          Retry
+        </Button>
+      </div>
+    );
   }
   const { columns, rows } = query.result;
   if (rows.length === 0) return <p className="px-3 py-2.5 text-xs text-muted-foreground">The query returned no rows.</p>;
@@ -94,7 +105,7 @@ function ResultTable({ query, resultState }: Pick<SqlDisclosureProps, "query" | 
 }
 
 /** One query behind an answer: who it ran as, and, on request, its SQL and a small result table. */
-export function SqlDisclosure({ query, ranAs, resultState }: SqlDisclosureProps) {
+export function SqlDisclosure({ query, ranAs, resultState, onRetryRows }: SqlDisclosureProps) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -138,7 +149,7 @@ export function SqlDisclosure({ query, ranAs, resultState }: SqlDisclosureProps)
         <pre className="max-h-72 overflow-auto px-3 pt-1.5 pb-2.5 font-mono text-xs leading-5 whitespace-pre text-foreground">
           <code>{query.sql}</code>
         </pre>
-        <ResultTable query={query} resultState={resultState} />
+        <ResultTable query={query} resultState={resultState} onRetryRows={onRetryRows} />
       </CollapsibleContent>
     </Collapsible>
   );

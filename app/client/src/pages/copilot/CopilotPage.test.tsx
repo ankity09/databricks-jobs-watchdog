@@ -5,7 +5,7 @@ import { createMemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../../App";
 import { routes } from "../../routes";
-import { controlledSse, messageResult, sseEvent, sseResponse } from "../../test/sse";
+import { controlledSse, messageResult, queryResult, sseEvent, sseResponse } from "../../test/sse";
 
 const SAMPLE_QUESTIONS = [
   "What is failing right now?",
@@ -217,5 +217,105 @@ describe("the copilot page", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/copilot"));
     expect(await screen.findByRole("group", { name: "Suggested questions" })).toBeInTheDocument();
     expect(screen.queryByText("orders_ingest failed.")).not.toBeInTheDocument();
+  });
+
+  it("shows a skeleton, not 'rows not available', while a reopened chat loads its rows", async () => {
+    const user = userEvent.setup();
+    const load = controlledSse();
+    genieAnswers = [load.response];
+    await renderAt("/copilot/conv-7");
+    load.push(messageResult({ conversationId: "conv-7", messageId: "msg-1", question: "Which jobs failed?", text: "Two failed.", sql: "SELECT 1", attachmentId: "att-1" }));
+    await screen.findByText("Two failed.");
+    await user.click(screen.getByRole("button", { name: "Show SQL" }));
+    expect(screen.getByLabelText("Loading the rows")).toBeInTheDocument();
+    expect(screen.queryByText(/The rows are not available/)).not.toBeInTheDocument();
+
+    load.push(queryResult("att-1", ["job_name"], [["orders_ingest"]]));
+    load.close();
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+  });
+
+  it("fetches missing rows again with Retry", async () => {
+    const user = userEvent.setup();
+    genieAnswers = [
+      sseResponse([
+        messageResult({ conversationId: "conv-7", messageId: "msg-1", question: "Which jobs failed?", text: "Two failed.", sql: "SELECT 1", attachmentId: "att-1" }),
+        sseEvent("error", { error: "Failed to fetch query result" }),
+      ]),
+      sseResponse([
+        messageResult({ conversationId: "conv-7", messageId: "msg-1", question: "Which jobs failed?", text: "Two failed.", sql: "SELECT 1", attachmentId: "att-1" }),
+        queryResult("att-1", ["job_name"], [["orders_ingest"]]),
+      ]),
+    ];
+    await renderAt("/copilot/conv-7");
+    await screen.findByText("Two failed.");
+    await user.click(screen.getByRole("button", { name: "Show SQL" }));
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(genieCalls[1].url).toMatch(/\/conversations\/conv-7\/messages\/msg-1\?/);
+    expect(genieCalls[1].method).toBe("GET");
+  });
+
+  it("uses the query's description as the answer when Genie sent no text", async () => {
+    genieAnswers = [sseResponse([messageResult({ conversationId: "conv-7", messageId: "msg-1", question: "Which jobs failed?", sql: "SELECT 1" })])];
+    await renderAt("/copilot/conv-7");
+    expect(await screen.findByText("Jobs that failed in the newest scan.")).toBeInTheDocument();
+    expect(screen.queryByText("Genie sent no answer to this question.")).not.toBeInTheDocument();
+  });
+
+  describe("scrolling", () => {
+    /** jsdom has no layout, so the log's size and position are set by hand; writes to scrollTop are recorded. */
+    function measure(list: HTMLElement, position: { top: number }) {
+      const writes: number[] = [];
+      Object.defineProperty(list, "scrollHeight", { configurable: true, get: () => 1000 });
+      Object.defineProperty(list, "clientHeight", { configurable: true, get: () => 200 });
+      Object.defineProperty(list, "scrollTop", {
+        configurable: true,
+        get: () => position.top,
+        set: (value: number) => {
+          writes.push(value);
+          position.top = value;
+        },
+      });
+      return writes;
+    }
+
+    async function startAnswer() {
+      const user = userEvent.setup();
+      const stream = controlledSse();
+      genieAnswers = [stream.response];
+      await renderAt("/copilot");
+      await user.click(await screen.findByRole("button", { name: "What is failing right now?" }));
+      const list = screen.getByRole("log", { name: "Messages" });
+      const position = { top: 800 };
+      const writes = measure(list, position);
+      stream.push(sseEvent("message_start", { conversationId: "conv-1", messageId: "msg-1", spaceId: "space-1" }));
+      await screen.findByText("Thinking");
+      return { stream, list, position, writes };
+    }
+
+    it("scrolls when new content arrives and the reader is at the bottom, but not on a status change", async () => {
+      const { stream, list, writes } = await startAnswer();
+      writes.length = 0;
+      stream.push(sseEvent("status", { status: "EXECUTING_QUERY" }));
+      await screen.findByText("Running the query");
+      expect(writes).toEqual([]);
+
+      stream.push(messageResult({ conversationId: "conv-1", messageId: "msg-1", question: "What is failing right now?", text: "orders_ingest failed." }));
+      await screen.findByText("orders_ingest failed.");
+      expect(writes.at(-1)).toBe(list.scrollHeight);
+      stream.close();
+    });
+
+    it("leaves the position alone when the reader has scrolled up", async () => {
+      const { stream, list, position, writes } = await startAnswer();
+      position.top = 100;
+      list.dispatchEvent(new Event("scroll"));
+      writes.length = 0;
+      stream.push(messageResult({ conversationId: "conv-1", messageId: "msg-1", question: "What is failing right now?", text: "orders_ingest failed." }));
+      await screen.findByText("orders_ingest failed.");
+      expect(writes).toEqual([]);
+      stream.close();
+    });
   });
 });

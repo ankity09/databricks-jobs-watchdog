@@ -245,4 +245,46 @@ describe("useCopilot", () => {
       ["assistant", "Nothing.", null],
     ]);
   });
+
+  it("uses the query's description as the answer text when Genie sent no text", async () => {
+    answerWith(
+      sseResponse([
+        sseEvent("message_start", { conversationId: "conv-1", messageId: "msg-1", spaceId: "space-1" }),
+        messageResult({ conversationId: "conv-1", messageId: "msg-1", question: "Which jobs failed?", sql: SQL, attachmentId: "att-1" }),
+      ]),
+    );
+    const { result } = renderHook(() => useCopilot({}));
+    await act(() => result.current.send("Which jobs failed?"));
+    expect(result.current.messages[1].text).toBe("Jobs that failed in the newest scan.");
+  });
+
+  it("fetches the rows of an answer again through the message route", async () => {
+    const again = controlledSse();
+    answerWith(
+      sseResponse([
+        messageResult({ conversationId: "conv-9", messageId: "msg-1", question: "Which jobs failed?", text: "Two failed.", sql: SQL, attachmentId: "att-1" }),
+        sseEvent("error", { error: "Failed to fetch query result" }),
+      ]),
+      again.response,
+    );
+    const { result } = renderHook(() => useCopilot({ conversationId: "conv-9" }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.messages[1].queries[0].result).toBeNull();
+    expect(result.current.loadingRows).toEqual([]);
+
+    let done: Promise<void> = Promise.resolve();
+    act(() => {
+      done = result.current.retryRows("msg-1");
+    });
+    expect(result.current.loadingRows).toEqual(["msg-1"]);
+    expect(calls[1].url).toMatch(/^\/api\/genie\/default\/conversations\/conv-9\/messages\/msg-1\?/);
+
+    again.push(messageResult({ conversationId: "conv-9", messageId: "msg-1", question: "Which jobs failed?", text: "Two failed.", sql: SQL, attachmentId: "att-1" }));
+    again.push(queryResult("att-1", ["job_name"], [["orders_ingest"]]));
+    again.close();
+    await act(() => done);
+    expect(result.current.loadingRows).toEqual([]);
+    expect(result.current.messages[1].queries[0].result).toEqual({ columns: ["job_name"], rows: [["orders_ingest"]] });
+    expect(result.current.messages[1].text).toBe("Two failed.");
+  });
 });

@@ -36,6 +36,11 @@ set -euo pipefail
 
 usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; }
 
+# need_value "$@": stops with a message when the option in $1 has no value after it.
+need_value() {
+  if [[ $# -lt 2 ]]; then echo "teardown.sh: $1 needs a value" >&2; exit 2; fi
+}
+
 target="dev"
 drop_schema=false
 drop_lakebase=false
@@ -44,9 +49,9 @@ profile_args=()
 config=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -t|--target) target="$2"; shift 2 ;;
-    -p|--profile) profile_args=(--profile "$2"); shift 2 ;;
-    -c|--config) config="$2"; shift 2 ;;
+    -t|--target) need_value "$@"; target="$2"; shift 2 ;;
+    -p|--profile) need_value "$@"; profile_args=(--profile "$2"); shift 2 ;;
+    -c|--config) need_value "$@"; config="$2"; shift 2 ;;
     --drop-schema) drop_schema=true; shift ;;
     --drop-lakebase) drop_lakebase=true; shift ;;
     -y|--yes) assume_yes=true; shift ;;
@@ -55,7 +60,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -n "$config" ]]; then config="$(cd "$(dirname "$config")" && pwd)/$(basename "$config")"; fi
+if [[ -n "$config" ]]; then
+  if [[ ! -f "$config" ]]; then echo "teardown.sh: the config file $config does not exist" >&2; exit 2; fi
+  config="$(cd "$(dirname "$config")" && pwd)/$(basename "$config")"
+fi
 cd "$(dirname "$0")"
 vars="$(python3 scripts/bundle_vars.py --export ${config:+"$config"})" || exit 2
 eval "$vars"

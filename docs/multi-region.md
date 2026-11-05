@@ -42,7 +42,7 @@ deploy:
 ```
 
 - `deploy.workspace_host` is the workspace where this region's Watchdog runs. A bundle target cannot take its host from a variable, so the script passes it to the CLI as `DATABRICKS_HOST`.
-- `deploy.profile` is optional. With a profile, the script passes `--profile` to every command and does not set `DATABRICKS_HOST`. Without one, the script sets `DATABRICKS_HOST` from `deploy.workspace_host` and the CLI signs in with OAuth M2M (`DATABRICKS_CLIENT_ID` and `DATABRICKS_CLIENT_SECRET`), as CI does. Whichever you choose, the profile must be for the same identity that CI deploys as (see the rule below).
+- `deploy.profile` is optional. With a profile, the script passes `--profile` to every command and does not set `DATABRICKS_HOST`. Without one, the script sets `DATABRICKS_HOST` from `deploy.workspace_host` and the CLI signs in with OAuth M2M (`DATABRICKS_CLIENT_ID` and `DATABRICKS_CLIENT_SECRET`). CI signs in the same way and takes the host from the region file, not from a CI variable. The script drops `DATABRICKS_CONFIG_PROFILE` from the environment it gives the CLI, so a profile set in your shell cannot send a region's deploy to another workspace. Whichever you choose, the profile must be for the same identity that CI deploys as (see the rule below).
 - A file with no `target.warehouse_id` or no valid `deploy.workspace_host` fails before anything runs. The message names the file and the key.
 
 [config/regions](../config/regions) holds two examples with placeholders. Real region files hold workspace details, so keep them in your own repo or a private one. A file named `accelerator.<region>.local.yaml` is git-ignored here.
@@ -118,4 +118,4 @@ Each job runs `python3 scripts/deploy_regions.py config/regions/accelerator.$REG
 ./teardown.sh -t production -c config/regions/accelerator.prod-eu.yaml --profile <profile>
 ```
 
-Without a profile, set `DATABRICKS_HOST` to the region's workspace and sign in as the deploying identity first. A plain teardown deletes the jobs, the app, the Genie agent and the bundle files, and keeps the Lakebase project (with the job list) and the Watchdog schema. `--drop-lakebase` and `--drop-schema` remove those too; each asks you to type a name first. Teardown touches one region only.
+Run the teardown as the same identity that deployed the region, for the reason given in [one identity per region](#one-deploying-identity-per-region): the bundle state is in that identity's folder, so a teardown as anyone else does not remove what the first identity deployed. Without a profile, set `DATABRICKS_HOST` to the region's workspace and sign in as that identity first. A plain teardown deletes the jobs, the app, the Genie agent and the bundle files, and keeps the Lakebase project (with the job list) and the Watchdog schema. `--drop-lakebase` and `--drop-schema` remove those too; each asks you to type a name first. Teardown touches one region only.

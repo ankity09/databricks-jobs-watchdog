@@ -78,6 +78,17 @@ describe("SqlDisclosure", () => {
     expect(screen.getByText("The rows are not available. Ask again to run the query again.")).toBeInTheDocument();
   });
 
+  it("offers Retry for missing rows when it can fetch them again", async () => {
+    const user = userEvent.setup();
+    const onRetryRows = vi.fn();
+    render(<SqlDisclosure query={query(null)} ranAs="dana@example.com" resultState="missing" onRetryRows={onRetryRows} />);
+    await user.click(screen.getByRole("button", { name: "Show SQL" }));
+    expect(screen.getByText("The rows are not available.")).toBeInTheDocument();
+    expect(screen.queryByText(/Ask again/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetryRows).toHaveBeenCalledOnce();
+  });
+
   it("falls back to the signed-in person when the email is unknown", () => {
     render(<SqlDisclosure query={query(1)} ranAs={null} resultState="ready" />);
     expect(screen.getByText("you, the signed-in person")).toBeInTheDocument();

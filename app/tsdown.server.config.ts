@@ -1,7 +1,7 @@
 import { appkitServerConfig } from '@databricks/appkit/tsdown';
 
-// AppKit's server build preset. When you keep code agents in `server/agents/`,
-// it auto-includes them as build entries so discovery works in a bundled build.
-// Customize with overrides — `appkitServerConfig({ external, define, ... })` —
-// or a function form for full control: `appkitServerConfig((base) => ({ ...base }))`.
+// The server build settings that AppKit provides. Code agents kept in
+// `server/agents/` are included as build entries, so they are found in a bundled build.
+// To change them, pass options, for example `appkitServerConfig({ external, define })`,
+// or pass a function that takes the base settings and returns your own.
 export default appkitServerConfig();
