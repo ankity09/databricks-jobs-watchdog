@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { RefreshProvider } from "../../hooks/useRefreshKey";
-import { installRadixPolyfills, mockApi, setClock } from "../../test/mockApi";
+import { installRadixPolyfills, json, mockApi, setClock, TEST_CONFIG } from "../../test/mockApi";
 import { STATUS_ROWS } from "../../test/monitoringFixtures";
 import { MonitoringPage } from "./MonitoringPage";
 
@@ -40,6 +40,51 @@ describe("the Monitoring page", () => {
     expect(screen.queryByRole("table")).toBeNull();
     expect(skeletons()).toBe(0);
     expect(screen.getByRole("heading", { level: 1, name: "Monitoring" })).toBeInTheDocument();
+  });
+
+  it("tells you to add or import jobs first, with a link to the Job list, when the scan reads Lakebase and the list is empty", async () => {
+    setClock("2026-11-05T10:20:00Z");
+    mockApi({
+      queries: { job_status: [] },
+      config: { ...TEST_CONFIG, configSource: "lakebase" },
+      routes: (url) => (url === "/api/job-list" ? json({ version: null, savedAt: null, savedBy: null, document: { jobs: [] } }) : undefined),
+    });
+    renderPage();
+    expect(await screen.findByText("No scans yet")).toBeInTheDocument();
+    expect(screen.getByText(/add or import jobs/i)).toBeInTheDocument();
+    expect(screen.queryByText(/click scan now/i)).toBeNull();
+    expect(screen.getByRole("link", { name: "Go to the Job list" })).toHaveAttribute("href", "/jobs");
+  });
+
+  it("still says to click Scan now when the scan reads Lakebase and the list has jobs", async () => {
+    setClock("2026-11-05T10:21:00Z");
+    mockApi({
+      queries: { job_status: [] },
+      config: { ...TEST_CONFIG, configSource: "lakebase" },
+      routes: (url) => (url === "/api/job-list" ? json({ version: 3, savedAt: null, savedBy: null, document: { jobs: [{ job_name: "orders_ingest" }] } }) : undefined),
+    });
+    renderPage();
+    expect(await screen.findByText("Click Scan now, or wait for the next scheduled scan.")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Go to the Job list" })).toBeNull();
+  });
+
+  it("says to click Scan now when the scan reads the YAML file", async () => {
+    setClock("2026-11-05T10:22:00Z");
+    mockApi({
+      queries: { job_status: [] },
+      config: { ...TEST_CONFIG, configSource: "yaml" },
+      routes: (url) => (url === "/api/job-list" ? json({ version: null, savedAt: null, savedBy: null, document: { jobs: [] } }) : undefined),
+    });
+    renderPage();
+    expect(await screen.findByText("Click Scan now, or wait for the next scheduled scan.")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Go to the Job list" })).toBeNull();
+  });
+
+  it("falls back to the Scan now text when the job list cannot be read", async () => {
+    setClock("2026-11-05T10:23:00Z");
+    mockApi({ queries: { job_status: [] }, config: { ...TEST_CONFIG, configSource: "lakebase" } }); // /api/job-list answers 404
+    renderPage();
+    expect(await screen.findByText("Click Scan now, or wait for the next scheduled scan.")).toBeInTheDocument();
   });
 
   it("shows skeletons, never the empty state, until the first answer", async () => {

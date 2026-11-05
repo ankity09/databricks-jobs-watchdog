@@ -83,4 +83,18 @@ describe("useCachedRequest", () => {
     expect(later.result.current).toEqual({ value: "us-east-2", loading: false, error: null });
     expect(script.fetcher).toHaveBeenCalledTimes(1);
   });
+
+  it("asks again on a retry when the answer is one the request does not keep, and keeps asking until it gets one", async () => {
+    const script = scripted<string>();
+    const request = cachedRequest(script.fetcher, (value) => value !== "");
+    const { result, rerender } = renderHook(({ key }) => useCachedRequest(request, key), { initialProps: { key: 0 } });
+    await script.answer(0, "");
+    expect(result.current.value).toBe("");
+    rerender({ key: 1 });
+    await waitFor(() => expect(script.fetcher).toHaveBeenCalledTimes(2));
+    await script.answer(1, "main");
+    expect(result.current.value).toBe("main");
+    rerender({ key: 2 });
+    expect(script.fetcher).toHaveBeenCalledTimes(2);
+  });
 });

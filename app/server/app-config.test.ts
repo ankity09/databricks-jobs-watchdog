@@ -9,7 +9,7 @@ describe("buildAppConfig", () => {
   it("uses the scan job's parameter defaults", () => {
     expect(buildAppConfig({}, jobDefaults)).toEqual({
       catalog: "main", schema: "watchdog_prod", region: "us-east-2",
-      appName: "watchdog-app", lakebaseProject: "jobs-watchdog-east",
+      appName: "watchdog-app", lakebaseProject: "jobs-watchdog-east", configSource: null,
     });
   });
   it("lets the WATCHDOG_ variables override the job for local development", () => {
@@ -21,8 +21,19 @@ describe("buildAppConfig", () => {
   });
   it("falls back to the built-in defaults", () => {
     expect(buildAppConfig({}, {})).toEqual({
-      catalog: "", schema: "watchdog", region: "", appName: "watchdog-app", lakebaseProject: "jobs-watchdog",
+      catalog: "", schema: "watchdog", region: "", appName: "watchdog-app", lakebaseProject: "jobs-watchdog", configSource: null,
     });
+  });
+  it("exposes where the scan reads the job list from, as the scan job's config_source parameter", () => {
+    expect(buildAppConfig({}, { ...jobDefaults, config_source: "lakebase" }).configSource).toBe("lakebase");
+    expect(buildAppConfig({}, { ...jobDefaults, config_source: " YAML " }).configSource).toBe("yaml");
+  });
+  it("leaves the config source unset when the parameter is missing or not a known source", () => {
+    expect(buildAppConfig({}, jobDefaults).configSource).toBeNull();
+    expect(buildAppConfig({}, { ...jobDefaults, config_source: "s3" }).configSource).toBeNull();
+  });
+  it("lets WATCHDOG_CONFIG_SOURCE override the job for local development", () => {
+    expect(buildAppConfig({ WATCHDOG_CONFIG_SOURCE: "lakebase" }, { config_source: "yaml" }).configSource).toBe("lakebase");
   });
   it("skips empty values", () => {
     expect(buildAppConfig({ WATCHDOG_SCHEMA: "" }, { schema: "  " }).schema).toBe("watchdog");
@@ -53,6 +64,15 @@ describe("getAppConfig", () => {
     expect(getJob).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(10 * 60 * 1000 + 1);
     await getAppConfig(appkit);
+    expect(getJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not keep a config with no catalog, so fixing the job takes effect on the next request", async () => {
+    for (const name of ["WATCHDOG_CATALOG", "WATCHDOG_SCHEMA", "WATCHDOG_REGION"]) vi.stubEnv(name, "");
+    const { getJob, appkit } = scanJob({ ok: true, data: { settings: { parameters: [{ name: "region", default: "us-east-2" }] } } });
+    expect((await getAppConfig(appkit)).catalog).toBe("");
+    getJob.mockResolvedValue({ ok: true, data: { settings: { parameters: [{ name: "catalog", default: "main" }] } } });
+    expect((await getAppConfig(appkit)).catalog).toBe("main");
     expect(getJob).toHaveBeenCalledTimes(2);
   });
 

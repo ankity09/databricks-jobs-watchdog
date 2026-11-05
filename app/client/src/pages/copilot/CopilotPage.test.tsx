@@ -256,6 +256,21 @@ describe("the copilot page", () => {
     expect(genieCalls[1].method).toBe("GET");
   });
 
+  it("offers no Retry for rows that Genie says have expired, and says to ask again", async () => {
+    const user = userEvent.setup();
+    genieAnswers = [
+      sseResponse([
+        messageResult({ conversationId: "conv-8", messageId: "msg-1", question: "Which jobs failed?", text: "Two failed.", sql: "SELECT 1", attachmentId: "att-1", status: "QUERY_RESULT_EXPIRED" }),
+        sseEvent("error", { error: "Failed to fetch query result" }),
+      ]),
+    ];
+    await renderAt("/copilot/conv-8");
+    await screen.findByText("Two failed.");
+    await user.click(screen.getByRole("button", { name: "Show SQL" }));
+    expect(await screen.findByText(/Ask again to run the query again/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
   it("says so when Retry for the rows fails too, and drops the message when a later Retry works", async () => {
     const user = userEvent.setup();
     const first = messageResult({ conversationId: "conv-7", messageId: "msg-1", question: "Which jobs failed?", text: "Two failed.", sql: "SELECT 1", attachmentId: "att-1" });

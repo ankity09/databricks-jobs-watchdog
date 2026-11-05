@@ -6,7 +6,7 @@ import type { AppConfig } from "../shared/joblist/types";
  * Where the Watchdog tables are. The watchdog_scan job (the app's `job`
  * resource) is the only source: its parameter defaults hold the catalog, schema
  * and region. WATCHDOG_CATALOG, WATCHDOG_SCHEMA and WATCHDOG_REGION override
- * them for local development.
+ * them for local development (so does WATCHDOG_CONFIG_SOURCE).
  */
 
 /** The part of AppKit that getAppConfig reads: the jobs plugin's handle for the scan job. */
@@ -24,14 +24,23 @@ function firstValue(...values: Array<string | undefined>): string {
   return "";
 }
 
+/** The app config plus where the scan reads the job list from (the scan job's config_source parameter). */
+export type AppConfigResponse = AppConfig & { configSource: "yaml" | "lakebase" | null };
+
+function configSourceOf(value: string): "yaml" | "lakebase" | null {
+  const source = value.trim().toLowerCase();
+  return source === "yaml" || source === "lakebase" ? source : null;
+}
+
 /** Env overrides win, then the scan job's parameter defaults, then the built-in defaults. */
-export function buildAppConfig(env: NodeJS.ProcessEnv, jobParameters: Record<string, string>): AppConfig {
+export function buildAppConfig(env: NodeJS.ProcessEnv, jobParameters: Record<string, string>): AppConfigResponse {
   return {
     catalog: firstValue(env.WATCHDOG_CATALOG, jobParameters.catalog),
     schema: firstValue(env.WATCHDOG_SCHEMA, jobParameters.schema, "watchdog"),
     region: firstValue(env.WATCHDOG_REGION, jobParameters.region),
     appName: firstValue(env.DATABRICKS_APP_NAME, "watchdog-app"),
     lakebaseProject: firstValue(jobParameters.lakebase_project_id, "jobs-watchdog"),
+    configSource: configSourceOf(firstValue(env.WATCHDOG_CONFIG_SOURCE, jobParameters.config_source)),
   };
 }
 
@@ -59,7 +68,7 @@ export class AppConfigError extends Error {
   }
 }
 
-const cache = new WeakMap<ScanJobSource, { value: AppConfig; expiresAt: number }>();
+const cache = new WeakMap<ScanJobSource, { value: AppConfigResponse; expiresAt: number }>();
 
 /**
  * The app config, cached for 10 minutes. When the scan job cannot be read,
@@ -67,13 +76,14 @@ const cache = new WeakMap<ScanJobSource, { value: AppConfig; expiresAt: number }
  * otherwise it throws an AppConfigError, since an empty catalog would only
  * look like a missing setting.
  */
-export async function getAppConfig(appkit: ScanJobSource): Promise<AppConfig> {
+export async function getAppConfig(appkit: ScanJobSource): Promise<AppConfigResponse> {
   const hit = cache.get(appkit);
   if (hit && hit.expiresAt > Date.now()) return hit.value;
   const parameters = await readScanJobParameters(appkit);
   const value = buildAppConfig(process.env, parameters ?? {});
   if (!parameters && value.catalog === "") throw new AppConfigError();
-  if (parameters) cache.set(appkit, { value, expiresAt: Date.now() + CACHE_MS });
+  // A config with no catalog is not kept: the person fixes the job, and the next request should see it.
+  if (parameters && value.catalog !== "") cache.set(appkit, { value, expiresAt: Date.now() + CACHE_MS });
   return value;
 }
 

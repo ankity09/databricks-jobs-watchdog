@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { type ApiError, apiFetch } from "../lib/api";
 import { cachedRequest, useCachedRequest } from "./useCachedRequest";
+import { useRefreshKey } from "./useRefreshKey";
 
 const WhoAmISchema = z.object({ user: z.string().nullable(), email: z.string().nullable() });
 
@@ -15,8 +16,9 @@ export interface WhoAmIState {
   error: ApiError | null;
 }
 
-/** The signed-in person, as the Databricks Apps proxy reports them. */
+/** The signed-in person, as the Databricks Apps proxy reports them. A failed load is tried again when the page refreshes. */
 export function useWhoAmI(): WhoAmIState {
-  const { value, loading, error } = useCachedRequest(whoAmIRequest);
+  const { refresh } = useRefreshKey();
+  const { value, loading, error } = useCachedRequest(whoAmIRequest, refresh);
   return { whoami: value, loading, error };
 }

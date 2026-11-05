@@ -27,7 +27,7 @@ export function SuggestedPrompts({ onPick, disabled = false }: SuggestedPromptsP
       <div className="space-y-1.5">
         <h2 className="text-base font-semibold text-foreground">Ask about your monitored jobs</h2>
         <p className="text-sm text-muted-foreground">
-          The copilot reads the Watchdog&apos;s findings, the job list and its dependencies. It writes SQL, runs it as you and shows that SQL with each answer.
+          The copilot reads the Watchdog&apos;s findings, and the job list and its dependencies as of the last scan. It writes SQL, runs it as you and shows that SQL with each answer.
         </p>
       </div>
       <div role="group" aria-label="Suggested questions" className="grid w-full gap-2 sm:grid-cols-2">

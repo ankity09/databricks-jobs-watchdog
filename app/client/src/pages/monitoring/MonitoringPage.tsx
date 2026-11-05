@@ -1,6 +1,8 @@
-import { Alert, AlertDescription, Button, Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle, Skeleton } from "@databricks/appkit-ui/react";
+import { Alert, AlertDescription, Button, Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle, Skeleton } from "@databricks/appkit-ui/react";
 import { Activity, RotateCw, TriangleAlert } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
+import { Link } from "react-router";
+import { useNoScansAdvice } from "../../hooks/useNoScansAdvice";
 import { useNow } from "../../hooks/useNow";
 import { useRefreshKey } from "../../hooks/useRefreshKey";
 import { useWatchdogLocation } from "../../hooks/useWatchdogRows";
@@ -43,6 +45,34 @@ function PageSkeleton() {
         ))}
       </div>
     </div>
+  );
+}
+
+/** The empty state. It reads the job list, so it mounts only when there are no scan results. */
+function NoScans() {
+  const advice = useNoScansAdvice();
+  if (advice === "loading") return <PageSkeleton />;
+  return (
+    <Empty className="flex-none border border-dashed border-border bg-muted/40 md:py-16">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Activity aria-hidden="true" />
+        </EmptyMedia>
+        <EmptyTitle>No scans yet</EmptyTitle>
+        <EmptyDescription>
+          {advice === "add-jobs"
+            ? "The job list is empty, so a scan has nothing to check. Add or import jobs first, then scan."
+            : "Click Scan now, or wait for the next scheduled scan."}
+        </EmptyDescription>
+      </EmptyHeader>
+      {advice === "add-jobs" ? (
+        <EmptyContent>
+          <Button asChild size="sm">
+            <Link to="/jobs">Go to the Job list</Link>
+          </Button>
+        </EmptyContent>
+      ) : null}
+    </Empty>
   );
 }
 
@@ -93,17 +123,7 @@ export function MonitoringPage() {
   } else if (status.rows === null) {
     body = <PageSkeleton />;
   } else if (status.rows.length === 0) {
-    body = (
-      <Empty className="flex-none border border-dashed border-border bg-muted/40 md:py-16">
-        <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <Activity aria-hidden="true" />
-          </EmptyMedia>
-          <EmptyTitle>No scans yet</EmptyTitle>
-          <EmptyDescription>Click Scan now, or wait for the next scheduled scan.</EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    );
+    body = <NoScans />;
   } else {
     body = (
       <>

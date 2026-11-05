@@ -16,8 +16,11 @@ const PAGES = [
   ["/copilot/example-thread", "Copilot"],
 ] as const;
 
-/** Each job page's empty state, with no jobs and no versions saved. */
+/** Each page's empty state, with no scans, no chats, no jobs and no versions saved. */
 const EMPTY_STATES = [
+  ["/monitoring", "No scans yet"],
+  ["/copilot", "Ask about your monitored jobs"],
+  ["/copilot/example-thread", "Ask about your monitored jobs"],
   ["/jobs", "The job list is empty"],
   ["/jobs/map", "Nothing on the map yet"],
   ["/jobs/changes", "Nothing is saved yet"],
@@ -51,6 +54,12 @@ function respond(url: string): Response {
   if (url.startsWith("/api/whoami")) return json({ user: "4321@1234", email: "dana@example.com" });
   if (url === "/api/job-list") return json({ version: null, savedAt: null, savedBy: null, document: { jobs: [] } });
   if (url.startsWith("/api/job-list/versions?")) return json({ versions: [] });
+  if (url.startsWith("/api/copilot/conversations")) return json({ conversations: [] });
+  if (url.startsWith("/api/genie/")) {
+    // A saved chat with no messages: Genie's history info and nothing else.
+    const info = { type: "history_info", conversationId: "example-thread", spaceId: "space-1", nextPageToken: null, loadedCount: 0 };
+    return new Response(`data: ${JSON.stringify(info)}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+  }
   if (url.startsWith("/api/analytics/query/")) {
     return new Response('data: {"type":"result","data":[]}\n\n', { headers: { "Content-Type": "text/event-stream" } });
   }
@@ -59,7 +68,9 @@ function respond(url: string): Response {
 
 /** Waits until the page has its data: the signed-in email shows and no skeleton is left, so every update lands inside the test. */
 async function settled() {
-  await screen.findByText("dana@example.com");
+  // On a narrow window the email is in the nav sheet, which is closed.
+  if (window.innerWidth < 768) await screen.findByRole("button", { name: "Open navigation" });
+  else await screen.findByText("dana@example.com");
   await waitFor(() => expect(document.querySelector('[data-slot="skeleton"]')).toBeNull());
 }
 
@@ -89,7 +100,8 @@ describe("the app shell", () => {
 
   it.each(EMPTY_STATES)("settles %s into its empty state: %s", async (path, title) => {
     await renderAt(path);
-    expect(screen.getByText(title)).toBeInTheDocument();
+    // "No scans yet" is also the nav's text for the last scan.
+    expect(screen.getAllByText(title).length).toBeGreaterThan(0);
   });
 
   it("sends / to Monitoring", async () => {
@@ -123,6 +135,44 @@ describe("the app shell", () => {
   it("shows the region from the app config", async () => {
     await renderAt("/monitoring");
     expect(screen.getByText("us-east-2")).toBeInTheDocument();
+  });
+
+  describe("on a window narrower than 768 px", () => {
+    const wide = window.innerWidth;
+    beforeEach(() => {
+      Object.defineProperty(window, "innerWidth", { value: 720, configurable: true, writable: true });
+    });
+    afterEach(() => {
+      Object.defineProperty(window, "innerWidth", { value: wide, configurable: true, writable: true });
+    });
+
+    it("has a menu button outside the nav that opens it, with the page links and Scan now", async () => {
+      await renderAt("/monitoring");
+      expect(screen.queryByRole("navigation", { name: "Main" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Collapse sidebar" })).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+      const nav = await screen.findByRole("navigation", { name: "Main" });
+      for (const name of NAV_LINKS) expect(within(nav).getByRole("link", { name })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Scan now" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Collapse sidebar" })).toBeNull();
+    });
+
+    it("shows the full nav in the sheet even when the desktop nav was left collapsed", async () => {
+      window.localStorage.setItem("watchdog.sidebar.open", "false");
+      await renderAt("/monitoring");
+      await userEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+      await screen.findByRole("navigation", { name: "Main" });
+      expect(screen.getByRole("button", { name: "Scan now" })).toHaveTextContent("Scan now");
+    });
+
+    it("closes the sheet when a page link is chosen", async () => {
+      await renderAt("/monitoring");
+      await userEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+      const nav = await screen.findByRole("navigation", { name: "Main" });
+      await userEvent.click(within(nav).getByRole("link", { name: "Copilot" }));
+      await waitFor(() => expect(screen.queryByRole("navigation", { name: "Main" })).toBeNull());
+      expect(screen.getByRole("heading", { level: 1, name: "Copilot" })).toBeInTheDocument();
+    });
   });
 
   it("shows a page-not-found page for an unknown address", async () => {

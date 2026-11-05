@@ -18,6 +18,7 @@ import {
   useSidebar,
 } from "@databricks/appkit-ui/react";
 import { Activity, ListChecks, MessageSquareText, Radar } from "lucide-react";
+import { useEffect } from "react";
 import { Link, NavLink, useLocation } from "react-router";
 import { useAppConfig } from "../hooks/useAppConfig";
 import { useWhoAmI } from "../hooks/useWhoAmI";
@@ -67,8 +68,13 @@ function SignedInAs() {
 /** The left nav: Monitoring, the job list pages, and the copilot. Collapses to icons, with tooltips. */
 export function AppSidebar() {
   const { pathname } = useLocation();
-  const { state } = useSidebar();
-  const collapsed = state === "collapsed";
+  const { state, isMobile, setOpenMobile } = useSidebar();
+  // On a narrow window the nav is a sheet and always shows in full, whatever the desktop nav was left at.
+  const collapsed = state === "collapsed" && !isMobile;
+  // A link chosen in the narrow-window sheet closes it.
+  useEffect(() => {
+    setOpenMobile(false);
+  }, [pathname, setOpenMobile]);
   const inJobs = pathname === "/jobs" || pathname.startsWith("/jobs/");
 
   return (
@@ -82,7 +88,9 @@ export function AppSidebar() {
             <span className="truncate text-[15px] font-semibold tracking-tight">Watchdog</span>
             <RegionBadge />
           </div>
-          <SidebarTrigger className="text-muted-foreground hover:text-foreground" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} />
+          {isMobile ? null : (
+            <SidebarTrigger className="text-muted-foreground hover:text-foreground" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} />
+          )}
         </div>
       </SidebarHeader>
 
