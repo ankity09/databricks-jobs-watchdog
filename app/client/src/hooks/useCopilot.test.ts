@@ -287,4 +287,30 @@ describe("useCopilot", () => {
     expect(result.current.messages[1].queries[0].result).toEqual({ columns: ["job_name"], rows: [["orders_ingest"]] });
     expect(result.current.messages[1].text).toBe("Two failed.");
   });
+
+  it("keeps a failed rows Retry visible as failed, and clears it when the next Retry works", async () => {
+    const failing = sseResponse([
+      messageResult({ conversationId: "conv-9", messageId: "msg-1", question: "Which jobs failed?", text: "Two failed.", sql: SQL, attachmentId: "att-1" }),
+      sseEvent("error", { error: "Failed to fetch query result" }),
+    ]);
+    answerWith(
+      failing,
+      sseResponse([sseEvent("error", { error: "Failed to fetch query result" })]),
+      sseResponse([
+        messageResult({ conversationId: "conv-9", messageId: "msg-1", question: "Which jobs failed?", text: "Two failed.", sql: SQL, attachmentId: "att-1" }),
+        queryResult("att-1", ["job_name"], [["orders_ingest"]]),
+      ]),
+    );
+    const { result } = renderHook(() => useCopilot({ conversationId: "conv-9" }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.rowsFailed).toEqual([]);
+
+    await act(() => result.current.retryRows("msg-1"));
+    expect(result.current.rowsFailed).toEqual(["msg-1"]);
+    expect(result.current.loadingRows).toEqual([]);
+
+    await act(() => result.current.retryRows("msg-1"));
+    expect(result.current.rowsFailed).toEqual([]);
+    expect(result.current.messages[1].queries[0].result).not.toBeNull();
+  });
 });

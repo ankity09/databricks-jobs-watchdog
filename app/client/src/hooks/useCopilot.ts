@@ -55,6 +55,8 @@ export interface UseCopilotResult {
   conversationId: string | null;
   /** IDs of the answers whose rows are being fetched again. */
   loadingRows: string[];
+  /** IDs of the answers whose last rows Retry failed; cleared when the next Retry starts. */
+  rowsFailed: string[];
   send(text: string): Promise<void>;
   /** Asks the failed question again, or loads the saved chat again. */
   retry(): Promise<void>;
@@ -207,6 +209,8 @@ interface ChatState {
   error: string | null;
   /** Answers whose rows are being fetched again. */
   loadingRows: string[];
+  /** Answers whose last rows Retry failed. */
+  rowsFailed: string[];
 }
 
 type Action =
@@ -222,6 +226,7 @@ type Action =
   | { type: "rows"; attachmentId: string; rows: QueryRows }
   | { type: "rows-start"; id: string }
   | { type: "rows-end"; id: string }
+  | { type: "rows-failed"; id: string }
   | { type: "failed"; id: string; error: string }
   | { type: "done"; id: string };
 
@@ -290,7 +295,13 @@ function reducer(state: ChatState, action: Action): ChatState {
         ),
       };
     case "rows-start":
-      return { ...state, loadingRows: state.loadingRows.includes(action.id) ? state.loadingRows : [...state.loadingRows, action.id] };
+      return {
+        ...state,
+        loadingRows: state.loadingRows.includes(action.id) ? state.loadingRows : [...state.loadingRows, action.id],
+        rowsFailed: state.rowsFailed.filter((id) => id !== action.id),
+      };
+    case "rows-failed":
+      return { ...state, rowsFailed: state.rowsFailed.includes(action.id) ? state.rowsFailed : [...state.rowsFailed, action.id] };
     case "rows-end":
       return { ...state, loadingRows: state.loadingRows.filter((id) => id !== action.id) };
     case "failed":
@@ -306,7 +317,7 @@ function reducer(state: ChatState, action: Action): ChatState {
 }
 
 function initialState(conversationId: string | null): ChatState {
-  return { conversationId, messages: [], streaming: false, loading: conversationId !== null, loadError: null, error: null, loadingRows: [] };
+  return { conversationId, messages: [], streaming: false, loading: conversationId !== null, loadError: null, error: null, loadingRows: [], rowsFailed: [] };
 }
 
 const encode = encodeURIComponent;
@@ -474,11 +485,17 @@ export function useCopilot(options: UseCopilotOptions = {}): UseCopilotResult {
       rowRunsRef.current.add(controller);
       dispatch({ type: "rows-start", id: messageId });
       try {
+        let gotRows = false;
         await follow(conversationId, messageId, controller.signal, (event) => {
-          if (event.type === "query_result") dispatch({ type: "rows", attachmentId: event.attachmentId, rows: toQueryRows(event.data) });
+          if (event.type !== "query_result") return;
+          gotRows = true;
+          dispatch({ type: "rows", attachmentId: event.attachmentId, rows: toQueryRows(event.data) });
         });
+        // Genie reports a failed fetch as an error event, which ends the stream without throwing.
+        if (!gotRows && !controller.signal.aborted) dispatch({ type: "rows-failed", id: messageId });
       } catch {
-        // The rows stay missing; the Retry button is still there.
+        // The rows stay missing and the Retry button stays; say that this Retry failed.
+        if (!controller.signal.aborted) dispatch({ type: "rows-failed", id: messageId });
       } finally {
         rowRunsRef.current.delete(controller);
         if (!controller.signal.aborted) dispatch({ type: "rows-end", id: messageId });
@@ -508,6 +525,7 @@ export function useCopilot(options: UseCopilotOptions = {}): UseCopilotResult {
     loadError: state.loadError,
     conversationId: state.conversationId,
     loadingRows: state.loadingRows,
+    rowsFailed: state.rowsFailed,
     send,
     retry,
     retryRows,

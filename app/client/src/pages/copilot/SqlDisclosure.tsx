@@ -26,6 +26,8 @@ export interface SqlDisclosureProps {
   resultState: ResultState;
   /** Fetches the rows again. Without it, only asking again brings them back. */
   onRetryRows?: () => void;
+  /** The last Retry for the rows failed. */
+  retryFailed?: boolean;
 }
 
 /** The table shows at most this many rows of a result. */
@@ -41,7 +43,7 @@ function contentKeys(values: string[]): string[] {
   });
 }
 
-function ResultTable({ query, resultState, onRetryRows }: Pick<SqlDisclosureProps, "query" | "resultState" | "onRetryRows">) {
+function ResultTable({ query, resultState, onRetryRows, retryFailed = false }: Pick<SqlDisclosureProps, "query" | "resultState" | "onRetryRows" | "retryFailed">) {
   if (resultState === "loading" && !query.result) {
     return (
       <div className="space-y-1.5 px-3 py-3" aria-label="Loading the rows">
@@ -55,6 +57,7 @@ function ResultTable({ query, resultState, onRetryRows }: Pick<SqlDisclosureProp
     return (
       <div className="flex items-center gap-3 px-3 py-2">
         <p className="text-xs text-muted-foreground">The rows are not available.</p>
+        {retryFailed ? <p role="status" className="text-xs text-destructive">Could not load the rows.</p> : null}
         <Button type="button" variant="outline" size="sm" onClick={onRetryRows} className="h-7 gap-1.5 px-2.5 text-xs">
           <RotateCw aria-hidden="true" className="size-3.5" />
           Retry
@@ -105,7 +108,7 @@ function ResultTable({ query, resultState, onRetryRows }: Pick<SqlDisclosureProp
 }
 
 /** One query behind an answer: who it ran as, and, on request, its SQL and a small result table. */
-export function SqlDisclosure({ query, ranAs, resultState, onRetryRows }: SqlDisclosureProps) {
+export function SqlDisclosure({ query, ranAs, resultState, onRetryRows, retryFailed }: SqlDisclosureProps) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -149,7 +152,7 @@ export function SqlDisclosure({ query, ranAs, resultState, onRetryRows }: SqlDis
         <pre className="max-h-72 overflow-auto px-3 pt-1.5 pb-2.5 font-mono text-xs leading-5 whitespace-pre text-foreground">
           <code>{query.sql}</code>
         </pre>
-        <ResultTable query={query} resultState={resultState} onRetryRows={onRetryRows} />
+        <ResultTable query={query} resultState={resultState} onRetryRows={onRetryRows} retryFailed={retryFailed} />
       </CollapsibleContent>
     </Collapsible>
   );

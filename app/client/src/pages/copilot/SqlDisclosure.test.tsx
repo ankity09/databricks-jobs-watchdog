@@ -93,4 +93,19 @@ describe("SqlDisclosure", () => {
     render(<SqlDisclosure query={query(1)} ranAs={null} resultState="ready" />);
     expect(screen.getByText("you, the signed-in person")).toBeInTheDocument();
   });
+
+  it("says the Retry failed, next to Retry", async () => {
+    const user = userEvent.setup();
+    render(<SqlDisclosure query={query(null)} ranAs="dana@example.com" resultState="missing" onRetryRows={vi.fn()} retryFailed />);
+    await user.click(screen.getByRole("button", { name: "Show SQL" }));
+    expect(screen.getByText("Could not load the rows.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  it("does not say so before a Retry has failed", async () => {
+    const user = userEvent.setup();
+    render(<SqlDisclosure query={query(null)} ranAs="dana@example.com" resultState="missing" onRetryRows={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Show SQL" }));
+    expect(screen.queryByText("Could not load the rows.")).not.toBeInTheDocument();
+  });
 });

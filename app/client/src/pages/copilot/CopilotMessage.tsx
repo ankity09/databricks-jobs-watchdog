@@ -24,6 +24,8 @@ export interface CopilotMessageProps {
   loadingRows?: boolean;
   /** Fetches this answer's rows again. */
   onRetryRows?: () => void;
+  /** The last Retry for the rows failed. */
+  rowsFailed?: boolean;
 }
 
 /** Markdown elements for Genie's answers: links open in a new tab, tables scroll, single line breaks stay. */
@@ -72,7 +74,7 @@ function AnswerShell({ children }: { children: ReactNode }) {
 }
 
 /** One turn of the chat: the person's question, or Genie's answer with the SQL behind it. */
-export function CopilotMessage({ message, ranAs, statusLabel, onRetry, onAsk, busy = false, loadingChat = false, loadingRows = false, onRetryRows }: CopilotMessageProps) {
+export function CopilotMessage({ message, ranAs, statusLabel, onRetry, onAsk, busy = false, loadingChat = false, loadingRows = false, onRetryRows, rowsFailed = false }: CopilotMessageProps) {
   if (message.role === "user") {
     return (
       <article aria-label="Your question" className="flex justify-end">
@@ -119,6 +121,7 @@ export function CopilotMessage({ message, ranAs, statusLabel, onRetry, onAsk, bu
           ranAs={ranAs}
           resultState={rowsComing ? "loading" : query.result ? "ready" : "missing"}
           onRetryRows={onRetryRows}
+          retryFailed={rowsFailed}
         />
       ))}
 
