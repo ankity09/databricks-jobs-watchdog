@@ -352,6 +352,9 @@ export function DependencyMapPage() {
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Escape") return;
     const from = event.target instanceof Node ? event.target : null;
+    // React Flow takes focus off a link on Escape, which would drop it on the page body: the link keeps it.
+    const fromLink = event.target instanceof Element ? event.target.closest(".react-flow__edge") : null;
+    if (fromLink instanceof SVGElement || fromLink instanceof HTMLElement) fromLink.focus();
     if (link.step !== "off") {
       setLink({ step: "off" });
       // From the banner, which goes with the mode: back to Add link.

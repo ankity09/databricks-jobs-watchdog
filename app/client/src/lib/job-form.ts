@@ -134,16 +134,19 @@ export function toFormValues(entry: JobEntry, labels: string[]): JobFormValues {
   };
 }
 
-/** A number field: empty is unset; anything else is kept as the number typed, valid or not, for the rules to judge. */
-function numberOf(text: string): number | undefined {
+/**
+ * A number field: empty is unset; a number is kept as typed, valid or not, for the rules to judge; other text
+ * (such as "1e") is kept as text, which the rules refuse next to the field, so it is never saved as empty.
+ */
+function numberOf(text: string): number | string | undefined {
   const trimmed = text.trim();
   if (trimmed === "") return undefined;
   const n = Number(trimmed);
-  return Number.isFinite(n) ? n : undefined;
+  return Number.isFinite(n) ? n : trimmed;
 }
 
-/** True when the saved value blocks a default (null or ""), so an empty field keeps it. */
-function blocksDefault(source: object, key: string): boolean {
+/** True when the saved value blocks a default (null or ""), so an empty field keeps it and the default does not apply. */
+export function blocksDefault(source: object, key: string): boolean {
   if (!Object.prototype.hasOwnProperty.call(source, key)) return false;
   const value: unknown = Reflect.get(source, key);
   return value === null || value === "";
@@ -178,7 +181,12 @@ function overrides(row: OverrideFormValues, saved: unknown): EnvironmentOverride
   const owner = keptOrTrimmed(row.owner, base.owner);
   set("owner", owner === "" ? undefined : owner);
   set("enabled", row.enabled === INHERIT ? undefined : row.enabled === "on");
-  for (const key of NUMBER_KEYS) set(key, numberOf(row[key]));
+  for (const key of NUMBER_KEYS) {
+    const value = numberOf(row[key]);
+    // Text that is not a number goes in as typed, for the rules to refuse.
+    if (typeof value === "string") Reflect.set(next, key, value);
+    else set(key, value);
+  }
   // Never an empty list: the loader rejects one. Unset, the job's own IDs apply in this environment.
   set("job_ids", row.job_ids.length > 0 ? [...row.job_ids] : undefined);
   return next;
@@ -194,7 +202,12 @@ export function toEntry(values: JobFormValues, base: JobEntry): JobEntry {
   else delete entry.job_name_exclude_regex;
   put(entry, base, "job_ids", values.job_ids.length > 0 ? [...values.job_ids] : undefined);
   put(entry, base, "schedule_type", values.schedule_type === INHERIT ? undefined : values.schedule_type);
-  for (const key of NUMBER_KEYS) put(entry, base, key, numberOf(values[key]));
+  for (const key of NUMBER_KEYS) {
+    const value = numberOf(values[key]);
+    // Text that is not a number goes in as typed, for the rules to refuse.
+    if (typeof value === "string") Reflect.set(entry, key, value);
+    else put(entry, base, key, value);
+  }
   put(entry, base, "severity", values.severity === INHERIT ? undefined : values.severity);
   const owner = keptOrTrimmed(values.owner, base.owner);
   put(entry, base, "owner", owner === "" ? undefined : owner);

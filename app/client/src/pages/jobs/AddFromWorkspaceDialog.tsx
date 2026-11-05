@@ -150,7 +150,14 @@ function PickerBody({ document, onPick }: PickerBodyProps) {
           <Alert>
             <Lock aria-hidden="true" />
             <AlertTitle>No access to the jobs in this region</AlertTitle>
-            <AlertDescription>{NO_ACCESS}</AlertDescription>
+            {/* Retry: once an admin grants SELECT, the same search runs again. */}
+            <AlertDescription className="flex flex-wrap items-center gap-3">
+              <span>{NO_ACCESS}</span>
+              <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => bump()}>
+                <RotateCw className="size-3.5" aria-hidden="true" />
+                Retry
+              </Button>
+            </AlertDescription>
           </Alert>
         ) : failure === "other" || badShape ? (
           <Alert variant="destructive">

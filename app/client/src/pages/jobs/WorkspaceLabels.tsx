@@ -339,26 +339,42 @@ function CreateLabelForm(props: Omit<LabelFormProps, "mode" | "initial" | "sugge
 
 type Problem = { kind: "conflict" } | { kind: "error"; message: string };
 
-function entryFrom(id: string, name: string, environment: string, notes: string): WorkspaceEntry {
-  return {
-    ...(id.trim() !== "" ? { workspace_id: id.trim() } : {}),
-    ...(name.trim() !== "" ? { workspace_name: name.trim() } : {}),
-    environment: environment.trim(),
-    ...(notes.trim() !== "" ? { notes: notes.trim() } : {}),
-  };
+/** Typed text, trimmed, or the stored value while its field still shows it exactly, so an untouched field saves as it was. */
+function kept(typed: string, stored: string | undefined): string | undefined {
+  if (stored !== undefined && typed === (stored ?? "")) return stored;
+  const trimmed = typed.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+/**
+ * The label the form describes, built on the stored one. What a field still
+ * shows unchanged is saved as stored: a name with spaces around it keeps its
+ * key (the one the save names), and empty notes stay, so an unchanged label
+ * is not a change.
+ */
+function entryFrom(base: WorkspaceEntry, id: string, name: string, environment: string, notes: string): WorkspaceEntry {
+  const entry: WorkspaceEntry = { environment: kept(environment, base.environment) ?? "" };
+  const workspaceId = kept(id, base.workspace_id);
+  const workspaceName = kept(name, base.workspace_name);
+  const text = kept(notes, base.notes);
+  if (workspaceId !== undefined) entry.workspace_id = workspaceId;
+  if (workspaceName !== undefined) entry.workspace_name = workspaceName;
+  if (text !== undefined) entry.notes = text;
+  return entry;
 }
 
 function LabelForm({ mode, initial, document, version, suggestions, notice, onSave, onSaved, onReload, onReloaded, onCancel }: LabelFormProps) {
-  // The save sends the version the form opened at (a reload starts the form again).
+  // The label and the version the form opened at (a reload starts the form again).
+  const [base] = useState(initial);
   const [openedAt] = useOpenedVersion(version);
   const idsList = useId();
   const namesList = useId();
   const labelsList = useId();
-  const [id, setId] = useState(initial.workspace_id ?? "");
-  const [name, setName] = useState(initial.workspace_name ?? "");
-  const [environment, setEnvironment] = useState(initial.environment);
-  const [notes, setNotes] = useState(initial.notes ?? "");
-  const entry = useMemo(() => entryFrom(id, name, environment, notes), [id, name, environment, notes]);
+  const [id, setId] = useState(base.workspace_id ?? "");
+  const [name, setName] = useState(base.workspace_name ?? "");
+  const [environment, setEnvironment] = useState(base.environment);
+  const [notes, setNotes] = useState(base.notes ?? "");
+  const entry = useMemo(() => entryFrom(base, id, name, environment, notes), [base, id, name, environment, notes]);
   const check = useCallback((candidate: WorkspaceEntry) => workspaceIssues(document, candidate, mode), [document, mode]);
   const [checked, setChecked] = useDebouncedCheck(entry, check);
   const [server, setServer] = useState<{ entry: WorkspaceEntry; issues: RuleIssue[] } | null>(null);
@@ -366,14 +382,14 @@ function LabelForm({ mode, initial, document, version, suggestions, notice, onSa
   const [saving, setSaving] = useState(false);
 
   const workspaces = useMemo(() => document.workspaces ?? [], [document.workspaces]);
-  const index = mode === "edit" ? workspaces.findIndex((w) => workspaceKey(w) === workspaceKey(initial)) : workspaces.length;
+  const index = mode === "edit" ? workspaces.findIndex((w) => workspaceKey(w) === workspaceKey(base)) : workspaces.length;
   const issues = server !== null && server.entry === entry ? server.issues : checked.issues;
   const at = `workspaces[${index >= 0 ? index : workspaces.length}]`;
   const fieldIssues = (key: string) => issues.filter((issue) => issue.path === `${at}.${key}`).map((issue) => issue.message);
   // Each issue once: the rules can report one twice, and the list keys on path and message.
   const listed = uniqueIssues(issues.filter((issue) => issue.path === at || issue.path === "" || issue.path.startsWith("jobs[")));
   // An edit that would save the label as it is stays off: the store would write an empty version.
-  const changed = mode === "create" || !deepEqual(entry, initial);
+  const changed = mode === "create" || !deepEqual(entry, base);
   const labels = useMemo(
     () => [...new Set(workspaces.map((w) => w.environment).filter((label) => typeof label === "string" && label !== ""))],
     [workspaces],
@@ -399,7 +415,7 @@ function LabelForm({ mode, initial, document, version, suggestions, notice, onSa
     setSaving(true);
     setProblem(null);
     const outcome = await onSave(
-      { kind: "upsert", target: { type: "workspace", key: workspaceKey(mode === "edit" ? initial : entry) }, value: entry },
+      { kind: "upsert", target: { type: "workspace", key: workspaceKey(mode === "edit" ? base : entry) }, value: entry },
       openedAt,
     );
     setSaving(false);
@@ -413,7 +429,7 @@ function LabelForm({ mode, initial, document, version, suggestions, notice, onSa
   return (
     <>
       <DialogHeader>
-        <DialogTitle>{mode === "edit" ? `Edit the label for ${nameOf(initial)}` : "Add a workspace label"}</DialogTitle>
+        <DialogTitle>{mode === "edit" ? `Edit the label for ${nameOf(base)}` : "Add a workspace label"}</DialogTitle>
         <DialogDescription>
           {readOnly
             ? "To label another workspace, remove this label and add a new one."

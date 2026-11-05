@@ -4,7 +4,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { JobListDocument, JobListState } from "../../../../shared/joblist/types";
+import type { JobEntry, JobListDocument, JobListState } from "../../../../shared/joblist/types";
 import { RefreshProvider } from "../../hooks/useRefreshKey";
 import { jobListServer, type SaveBody } from "../../test/jobListServer";
 import { JobListPage, type JobListPageProps } from "./JobListPage";
@@ -164,7 +164,8 @@ describe("JobListPage", () => {
     expect(ingest.getByText("ingestion-team")).toBeInTheDocument();
     expect(ingest.getByText("lower")).toBeInTheDocument();
     expect(ingest.getByRole("switch", { name: "Check orders_ingest" })).toBeChecked();
-    expect(await ingest.findByText("FAILED")).toBeInTheDocument();
+    // The same badge as Monitoring: an icon and the word.
+    expect(await ingest.findByText("Failed")).toBeInTheDocument();
     expect(ingest.getByRole("button", { name: "Delete orders_ingest" })).toBeInTheDocument();
 
     const enrich = within(row("orders_enrich"));
@@ -183,6 +184,21 @@ describe("JobListPage", () => {
     expect(exportRow.getByText("triggered")).toBeInTheDocument();
     expect(exportRow.getByText("^daily_revenue_export$")).toBeInTheDocument();
     expect(exportRow.getByText("Not scanned yet")).toBeInTheDocument();
+  });
+
+  it("shows no limit and no owner where the job's own null switches the default off", async () => {
+    setClock("2026-11-06T13:30:00Z");
+    // null as stored: the loader reads no runtime limit and no owner, so the defaults do not apply to this job.
+    const off = JSON.parse('{"job_name": "no_runtime_limit", "max_gap_minutes": 60, "max_runtime_minutes": null, "owner": null}') as JobEntry;
+    mockApi({ ...SAVED, document: { ...DOC, defaults: { ...DOC.defaults, max_runtime_minutes: 120 }, jobs: [...DOC.jobs, off] } });
+    renderPage();
+    await screen.findByRole("button", { name: "Edit no_runtime_limit" });
+    const cells = within(row("no_runtime_limit"));
+    expect(cells.queryByText(/^runtime /)).toBeNull();
+    expect(cells.queryByText("platform-team")).toBeNull();
+    expect(cells.getByText("Not set")).toBeInTheDocument();
+    // Another job still takes the default runtime.
+    expect(within(row("orders_ingest")).getByText("runtime 120 min")).toBeInTheDocument();
   });
 
   it("filters the jobs by name", async () => {
@@ -306,7 +322,7 @@ describe("JobListPage", () => {
     });
     await userEvent.click(await screen.findByRole("button", { name: "Edit orders_enrich" }));
     expect(await screen.findByRole("heading", { name: "Edit orders_enrich" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Max gap (minutes)")).toHaveValue(90);
+    expect(screen.getByLabelText("Max gap (minutes)")).toHaveValue("90");
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("heading", { name: "Edit orders_enrich" })).not.toBeInTheDocument());
 
@@ -472,7 +488,7 @@ describe("JobListPage", () => {
     const before = liveCalls;
     await userEvent.click(within(line).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(liveCalls).toBeGreaterThan(before));
-    expect(await within(row("orders_ingest")).findByText("FAILED")).toBeInTheDocument();
+    expect(await within(row("orders_ingest")).findByText("Failed")).toBeInTheDocument();
     expect(screen.queryByText("Live status is not available.")).not.toBeInTheDocument();
   });
 });

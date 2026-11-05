@@ -158,7 +158,7 @@ describe("SettingsPage", () => {
     renderPage();
     const defaults = await screen.findByRole("region", { name: "Defaults" });
     const gap = within(defaults).getByLabelText("Max gap (minutes)");
-    expect(gap).toHaveValue(60);
+    expect(gap).toHaveValue("60");
     await userEvent.clear(gap);
     await waitFor(() => expect(gap).toHaveAccessibleDescription(/scheduled jobs need max_gap_minutes \(used by orders_ingest\)/), {
       timeout: 3000,
@@ -550,5 +550,39 @@ describe("SettingsPage gives focus back when a dialog closes", () => {
     await userEvent.click(within(defaults).getByRole("button", { name: "Save defaults" }));
     await screen.findByText("Saved version 5: Saved.");
     await waitFor(() => expect(screen.getByRole("region", { name: "Defaults" })).toHaveFocus());
+  });
+});
+
+describe("SettingsPage label form keeps what it shows as stored", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("saves nothing for an unchanged label, and keeps a padded name and empty notes when the label changes", async () => {
+    setClock("2026-11-06T14:30:00Z");
+    const padded = { workspace_name: " example-padded ", environment: "lower", notes: "" };
+    const server = jobListServer({ ...DOC, workspaces: [...(DOC.workspaces ?? []), padded] }, 4);
+    mockServer(server);
+    renderPage();
+    const labels = await screen.findByRole("region", { name: "Workspace labels" });
+    await userEvent.click(within(labels).getByRole("button", { name: /Edit the label for\s+example-padded/ }));
+    const dialog = await screen.findByRole("dialog", { name: /Edit the label for\s+example-padded/ });
+    const save = within(dialog).getByRole("button", { name: "Save label" });
+    // Let the first check run, so Save is off for no change rather than for a check still to come.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(save).toBeDisabled();
+
+    const environment = within(dialog).getByLabelText("Environment label");
+    await userEvent.clear(environment);
+    await userEvent.type(environment, "production");
+    await waitFor(() => expect(save).toBeEnabled(), { timeout: 3000 });
+    await userEvent.click(save);
+    expect(await screen.findByText(/^Saved version 5: /)).toBeInTheDocument();
+    expect(server.saves[0]?.change).toEqual({
+      kind: "upsert",
+      target: { type: "workspace", key: " example-padded " },
+      value: { workspace_name: " example-padded ", environment: "production", notes: "" },
+    });
   });
 });

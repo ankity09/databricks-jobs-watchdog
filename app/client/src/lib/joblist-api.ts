@@ -2,7 +2,6 @@ import { z } from "zod";
 import { pyStr } from "../../../shared/joblist/pyrepr";
 import type {
   Change,
-  Impact,
   ImportPreview,
   JobEntry,
   JobListDocument,
@@ -14,8 +13,9 @@ import type {
 import { apiFetch } from "./api";
 
 /**
- * One function per job list route (see the route contract). Each parses the
- * answer with a zod schema.
+ * One function per job list route the pages call (see the route contract).
+ * Each parses the answer with a zod schema. Restore and impact stay server
+ * routes until a page needs them.
  *
  * A document is checked for its structure only: the server's rules decide
  * whether the values are valid. An import preview carries a document together
@@ -142,13 +142,6 @@ export const ImportPreviewSchema = z.object({
   summary: z.string(),
 }) satisfies z.ZodType<ImportPreview>;
 
-export const ImpactSchema = z.object({
-  jobName: z.string(),
-  parentJob: z.string().nullable(),
-  affectsDirectly: z.array(z.string()),
-  affectsInAll: z.array(z.string()),
-}) satisfies z.ZodType<Impact>;
-
 /** The body of a 409: someone saved a newer version since `baseVersion`. */
 export const ConflictBodySchema = z.object({ error: z.literal("conflict"), message: z.string(), latestVersion: z.number().nullable() });
 
@@ -191,17 +184,7 @@ export function importYaml(yaml: string, baseVersion: number | null): Promise<Sa
   return postJson("/api/job-list/import", SaveResultSchema, { yaml, baseVersion });
 }
 
-/** POST /api/job-list/restore: saves an older version as a new version. */
-export function restoreVersion(version: number, baseVersion: number | null): Promise<SaveResult> {
-  return postJson("/api/job-list/restore", SaveResultSchema, { version, baseVersion });
-}
-
 /** GET /api/job-list/export downloads the newest version as monitored_jobs.v<N>.yml. */
 export function exportUrl(): string {
   return "/api/job-list/export";
-}
-
-/** GET /api/job-list/impact/:jobName (404 when the job is not in the list). */
-export function getImpact(jobName: string): Promise<Impact> {
-  return apiFetch(`/api/job-list/impact/${encodeURIComponent(jobName)}`, ImpactSchema);
 }

@@ -281,10 +281,10 @@ function DefaultsFields({ document, version, notice, focus, onSave, onSaved, onR
               {(control) => (
                 <Input
                   {...control}
-                  type="number"
+                  // Text, not type="number": a number field hands over "" for text such as "1e", which would save as empty.
+                  type="text"
                   inputMode="numeric"
-                  min={0}
-                  step={1}
+                  autoComplete="off"
                   className="font-mono"
                   value={values[key]}
                   placeholder="Not set"

@@ -211,6 +211,15 @@ describe("DependencyMapPage", () => {
     await waitFor(() => expect(link).toHaveFocus());
   });
 
+  it("keeps focus on a link when Escape is pressed with no menu open", async () => {
+    const user = userEvent.setup();
+    renderMap();
+    const link = await box("orders_enrich depends on orders_ingest (job link)");
+    link.focus();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(link).toHaveFocus());
+  });
+
   it("gives focus back to the link when its menu's Close is pressed", async () => {
     const user = userEvent.setup();
     renderMap();

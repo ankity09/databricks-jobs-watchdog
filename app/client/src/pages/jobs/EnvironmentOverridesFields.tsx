@@ -31,6 +31,8 @@ export interface EnvironmentOverridesFieldsProps {
   /** Rule issues by environment label. */
   issues: Record<string, EnvironmentIssues>;
   job: JobSettingsForOverrides;
+  /** A row's job ID field starts or stops holding text it refused (see JobIdsInput). */
+  onIdsRefused?: (label: string, refused: boolean) => void;
 }
 
 /** The visible label, and the unit only assistive tech hears (the placeholder shows the number). */
@@ -80,7 +82,7 @@ function InLabel({ text, label, unit = "" }: { text: string; label: string; unit
  * The settings a job changes in one environment, one collapsible row per
  * workspace label. An empty field keeps the job's own setting there.
  */
-export function EnvironmentOverridesFields({ rows, onRowChange, issues, job }: EnvironmentOverridesFieldsProps) {
+export function EnvironmentOverridesFields({ rows, onRowChange, issues, job, onIdsRefused }: EnvironmentOverridesFieldsProps) {
   if (rows.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -92,7 +94,14 @@ export function EnvironmentOverridesFields({ rows, onRowChange, issues, job }: E
   return (
     <div className="divide-y divide-border rounded-md border border-border">
       {rows.map((row, index) => (
-        <OverrideRow key={row.label} row={row} issues={issues[row.label]} job={job} onChange={(next) => onRowChange(index, next)} />
+        <OverrideRow
+          key={row.label}
+          row={row}
+          issues={issues[row.label]}
+          job={job}
+          onChange={(next) => onRowChange(index, next)}
+          onIdsRefused={(refused) => onIdsRefused?.(row.label, refused)}
+        />
       ))}
     </div>
   );
@@ -103,9 +112,10 @@ interface OverrideRowProps {
   issues: EnvironmentIssues | undefined;
   job: JobSettingsForOverrides;
   onChange: (row: OverrideFormValues) => void;
+  onIdsRefused: (refused: boolean) => void;
 }
 
-function OverrideRow({ row, issues, job, onChange }: OverrideRowProps) {
+function OverrideRow({ row, issues, job, onChange, onIdsRefused }: OverrideRowProps) {
   const summary = summaryOf(row);
   const problems = issueCount(issues);
   const set = <K extends keyof OverrideFormValues>(key: K, value: OverrideFormValues[K]) => onChange({ ...row, [key]: value });
@@ -193,10 +203,10 @@ function OverrideRow({ row, issues, job, onChange }: OverrideRowProps) {
               {(control) => (
                 <Input
                   {...control}
-                  type="number"
+                  // Text, not type="number": a number field hands over "" for text such as "1e", which would save as empty.
+                  type="text"
                   inputMode="numeric"
-                  min={0}
-                  step={1}
+                  autoComplete="off"
                   className="font-mono"
                   value={row[key]}
                   placeholder={job.numbers[key] === undefined ? "As the job" : `As the job (${job.numbers[key]})`}
@@ -212,7 +222,15 @@ function OverrideRow({ row, issues, job, onChange }: OverrideRowProps) {
             description="The jobs to check by ID in this environment, in place of the job's own IDs or its name pattern."
             errors={errors("job_ids")}
           >
-            {(control) => <JobIdsInput {...control} value={row.job_ids} placeholder="As the job" onChange={(ids) => set("job_ids", ids)} />}
+            {(control) => (
+              <JobIdsInput
+                {...control}
+                value={row.job_ids}
+                placeholder="As the job"
+                onChange={(ids) => set("job_ids", ids)}
+                onRefusedChange={onIdsRefused}
+              />
+            )}
           </FormRow>
         </div>
       </CollapsibleContent>

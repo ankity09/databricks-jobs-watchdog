@@ -83,7 +83,7 @@ describe("JobEditorSheet", () => {
       expect(field(label)).toBeInTheDocument();
     }
     expect(field("Name pattern")).toHaveValue("^orders_enrich_(web|mobile)_(prod|dev)$");
-    expect(field("Max gap (minutes)")).toHaveValue(90);
+    expect(field("Max gap (minutes)")).toHaveValue("90");
     expect(field("Owner")).toHaveValue("ingestion-team");
     expect(field("Notes")).toHaveValue("Runs hourly, once per variant.");
 
@@ -170,6 +170,55 @@ describe("JobEditorSheet", () => {
     await vi.waitFor(() => expect(owner).toHaveFocus());
     expect(owner).toHaveValue("ingestion-team-eu");
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("starts the next opening without the reload notice of the last one", async () => {
+    const { onSave, rerender } = renderSheet();
+    onSave.mockResolvedValueOnce({ ok: false, conflict: true, latestVersion: 14 });
+    await userEvent.type(field("Owner"), "-eu");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+    expect(await screen.findByText("This form now shows the newest saved values. Make your change again.")).toBeInTheDocument();
+    // The reload showed the job was deleted, so the page closes the sheet; then another job opens.
+    rerender({ open: false });
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    rerender({ open: true, initial: DOC.jobs[0] });
+    expect(await screen.findByRole("heading", { name: "Edit orders_ingest" })).toBeInTheDocument();
+    expect(screen.queryByText(/This form now shows the newest saved values/)).toBeNull();
+  });
+
+  it("says when the job's own null or empty value switches a default off, here and in each environment", async () => {
+    // null and "" as stored: the loader reads them as no value, so the default does not apply.
+    const off = JSON.parse('{"job_name": "orders_enrich", "max_gap_minutes": 90, "max_runtime_minutes": null, "owner": null, "notes": ""}') as JobEntry;
+    renderSheet({ initial: off, document: { ...DOC, defaults: { ...DOC.defaults, max_runtime_minutes: 120, notes: "Ask platform-team." }, jobs: [DOC.jobs[0], off] } });
+    expect(field("Owner")).toHaveAttribute("placeholder", "None, the default is ignored");
+    expect(field("Notes")).toHaveAttribute("placeholder", "None, the default is ignored");
+    expect(field("Max runtime (minutes)")).toHaveAttribute("placeholder", "None, the default is ignored");
+    await userEvent.click(screen.getByRole("button", { name: /production/ }));
+    expect(field("Owner in production")).toHaveAttribute("placeholder", "As the job");
+    expect(field("Max runtime (minutes) in production")).toHaveAttribute("placeholder", "As the job");
+  });
+
+  it("keeps Save off while a job ID field holds text it refused, so the text is not dropped", async () => {
+    renderSheet();
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await userEvent.type(field("Owner"), "-eu");
+    await vi.waitFor(() => expect(save).toBeEnabled());
+    await userEvent.type(field("Job IDs"), "12ab{Enter}");
+    expect(await screen.findByText("Job IDs are digits only. 12ab is not a job ID.")).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    await userEvent.clear(field("Job IDs"));
+    await vi.waitFor(() => expect(save).toBeEnabled());
+  });
+
+  it("says when a number field holds text that is not a number, instead of saving it as empty", async () => {
+    renderSheet();
+    const gap = field("Max gap (minutes)");
+    await userEvent.clear(gap);
+    await userEvent.type(gap, "1e");
+    await vi.waitFor(() => expect(gap).toHaveAccessibleDescription(/max_gap_minutes must be a whole number of zero or more, got '1e'/));
+    expect(gap).toHaveValue("1e");
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
   });
 
   it("makes the job name read-only in edit mode, with the rename hint", () => {

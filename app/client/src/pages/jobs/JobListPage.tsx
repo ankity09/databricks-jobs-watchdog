@@ -37,14 +37,15 @@ import { type ReloadJobList, type SaveOutcome, useJobList, useOpenedVersion } fr
 import { type LiveStatus, useLiveStatus } from "../../hooks/useLiveStatus";
 import { useRefreshKey } from "../../hooks/useRefreshKey";
 import { changeIssues, linksRemovedWith } from "../../lib/draft";
-import { inheritedSettings, type InheritedSettings, pyReEscape } from "../../lib/job-form";
+import { blocksDefault, inheritedSettings, type InheritedSettings, type NumberKey, pyReEscape } from "../../lib/job-form";
 import { exportUrl } from "../../lib/joblist-api";
 import type { EntryJobIds } from "../../lib/picker";
-import { type Status, statusTone } from "../../lib/status";
+import type { Status } from "../../lib/status";
 import { describeTarget } from "../../lib/targets";
 import { formatUtc } from "../../lib/time";
 import { cn } from "../../lib/utils";
 import { PageHeader } from "../../layout/PageHeader";
+import { StatusBadge } from "../monitoring/StatusBadge";
 import { AddFromWorkspaceDialog } from "./AddFromWorkspaceDialog";
 import { ConfigBanner } from "./ConfigBanner";
 import { ImportDialog } from "./ImportDialog";
@@ -110,13 +111,6 @@ interface Problem {
   conflict: boolean;
 }
 
-const TONE_TEXT = {
-  destructive: "text-destructive",
-  warning: "text-warning",
-  muted: "text-muted-foreground",
-  success: "text-success",
-} as const;
-const TONE_DOT = { destructive: "bg-destructive", warning: "bg-warning", muted: "bg-muted-foreground/60", success: "bg-success" } as const;
 const COLUMNS = ["Job", "Schedule", "Limits", "Severity", "Owner", "Environments", "Enabled", "Live status"] as const;
 
 /** The element that has focus, such as the button just pressed. */
@@ -580,15 +574,8 @@ function overrideSummary(overrides: object): string {
 }
 
 function LiveStatusCell({ status, live, active }: { status: Status | undefined; live: LiveStatus; active: boolean }) {
-  if (status) {
-    const tone = statusTone(status);
-    return (
-      <span className={cn("inline-flex items-center gap-1.5 font-mono text-[11px] font-medium", TONE_TEXT[tone])}>
-        <span className={cn("size-2 rounded-full", TONE_DOT[tone])} aria-hidden="true" />
-        {status}
-      </span>
-    );
-  }
+  // The same badge as Monitoring, so a status reads the same on every page.
+  if (status) return <StatusBadge status={status} />;
   if (live.loading) return <Skeleton className="h-3.5 w-16" />;
   if (live.problem) return <span className="text-xs text-muted-foreground">Not available</span>;
   return <span className="text-xs text-muted-foreground">{active ? "Not scanned yet" : "Off"}</span>;
@@ -611,13 +598,16 @@ interface Limit {
 
 function limitsOf(job: JobEntry, inherited: InheritedSettings): Limit[] {
   const limits: Limit[] = [];
-  const add = (name: string, own: number | undefined, fallback: number | undefined, unit: string) => {
-    const value = own ?? fallback;
+  const add = (name: string, key: NumberKey, unit: string) => {
+    // A saved null switches the default off: the job has no such limit.
+    if (blocksDefault(job, key)) return;
+    const own = job[key];
+    const value = own ?? inherited.numbers[key];
     if (typeof value === "number") limits.push({ text: `${name} ${value}${unit}`, inherited: own === undefined });
   };
-  add("runtime", job.max_runtime_minutes, inherited.numbers.max_runtime_minutes, " min");
-  add("retries", job.max_retries, inherited.numbers.max_retries, "");
-  add("attempt", job.min_attempt_minutes, inherited.numbers.min_attempt_minutes, " min");
+  add("runtime", "max_runtime_minutes", " min");
+  add("retries", "max_retries", "");
+  add("attempt", "min_attempt_minutes", " min");
   return limits;
 }
 
@@ -633,7 +623,8 @@ function JobRow({ job, inherited, live, pending, onEdit, onDelete, onToggle }: J
   const gapInherited = schedule === "scheduled" && job.max_gap_minutes === undefined;
   const limits = limitsOf(job, inherited);
   const severity = job.severity ?? inherited.severity;
-  const owner = job.owner ?? inherited.owner;
+  // A saved null or "" switches the default owner off.
+  const owner = blocksDefault(job, "owner") ? "" : (job.owner ?? inherited.owner);
   const enabled = pending ?? job.enabled ?? inherited.enabled;
   const ids = Array.isArray(job.job_ids) ? job.job_ids.length : 0;
   const pattern = job.job_name_regex || `^${pyReEscape(job.job_name)}$`;
