@@ -458,3 +458,16 @@ def test_help_says_any_target_works_and_what_a_deleted_app_leaves_behind(sandbox
     assert "dev|demo|production" not in out and "any target in databricks.yml" in out
     assert "/Workspace/Users/<old client ID>" in out
     assert "undelete-project" in out and "--purge" in out
+
+
+def test_a_profile_name_with_a_space_reaches_the_cli_as_one_argument_from_the_printed_steps(sandbox):
+    result, calls = plain_run(sandbox, "-y", "-p", "my eu")
+    assert result.returncode == 0, result.stderr
+    assert calls and all(call.endswith(" --profile my eu") for call in calls)
+    deploy = next(command for command in printed_commands(result.stdout) if command.startswith("databricks bundle deploy -t "))
+    # run the printed line as an operator would paste it, with a CLI that records its arguments
+    (sandbox / "bin" / "databricks").write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$ARGV_LOG"\n')
+    argv_log = sandbox / "argv.log"
+    subprocess.run(["bash", "-c", deploy], check=True, env=dict(os.environ, PATH=f"{sandbox / 'bin'}:{os.environ['PATH']}",
+                                                               ARGV_LOG=str(argv_log)))
+    assert argv_log.read_text().splitlines() == ["bundle", "deploy", "-t", "dev", "--profile", "my eu"]

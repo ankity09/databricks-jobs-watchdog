@@ -157,12 +157,55 @@ def test_a_connection_that_is_gone_does_not_hide_the_query_s_error():
         read_latest_job_list(FakeApi(), TARGET, driver, wait_seconds=0)
 
 
-def test_a_failed_first_connect_gets_one_retry_with_a_fresh_credential():
-    # A Lakebase compute that scaled to zero wakes up in about a second, and can refuse the first connection.
-    waking = server_error("57P03", "the database system is starting up")
+def interface_error(message, cause=None):
+    """pg8000's InterfaceError, raised from the socket's own error when there is one, as pg8000 does."""
+    err = InterfaceError(message)
+    err.__cause__ = cause
+    return err
+
+
+def certificate_error():
+    return ssl.SSLCertVerificationError(1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get "
+                                           "local issuer certificate (_ssl.c:1006)")
+
+
+# What a Lakebase compute that scaled to zero gives while it wakes up, in about a second.
+WAKING = {
+    "starting up, 57P03": server_error("57P03", "the database system is starting up"),
+    "connection exception, 08006": server_error("08006", "connection to the compute was lost"),
+    "socket refused": ConnectionRefusedError(61, "Connection refused"),
+    "socket timed out": TimeoutError("timed out"),
+    "pg8000 could not connect": interface_error("Can't create a connection to host ep-1.example and port 5432 (timeout "
+                                                "is 30 and source_address is None).", ConnectionRefusedError(61, "x")),
+    "server closed the connection": interface_error("network error"),
+}
+
+# Errors that a second try a few seconds later, with a fresh credential, cannot fix.
+LASTING = {
+    "bad token, 28P01": DatabaseError({"S": "ERROR", "C": "28P01", "M": "Provided authentication token is not a valid "
+                                                                       "JWT encoding"}),
+    "no such role, 28000": server_error("28000", 'role "someone@example.com" does not exist'),
+    "no such database, 3D000": server_error("3D000", 'database "watchdog" does not exist'),
+    "certificate": certificate_error(),
+    "certificate behind pg8000's error": interface_error("network error", certificate_error()),
+    "server refuses TLS": interface_error("Server refuses SSL"),
+    "a bad argument": TypeError("connect() got an unexpected keyword argument 'dbname'"),
+}
+
+
+@pytest.mark.parametrize("waking", WAKING.values(), ids=WAKING.keys())
+def test_what_a_waking_compute_gives_gets_one_retry_with_a_fresh_credential(waking):
     driver = FakeDriver(ROW, connect_errors=[waking])
     assert read_latest_job_list(FakeApi(), TARGET, driver, wait_seconds=0).version == 1
     assert [connected["password"] for connected in driver.connects] == ["tok-1", "tok-2"]
+
+
+@pytest.mark.parametrize("lasting", LASTING.values(), ids=LASTING.keys())
+def test_an_error_that_does_not_heal_is_raised_at_once(lasting):
+    driver = FakeDriver(ROW, connect_errors=[lasting])
+    with pytest.raises(LakebaseSourceError, match=f"^could not connect to {DATABASE_PATH} as someone@example.com: "):
+        read_latest_job_list(FakeApi(), TARGET, driver, wait_seconds=0)
+    assert len(driver.connects) == 1
 
 
 def test_notebook_11_s_connection_gets_the_same_one_retry(monkeypatch):
@@ -192,11 +235,12 @@ def test_a_refused_login_gives_postgres_s_message_not_pg8000_s_field_dict():
     # The Lakebase proxy's own errors carry only S, C and M.
     bad_token = DatabaseError({"S": "ERROR", "C": "28P01", "M": "Provided authentication token is not a valid JWT "
                                                                 "encoding"})
-    driver = FakeDriver(ROW, connect_errors=[bad_token, bad_token])
+    driver = FakeDriver(ROW, connect_errors=[bad_token])
     with pytest.raises(LakebaseSourceError) as err:
         read_latest_job_list(FakeApi(), TARGET, driver, wait_seconds=0)
     assert str(err.value).endswith(": DatabaseError: Provided authentication token is not a valid JWT encoding "
                                    "(SQLSTATE 28P01)")
+    assert len(driver.connects) == 1  # a refused login does not heal, so it gets no second try
 
 
 def test_a_branch_without_a_read_write_endpoint_is_explained():
@@ -294,13 +338,12 @@ def stand_in_endpoint(certificate, key):
         listener.close()
 
 
-def connect_to(port):
-    """The real pg8000.dbapi.connect, sent to the stand-in endpoint's port."""
-    return lambda **arguments: pg8000.dbapi.connect(**{**arguments, "port": port})
-
-
-def open_stand_in(port):
-    with open_branch(FakeApi(endpoints("localhost")), TARGET, connect_to(port), wait_seconds=0):
+def open_stand_in(port, tries):
+    """open_branch with the real pg8000.dbapi.connect, sent to the stand-in endpoint's port; tries counts each connect."""
+    def connect(**arguments):
+        tries.append(arguments)
+        return pg8000.dbapi.connect(**{**arguments, "port": port})
+    with open_branch(FakeApi(endpoints("localhost")), TARGET, connect, wait_seconds=0):
         pass
 
 
@@ -319,26 +362,32 @@ def ca_bundle(monkeypatch):
 def test_tls_with_a_trusted_certificate_for_the_host_goes_through(tmp_path, ca_bundle):
     ca, certificate, key = certificates(tmp_path, "localhost")
     ca_bundle(ca)
+    tries = []
     with stand_in_endpoint(certificate, key) as port:
         with pytest.raises(LakebaseSourceError) as err:
-            open_stand_in(port)
+            open_stand_in(port, tries)
     assert str(err.value).endswith("DatabaseError: the stand-in endpoint refuses every login (SQLSTATE 28000)")
+    assert len(tries) == 1  # a refused login is not tried again
 
 
 def test_a_certificate_from_a_ca_this_python_does_not_trust_is_refused(tmp_path, ca_bundle):
     ca, certificate, key = certificates(tmp_path, "localhost")
     ca_bundle(None)
+    tries = []
     with stand_in_endpoint(certificate, key) as port:
         with pytest.raises(LakebaseSourceError, match="SSLCertVerificationError: .*certificate verify failed"):
-            open_stand_in(port)
+            open_stand_in(port, tries)
+    assert len(tries) == 1  # the real driver's certificate failure is not tried again
 
 
 def test_a_trusted_certificate_for_another_host_is_refused(tmp_path, ca_bundle):
     ca, certificate, key = certificates(tmp_path, "ep-other.example")
     ca_bundle(ca)
+    tries = []
     with stand_in_endpoint(certificate, key) as port:
         with pytest.raises(LakebaseSourceError, match="certificate verify failed: Hostname mismatch"):
-            open_stand_in(port)
+            open_stand_in(port, tries)
+    assert len(tries) == 1
 
 
 # Installing pg8000 at run time, only for the Lakebase source and the app access grant.
@@ -465,7 +514,9 @@ def test_the_engine_never_imports_psycopg():
         "for module in pkgutil.iter_modules(jobs_watchdog.__path__):",
         "    importlib.import_module('jobs_watchdog.' + module.name)",
         "from jobs_watchdog.lakebase_source import pg8000_connect",
-        "connect = pg8000_connect(run=None)",
+        "def no_pip(argv, **kwargs):  # the tests never install anything",
+        "    sys.exit('pg8000 is not installed in this Python: pip install -r requirements-dev.txt')",
+        "connect = pg8000_connect(run=no_pip)",
         "print(connect.__module__, tried, sorted(name for name in sys.modules if name.startswith('psycopg')))",
     ])
     done = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=120)

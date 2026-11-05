@@ -26,6 +26,7 @@ _ID = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 _DATABASE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 _QUERY = f"SELECT version, document, saved_by, saved_at FROM {APP_SCHEMA}.job_list_versions ORDER BY version DESC LIMIT 1"
 _UNDEFINED_TABLE = "42P01"  # the SQLSTATE of a missing table
+_CANNOT_CONNECT_NOW = "57P03"  # the database system is starting up
 _TIMEOUT_SECONDS = 30  # pg8000's socket timeout, for connecting and for each statement
 
 
@@ -176,14 +177,46 @@ def error_line(err):
     return " ".join(f"{type(err).__name__}: {text}".split())[:300]
 
 
+def _certificate_failure(err):
+    """Whether the server's certificate did not verify, in this error or one it was raised from."""
+    seen = set()
+    while err is not None and id(err) not in seen:
+        if isinstance(err, ssl.SSLCertVerificationError):
+            return True
+        seen.add(id(err))
+        err = err.__cause__ or err.__context__
+    return False
+
+
+def _waking(err):
+    """Whether a failed connection is what a compute that is waking up gives, so that one more try can work.
+
+    That is a socket error, pg8000's InterfaceError for one (or for a server
+    that closed the connection), or a server error of class 08 (connection
+    exception) or 57P03 (cannot connect now). A certificate that does not
+    verify, a refused login (class 28) and any other error do not heal.
+    """
+    if _certificate_failure(err):
+        return False
+    code = _server_fields(err).get("C")
+    if code:
+        return code.startswith("08") or code == _CANNOT_CONNECT_NOW
+    if isinstance(err, OSError):
+        return True
+    if type(err).__name__ == "InterfaceError":  # pg8000's; this module does not import pg8000
+        return isinstance(err.__cause__, OSError) or str(err) == "network error"
+    return False
+
+
 @contextmanager
 def open_branch(api, target, connect, attempts=2, wait_seconds=3.0):
     """A pg8000 connection to the target's database as the identity the API client runs as, for a with block.
 
     TLS checks the server's certificate and host name (tls_context). A Lakebase
     compute that scaled to zero wakes up in about a second and can refuse the
-    first connection, so a failed connection gets one more try with a fresh
-    credential; a second failure raises LakebaseSourceError with the reason.
+    first connection, so a connection that fails that way (_waking) gets one
+    more try with a fresh credential. Any other failure, or a second one,
+    raises LakebaseSourceError with the reason.
     The with block closes the connection and does not commit. A connection
     that is gone already does not hide the block's own error.
     """
@@ -196,7 +229,7 @@ def open_branch(api, target, connect, attempts=2, wait_seconds=3.0):
                                  ssl_context=tls_context(), timeout=_TIMEOUT_SECONDS)
             break
         except Exception as err:
-            if attempt == attempts:
+            if attempt == attempts or not _waking(err):
                 raise LakebaseSourceError(f"could not connect to {target.database_path} as {user}: "
                                           f"{error_line(err)}") from err
             time.sleep(wait_seconds)
@@ -210,7 +243,7 @@ def open_branch(api, target, connect, attempts=2, wait_seconds=3.0):
 
 
 def read_latest_job_list(api, target, connect, attempts=2, wait_seconds=3.0):
-    """The newest saved version of the job list. A failed connection gets one more try (see open_branch)."""
+    """The newest saved version of the job list. A connection a waking compute refused gets one more try (open_branch)."""
     try:
         with open_branch(api, target, connect, attempts, wait_seconds) as connection:
             with closing(connection.cursor()) as cursor:
