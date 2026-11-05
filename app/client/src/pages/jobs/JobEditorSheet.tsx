@@ -58,6 +58,7 @@ import { EnvironmentOverridesFields } from "./EnvironmentOverridesFields";
 import { FormRow } from "./FormRow";
 import { JobIdsInput } from "./JobIdsInput";
 import { ReloadButton } from "./ReloadButton";
+import { type ReturnFocus, useReturnFocus } from "./returnFocus";
 
 export interface JobEditorSheetProps {
   open: boolean;
@@ -83,6 +84,8 @@ export interface JobEditorSheetProps {
    * a conflict asks to close the form and open the job again.
    */
   onReload?: ReloadJobList;
+  /** Where focus goes when the sheet closes: the control that opened it, then fallbacks (see useReturnFocus). */
+  returnFocus?: ReturnFocus;
 }
 
 /**
@@ -100,6 +103,7 @@ export function JobEditorSheet({
   onSave,
   renderPatternPreview,
   onReload,
+  returnFocus,
 }: JobEditorSheetProps) {
   // Bumped after a reload in edit mode, so the form starts again from the newest saved job.
   const [revision, setRevision] = useState(0);
@@ -109,6 +113,11 @@ export function JobEditorSheet({
   const onDirtyChange = useCallback((value: boolean) => {
     dirty.current = value;
   }, []);
+  // "Keep editing" gives focus back to where it was in the sheet when the question opened.
+  const content = useRef<HTMLDivElement>(null);
+  const discardFrom = useRef<HTMLElement | null>(null);
+  const backToPage = useReturnFocus(returnFocus);
+  const backToSheet = useReturnFocus([discardFrom, content]);
 
   const close = () => {
     setNotice(null);
@@ -117,8 +126,13 @@ export function JobEditorSheet({
     onOpenChange(false);
   };
   const requestClose = () => {
-    if (dirty.current) setConfirmDiscard(true);
-    else close();
+    if (!dirty.current) {
+      close();
+      return;
+    }
+    const active = window.document.activeElement;
+    discardFrom.current = active instanceof HTMLElement ? active : null;
+    setConfirmDiscard(true);
   };
   const reloaded = () => {
     if (mode !== "edit") return;
@@ -129,7 +143,7 @@ export function JobEditorSheet({
   const name = initial.job_name;
   return (
     <Sheet open={open} onOpenChange={(next) => (next ? onOpenChange(true) : requestClose())}>
-      <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-3xl">
+      <SheetContent ref={content} side="right" className="w-full gap-0 p-0 sm:max-w-3xl" onCloseAutoFocus={backToPage}>
         <SheetHeader className="border-b border-border px-6 py-4">
           <SheetTitle className="text-base">{mode === "edit" ? `Edit ${name}` : "Add job"}</SheetTitle>
           <SheetDescription>
@@ -156,7 +170,7 @@ export function JobEditorSheet({
         />
       </SheetContent>
       <AlertDialog open={confirmDiscard} onOpenChange={setConfirmDiscard}>
-        <AlertDialogContent>
+        <AlertDialogContent onCloseAutoFocus={backToSheet}>
           <AlertDialogHeader>
             <AlertDialogTitle>Discard your changes?</AlertDialogTitle>
             <AlertDialogDescription>

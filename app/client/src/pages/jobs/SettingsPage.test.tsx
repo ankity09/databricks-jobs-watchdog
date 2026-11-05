@@ -501,3 +501,54 @@ describe("SettingsPage with stored values that are not text", () => {
     });
   });
 });
+
+describe("SettingsPage gives focus back when a dialog closes", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("to Edit or Add label when the label form closes, and to Add label once a removed label is gone", async () => {
+    setClock("2026-11-06T09:30:00Z");
+    mockApi({ state: { ...STATE, document: { ...DOC, jobs: [{ job_name: "orders_ingest" }] } } });
+    renderPage();
+    const labels = await screen.findByRole("region", { name: "Workspace labels" });
+    const edit = within(labels).getByRole("button", { name: "Edit the label for example-prod" });
+    await userEvent.click(edit);
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(edit).toHaveFocus());
+
+    const add = within(labels).getByRole("button", { name: "Add label" });
+    await userEvent.click(add);
+    await screen.findByRole("dialog", { name: "Add a workspace label" });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(add).toHaveFocus());
+
+    const remove = within(labels).getByRole("button", { name: "Remove the label for 1111111111111111" });
+    await userEvent.click(remove);
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(remove).toHaveFocus());
+  });
+
+  it("to Add label after a label is removed", async () => {
+    setClock("2026-11-06T10:30:00Z");
+    const server = jobListServer({ ...DOC, jobs: [{ job_name: "orders_ingest" }] }, 4);
+    mockServer(server);
+    renderPage();
+    const labels = await screen.findByRole("region", { name: "Workspace labels" });
+    await userEvent.click(within(labels).getByRole("button", { name: "Remove the label for 1111111111111111" }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Remove label" }));
+    await waitFor(() => expect(within(labels).getByRole("button", { name: "Add label" })).toHaveFocus());
+  });
+
+  it("to the Defaults card after a defaults save starts the form again", async () => {
+    setClock("2026-11-06T11:30:00Z");
+    mockApi();
+    renderPage();
+    const defaults = await screen.findByRole("region", { name: "Defaults" });
+    await userEvent.type(within(defaults).getByLabelText("Owner"), "-eu");
+    await userEvent.click(within(defaults).getByRole("button", { name: "Save defaults" }));
+    await screen.findByText("Saved version 5: Saved.");
+    await waitFor(() => expect(screen.getByRole("region", { name: "Defaults" })).toHaveFocus());
+  });
+});

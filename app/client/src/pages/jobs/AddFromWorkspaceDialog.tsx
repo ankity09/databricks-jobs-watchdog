@@ -29,6 +29,7 @@ import { useLastGood } from "../../hooks/useLastGood";
 import { useRefreshKey } from "../../hooks/useRefreshKey";
 import { RegionJobRow, draftFromRegionJob, isMonitored, queryFailure, triggerLabel } from "../../lib/picker";
 import { cn } from "../../lib/utils";
+import { type ReturnFocus, useReturnFocus } from "./returnFocus";
 
 const RegionJobRows = z.array(RegionJobRow);
 const SEARCH_DELAY_MS = 300;
@@ -42,13 +43,16 @@ export interface AddFromWorkspaceDialogProps {
   document: JobListDocument;
   /** Called with a new job entry for the chosen job. The dialog closes. */
   onPick: (draft: JobEntry) => void;
+  /** Where focus goes when the dialog closes (see useReturnFocus). After a pick, the editor it opens keeps focus. */
+  returnFocus?: ReturnFocus;
 }
 
 /** "Add from workspace": search the region's jobs (region_jobs.obo.sql, as the signed-in person) and pick one. */
-export function AddFromWorkspaceDialog({ open, onOpenChange, document, onPick }: AddFromWorkspaceDialogProps) {
+export function AddFromWorkspaceDialog({ open, onOpenChange, document, onPick, returnFocus }: AddFromWorkspaceDialogProps) {
+  const onCloseAutoFocus = useReturnFocus(returnFocus);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85svh] flex-col gap-0 p-0 sm:max-w-6xl">
+      <DialogContent className="flex max-h-[85svh] flex-col gap-0 p-0 sm:max-w-6xl" onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader className="border-b border-border px-6 pt-5 pb-4 text-left">
           <DialogTitle>Add from workspace</DialogTitle>
           <DialogDescription>

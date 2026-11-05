@@ -275,6 +275,16 @@ describe("ChangeLogPage", () => {
     await waitFor(() => expect(screen.queryByText(/The newest versions did not load/)).not.toBeInTheDocument());
   });
 
+  it("gives focus back to the version's summary when its changes close", async () => {
+    mockApi([V1, V2]);
+    renderPage();
+    const summaryButton = await screen.findByRole("button", { name: "Changed 2 settings on orders_ingest: max_gap_minutes, owner" });
+    await userEvent.click(summaryButton);
+    await screen.findByRole("dialog", { name: "Version 2" });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(summaryButton).toHaveFocus());
+  });
+
   it("names the next step when nothing is saved yet", async () => {
     mockApi([]);
     renderPage();

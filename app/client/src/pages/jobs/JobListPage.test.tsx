@@ -476,3 +476,85 @@ describe("JobListPage", () => {
     expect(screen.queryByText("Live status is not available.")).not.toBeInTheDocument();
   });
 });
+
+describe("JobListPage gives focus back when a sheet or dialog closes", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("to the button that opened the editor, after Cancel and after a save", async () => {
+    setClock("2026-11-06T09:30:00Z");
+    mockApi(SAVED, () => json(201, { version: 13, summary: "Changed owner on orders_enrich from unset to data-team", document: DOC }));
+    renderPage();
+    const edit = await screen.findByRole("button", { name: "Edit orders_enrich" });
+    await userEvent.click(edit);
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(edit).toHaveFocus());
+
+    const name = screen.getByRole("button", { name: "orders_enrich" });
+    await userEvent.click(name);
+    await userEvent.type(await screen.findByLabelText("Owner"), "data-team");
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
+    await waitFor(() => expect(name).toHaveFocus());
+  });
+
+  it("to Delete after Cancel, and to the search field once the job is gone", async () => {
+    setClock("2026-11-06T10:30:00Z");
+    mockApi(SAVED, () => json(201, { version: 13, summary: "Deleted job orders_ingest and 2 links", document: { ...DOC, jobs: DOC.jobs.slice(1), dependencies: [] } }));
+    renderPage();
+    const remove = await screen.findByRole("button", { name: "Delete orders_ingest" });
+    await userEvent.click(remove);
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(remove).toHaveFocus());
+
+    await userEvent.click(remove);
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete job" }));
+    await waitFor(() => expect(screen.getByRole("searchbox", { name: "Search jobs by name" })).toHaveFocus());
+  });
+
+  it("to Import YAML when the import closes", async () => {
+    setClock("2026-11-06T11:30:00Z");
+    mockApi(SAVED);
+    renderPage();
+    const open = await screen.findByRole("button", { name: "Import YAML" });
+    await userEvent.click(open);
+    await userEvent.click(within(await screen.findByRole("dialog", { name: "Import YAML" })).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(open).toHaveFocus());
+  });
+
+  it("to Add from workspace when the picker closes, and when the editor a pick opened closes", async () => {
+    setClock("2026-11-06T12:30:00Z");
+    const picked = {
+      workspace_id: "1111111111111111",
+      workspace_name: "example-prod",
+      job_id: "9007199254740993",
+      name: "Nightly Billing Rollup",
+      trigger_type: "CONTINUOUS",
+      paused: "false",
+      creator_user_name: "someone@example.com",
+      change_time: "2026-11-05T09:00:00.000Z",
+    };
+    mockApi(SAVED, undefined, { region_jobs: [picked] });
+    renderPage();
+    const add = await screen.findByRole("button", { name: "Add from workspace" });
+    await userEvent.click(add);
+    await screen.findByRole("dialog", { name: "Add from workspace" });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(add).toHaveFocus());
+
+    await userEvent.click(add);
+    const picker = await screen.findByRole("dialog", { name: "Add from workspace" });
+    await userEvent.type(within(picker).getByRole("searchbox", { name: "Search jobs by name" }), "billing");
+    await userEvent.click(await within(picker).findByRole("button", { name: "Add Nightly Billing Rollup from example-prod" }));
+    // The editor keeps the focus the picker leaves it: it does not go back to the page while the editor is open.
+    const jobName = await screen.findByLabelText("Job name");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add from workspace" })).toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(jobName).toHaveFocus();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(add).toHaveFocus());
+  });
+});

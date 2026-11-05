@@ -20,11 +20,14 @@ import { getVersion } from "../../lib/joblist-api";
 import { describeTarget, formatValue, parseTargetKey } from "../../lib/targets";
 import { formatUtc } from "../../lib/time";
 import { cn } from "../../lib/utils";
+import { type ReturnFocus, useReturnFocus } from "./returnFocus";
 
 export interface VersionDiffSheetProps {
   /** The version to show; null keeps the sheet closed. */
   version: VersionSummary | null;
   onOpenChange: (open: boolean) => void;
+  /** Where focus goes when the sheet closes (see useReturnFocus). */
+  returnFocus?: ReturnFocus;
 }
 
 type Loaded = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; before: JobListDocument; after: JobListDocument };
@@ -47,10 +50,11 @@ async function loadPair(version: number): Promise<{ before: JobListDocument; aft
 }
 
 /** What one saved version changed, compared with the version before it, field by field. */
-export function VersionDiffSheet({ version, onOpenChange }: VersionDiffSheetProps) {
+export function VersionDiffSheet({ version, onOpenChange, returnFocus }: VersionDiffSheetProps) {
+  const onCloseAutoFocus = useReturnFocus(returnFocus);
   return (
     <Sheet open={version !== null} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-2xl">
+      <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-2xl" onCloseAutoFocus={onCloseAutoFocus}>
         {version ? <VersionDiff key={version.version} version={version} /> : null}
       </SheetContent>
     </Sheet>

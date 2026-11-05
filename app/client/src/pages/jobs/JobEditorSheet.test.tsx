@@ -160,6 +160,18 @@ describe("JobEditorSheet", () => {
     expect(onSave.mock.calls[0]?.[0]).toEqual({ ...explicit, notes: "Checked by hand." });
   });
 
+  it("asks before it drops changes, and Keep editing gives focus back to the field", async () => {
+    const { onOpenChange } = renderSheet();
+    const owner = field("Owner");
+    await userEvent.type(owner, "-eu");
+    await userEvent.keyboard("{Escape}");
+    const question = await screen.findByRole("alertdialog", { name: "Discard your changes?" });
+    await userEvent.click(within(question).getByRole("button", { name: "Keep editing" }));
+    await vi.waitFor(() => expect(owner).toHaveFocus());
+    expect(owner).toHaveValue("ingestion-team-eu");
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
   it("makes the job name read-only in edit mode, with the rename hint", () => {
     renderSheet();
     expect(field("Job name")).toHaveAttribute("readonly");

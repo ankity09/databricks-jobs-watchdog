@@ -100,50 +100,58 @@ const NUMBER_LABELS: Record<NumberKey, { label: ReactNode; description: string }
  * A change is checked against the whole list as you type, so a default that
  * would break a job is caught before it is saved.
  */
+/** Where focus goes when the form starts again: the notice after a reload, the card after a save (its Save button goes). */
+type FocusOnStart = "notice" | "card" | null;
+
 export function DefaultsForm({ document, version, onSave, onSaved, onReload }: DefaultsFormProps) {
   // Bumped after a save or a reload, and when a newer version changed the defaults while the form has no edits,
   // so the form starts again from the newest saved defaults.
   const [revision, setRevision] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
-  const restart = useCallback(() => {
-    setNotice(null);
+  const [focus, setFocus] = useState<FocusOnStart>(null);
+  const restart = useCallback((next: { notice: string | null; focus: FocusOnStart }) => {
+    setNotice(next.notice);
+    setFocus(next.focus);
     setRevision((n) => n + 1);
   }, []);
+  // A newer version starting the form again leaves focus where the person has it.
+  const outdated = useCallback(() => restart({ notice: null, focus: null }), [restart]);
   return (
     <DefaultsFields
       key={revision}
       document={document}
       version={version}
       notice={notice}
+      focus={focus}
       onSave={onSave}
       onSaved={(result) => {
         onSaved(result);
-        restart();
+        restart({ notice: null, focus: "card" });
       }}
       onReload={onReload}
-      onReloaded={() => {
-        setNotice(RELOADED);
-        setRevision((n) => n + 1);
-      }}
-      onOutdated={restart}
+      onReloaded={() => restart({ notice: RELOADED, focus: "notice" })}
+      onOutdated={outdated}
     />
   );
 }
 
 interface DefaultsFieldsProps extends DefaultsFormProps {
   notice: string | null;
+  focus: FocusOnStart;
   onReloaded: () => void;
   /** A newer version has other defaults, and the form has no edits: it starts again from them. */
   onOutdated: () => void;
 }
 
-function DefaultsFields({ document, version, notice, onSave, onSaved, onReload, onReloaded, onOutdated }: DefaultsFieldsProps) {
+function DefaultsFields({ document, version, notice, focus, onSave, onSaved, onReload, onReloaded, onOutdated }: DefaultsFieldsProps) {
   const headingId = useId();
-  // After a reload the form starts again, and focus moves to the notice that says so.
+  // The form starts again after a reload or a save; focus moves to the notice that says so, or to the card.
   const noticeRef = useRef<HTMLParagraphElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (notice) noticeRef.current?.focus();
-  }, [notice]);
+    if (focus === "notice") noticeRef.current?.focus();
+    else if (focus === "card") cardRef.current?.focus();
+  }, [focus]);
   // The defaults and the version the form opened at. A save sends that version, so when someone changed the
   // defaults since (a label save on this page brought their change), the server refuses it instead of saving
   // these values over theirs.
@@ -191,7 +199,13 @@ function DefaultsFields({ document, version, notice, onSave, onSaved, onReload, 
   };
 
   return (
-    <Card className="gap-4 py-5" role="region" aria-labelledby={headingId}>
+    <Card
+      ref={cardRef}
+      tabIndex={-1}
+      className="gap-4 py-5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      role="region"
+      aria-labelledby={headingId}
+    >
       <CardHeader className="px-5">
         <CardTitle id={headingId} className="text-[15px]">
           Defaults

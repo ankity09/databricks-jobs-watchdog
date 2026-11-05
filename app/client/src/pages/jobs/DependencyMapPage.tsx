@@ -589,7 +589,7 @@ export function DependencyMapPage() {
             target={link.step === "type" ? { kind: link.target.kind, name: link.target.name } : null}
             document={document}
             saving={saving}
-            returnFocus={addLinkRef}
+            returnFocus={[addLinkRef]}
             onSave={(change) => void runSave(change, version).then(() => setLink({ step: "off" }))}
           />
           <AddServiceDialog
@@ -600,7 +600,7 @@ export function DependencyMapPage() {
             document={document}
             defaultJob={selected?.kind === "job" ? selected.name : null}
             saving={saving}
-            returnFocus={addServiceRef}
+            returnFocus={[addServiceRef]}
             onSave={(change) => void runSave(change, version).then(() => setServiceOpen(false))}
           />
         </>

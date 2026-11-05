@@ -109,6 +109,9 @@ function useVersions() {
 export function ChangeLogPage() {
   const { versions, error, loading, more, older, reload, loadOlder } = useVersions();
   const [open, setOpen] = useState<VersionSummary | null>(null);
+  // Focus goes back to the version's summary when its changes close, else to Refresh (a refresh replaced the rows).
+  const opener = useRef<HTMLElement | null>(null);
+  const refreshButton = useRef<HTMLButtonElement>(null);
   // After older versions load, focus moves to the first of them (its index in the table).
   const table = useRef<HTMLDivElement>(null);
   const focusAt = useRef<number | null>(null);
@@ -164,7 +167,14 @@ export function ChangeLogPage() {
             </TableHeader>
             <TableBody>
               {versions.map((version) => (
-                <TableRow key={version.version} className="cursor-pointer" onClick={() => setOpen(version)}>
+                <TableRow
+                  key={version.version}
+                  className="cursor-pointer"
+                  onClick={(event) => {
+                    opener.current = event.currentTarget.querySelector<HTMLElement>("button[data-summary]");
+                    setOpen(version);
+                  }}
+                >
                   <TableCell className="px-3 py-2 font-mono">{version.version}</TableCell>
                   <TableCell className="px-3 py-2 font-mono text-xs text-muted-foreground">{formatUtc(version.savedAt)}</TableCell>
                   <TableCell className="max-w-56 truncate px-3 py-2 font-mono text-xs" title={version.savedBy}>
@@ -178,6 +188,7 @@ export function ChangeLogPage() {
                       title={version.summary}
                       onClick={(event) => {
                         event.stopPropagation();
+                        opener.current = event.currentTarget;
                         setOpen(version);
                       }}
                     >
@@ -234,7 +245,7 @@ export function ChangeLogPage() {
         description="Every saved version of the job list: who saved it, when, and what changed. Click a version to see its changes."
         actions={
           versions !== null ? (
-            <Button variant="outline" size="sm" className="gap-1.5" disabled={loading} onClick={() => void reload()}>
+            <Button ref={refreshButton} variant="outline" size="sm" className="gap-1.5" disabled={loading} onClick={() => void reload()}>
               <RotateCw aria-hidden="true" />
               {loading ? "Refreshing..." : "Refresh"}
             </Button>
@@ -248,6 +259,7 @@ export function ChangeLogPage() {
         onOpenChange={(next) => {
           if (!next) setOpen(null);
         }}
+        returnFocus={[opener, refreshButton]}
       />
     </>
   );

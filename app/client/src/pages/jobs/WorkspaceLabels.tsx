@@ -32,7 +32,7 @@ import {
   useAnalyticsQuery,
 } from "@databricks/appkit-ui/react";
 import { CircleAlert, Pencil, Plus, RotateCw, Trash2, X } from "lucide-react";
-import { useCallback, useId, useMemo, useState } from "react";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { deepEqual } from "../../../../shared/joblist/apply";
 import {
@@ -50,6 +50,7 @@ import { useRefreshKey } from "../../hooks/useRefreshKey";
 import { changeIssues, uniqueIssues, workspaceIssues } from "../../lib/draft";
 import { FormRow } from "./FormRow";
 import { ReloadButton } from "./ReloadButton";
+import { type ReturnFocus, useReturnFocus } from "./returnFocus";
 
 export interface WorkspaceLabelsProps {
   document: JobListDocument;
@@ -120,6 +121,12 @@ export function WorkspaceLabels({ document, version, onSave, onSaved, onReload }
   const [revision, setRevision] = useState(0);
   const [formNotice, setFormNotice] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
+  // Where focus goes when the label form or the removal question closes: the button that opened it, else Add label
+  // (the button went with its row).
+  const opener = useRef<HTMLElement | null>(null);
+  const addLabel = useRef<HTMLButtonElement>(null);
+  const returnFocus: ReturnFocus = [opener, addLabel];
+  const onCloseAutoFocus = useReturnFocus(returnFocus);
   const workspaces = document.workspaces ?? [];
   const editingEntry = editing?.mode === "edit" ? workspaces.find((w) => workspaceKey(w) === editing.key) : undefined;
   // A label someone else removed while its form was open: the form closes and the card says so.
@@ -153,7 +160,15 @@ export function WorkspaceLabels({ document, version, onSave, onSaved, onReload }
           for one label.
         </CardDescription>
         <CardAction>
-          <Button size="sm" variant="outline" onClick={() => edit({ mode: "create" })}>
+          <Button
+            ref={addLabel}
+            size="sm"
+            variant="outline"
+            onClick={(event) => {
+              opener.current = event.currentTarget;
+              edit({ mode: "create" });
+            }}
+          >
             <Plus aria-hidden="true" />
             Add label
           </Button>
@@ -219,7 +234,10 @@ export function WorkspaceLabels({ document, version, onSave, onSaved, onReload }
                             size="icon-sm"
                             className="size-7 text-muted-foreground hover:text-foreground"
                             aria-label={`Edit the label for ${name}`}
-                            onClick={() => edit({ mode: "edit", key, name })}
+                            onClick={(event) => {
+                              opener.current = event.currentTarget;
+                              edit({ mode: "edit", key, name });
+                            }}
                           >
                             <Pencil aria-hidden="true" />
                           </Button>
@@ -228,7 +246,10 @@ export function WorkspaceLabels({ document, version, onSave, onSaved, onReload }
                             size="icon-sm"
                             className="size-7 text-muted-foreground hover:text-destructive"
                             aria-label={`Remove the label for ${name}`}
-                            onClick={() => setRemoving(key)}
+                            onClick={(event) => {
+                              opener.current = event.currentTarget;
+                              setRemoving(key);
+                            }}
                           >
                             <Trash2 aria-hidden="true" />
                           </Button>
@@ -249,7 +270,7 @@ export function WorkspaceLabels({ document, version, onSave, onSaved, onReload }
           if (!open) edit(null);
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-lg" onCloseAutoFocus={onCloseAutoFocus}>
           {editing?.mode === "create" ? (
             // A new label keeps what was typed after a reload: the check then shows whether someone added it meanwhile.
             <CreateLabelForm {...formProps} onReloaded={() => undefined} />
@@ -284,6 +305,7 @@ export function WorkspaceLabels({ document, version, onSave, onSaved, onReload }
             return outcome;
           }}
           onReload={onReload}
+          returnFocus={returnFocus}
         />
       ) : null}
     </Card>
@@ -536,6 +558,8 @@ interface RemoveLabelDialogProps {
   /** Removes the label; `baseVersion` is the version the dialog opened at. */
   onRemove: (baseVersion: number | null) => Promise<SaveOutcome>;
   onReload: ReloadJobList;
+  /** Where focus goes when the dialog closes (see useReturnFocus). */
+  returnFocus?: ReturnFocus;
 }
 
 const OVERRIDE_PATH = /^jobs\[(.+)\]\.environments\.([^.]+)$/;
@@ -565,7 +589,8 @@ function blockerSentences(issues: RuleIssue[]): string[] {
 }
 
 /** Confirms a label removal. A label that a job still sets settings for cannot go while no other workspace has it. */
-function RemoveLabelDialog({ workspace, document, version, onCancel, onRemove, onReload }: RemoveLabelDialogProps) {
+function RemoveLabelDialog({ workspace, document, version, onCancel, onRemove, onReload, returnFocus }: RemoveLabelDialogProps) {
+  const backToPage = useReturnFocus(returnFocus);
   const name = nameOf(workspace);
   const blockers = useMemo(
     () => changeIssues(document, { kind: "delete", target: { type: "workspace", key: workspaceKey(workspace) } }),
@@ -590,7 +615,7 @@ function RemoveLabelDialog({ workspace, document, version, onCancel, onRemove, o
         if (!open) onCancel();
       }}
     >
-      <AlertDialogContent>
+      <AlertDialogContent onCloseAutoFocus={backToPage}>
         <AlertDialogHeader>
           <AlertDialogTitle>Remove the label for {name}?</AlertDialogTitle>
           <AlertDialogDescription>Findings from this workspace no longer carry the label {workspace.environment}.</AlertDialogDescription>

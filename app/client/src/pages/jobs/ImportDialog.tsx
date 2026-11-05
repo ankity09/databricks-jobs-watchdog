@@ -24,6 +24,7 @@ import { ConflictBodySchema, InvalidBodySchema, importYaml, previewImport } from
 import { describeTarget } from "../../lib/targets";
 import { cn } from "../../lib/utils";
 import { ReloadButton } from "./ReloadButton";
+import { type ReturnFocus, useReturnFocus } from "./returnFocus";
 
 const MAX_BYTES = 1024 * 1024;
 
@@ -36,6 +37,8 @@ export interface ImportDialogProps {
   onReload: ReloadJobList;
   /** After a successful import, with the version it saved. */
   onImported: (result: SaveResult) => void;
+  /** Where focus goes when the dialog closes (see useReturnFocus). */
+  returnFocus?: ReturnFocus;
 }
 
 /**
@@ -43,10 +46,11 @@ export interface ImportDialogProps {
  * change, then Import. Nothing is saved before Import, and Import saves exactly
  * the text that was previewed.
  */
-export function ImportDialog({ open, onOpenChange, baseVersion, onReload, onImported }: ImportDialogProps) {
+export function ImportDialog({ open, onOpenChange, baseVersion, onReload, onImported, returnFocus }: ImportDialogProps) {
+  const onCloseAutoFocus = useReturnFocus(returnFocus);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-5 sm:max-w-5xl">
+      <DialogContent className="gap-5 sm:max-w-5xl" onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>Import YAML</DialogTitle>
           <DialogDescription>
