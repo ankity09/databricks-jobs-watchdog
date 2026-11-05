@@ -1,5 +1,6 @@
 import ast
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -67,10 +68,14 @@ def test_cleanup_notebook_runs_the_delete_file_after_checking_the_tables():
     assert "Oldest observed_at left" in text
 
 
-def test_notebook_02_installs_psycopg_before_the_setup_and_reads_the_config_source():
+def test_notebook_02_installs_psycopg_only_when_it_reads_lakebase_inside_the_recorded_try():
+    # A YAML load must not need PyPI, and a failed install must leave a FAILED config_loads row.
     text = (NOTEBOOKS / "02_load_config.py").read_text()
-    pip = '# MAGIC %pip install --quiet "psycopg[binary]>=3.2,<4"'
-    assert pip in text and text.index(pip) < text.index("# MAGIC %run ./_setup")
+    assert "%pip" not in text and not re.search(r"^\s*import psycopg\s*$", text, re.MULTILINE)
+    body = text[text.index("try:"):text.index("except Exception as err:")]
+    lakebase = body[body.index('if s.config_source == "lakebase":'):body.index("else:")]
+    assert "psycopg_connect()" in lakebase
+    assert "psycopg" not in body[body.index("else:"):]
     assert "config_source" in text and "config_loads" in text
 
 

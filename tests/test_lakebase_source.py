@@ -1,9 +1,17 @@
 import json
+import sys
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
-from jobs_watchdog.lakebase_source import LakebaseSourceError, LakebaseTarget, read_latest_job_list
+from jobs_watchdog.lakebase_source import (
+    PSYCOPG_REQUIREMENT,
+    LakebaseSourceError,
+    LakebaseTarget,
+    psycopg_connect,
+    read_latest_job_list,
+)
 
 TARGET = LakebaseTarget("jobs-watchdog", "dev-engine", "watchdog")
 ENDPOINTS = {"endpoints": [{"name": "projects/jobs-watchdog/branches/dev-engine/endpoints/primary",
@@ -124,3 +132,69 @@ def test_ids_are_checked():
 def test_paths_name_the_branch_and_database():
     assert TARGET.branch_path == "projects/jobs-watchdog/branches/dev-engine"
     assert TARGET.database_path == "projects/jobs-watchdog/branches/dev-engine/databases/watchdog"
+
+
+PSYCOPG = SimpleNamespace(connect=object())
+
+
+def importer(missing_times):
+    """import_module that raises ImportError for psycopg the first missing_times calls."""
+    calls = []
+
+    def import_module(name):
+        calls.append(name)
+        if len(calls) <= missing_times:
+            raise ImportError(f"No module named {name!r}")
+        return PSYCOPG
+    import_module.calls = calls
+    return import_module
+
+
+def pip(returncode, stderr=""):
+    runs = []
+
+    def run(argv, **kwargs):
+        runs.append(argv)
+        return SimpleNamespace(returncode=returncode, stdout="", stderr=stderr)
+    run.runs = runs
+    return run
+
+
+def test_an_installed_psycopg_is_used_without_pip():
+    run = pip(0)
+    assert psycopg_connect(run=run, import_module=importer(0)) is PSYCOPG.connect
+    assert run.runs == []
+
+
+def test_a_missing_psycopg_is_installed_into_this_python_then_imported():
+    run, import_module = pip(0), importer(1)
+    assert psycopg_connect(run=run, import_module=import_module) is PSYCOPG.connect
+    assert run.runs == [[sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check",
+                         PSYCOPG_REQUIREMENT]]
+    assert import_module.calls == ["psycopg", "psycopg"]
+
+
+def test_a_failed_install_says_why_on_one_line_and_that_the_scans_keep_the_last_list():
+    run = pip(1, "ERROR: Could not find a version that satisfies the requirement psycopg[binary]<4,>=3.2\n"
+                 "ERROR: No matching distribution found for psycopg[binary]<4,>=3.2\n")
+    with pytest.raises(LakebaseSourceError) as err:
+        psycopg_connect(run=run, import_module=importer(9))
+    text = str(err.value)
+    assert text.startswith(f"could not install {PSYCOPG_REQUIREMENT}, which reading the job list from Lakebase needs")
+    assert "No matching distribution found" in text and "last job list that loaded" in text
+    assert "\n" not in text  # config_loads keeps the first line of the error
+
+
+def test_the_detail_is_pip_s_error_line_not_a_warning_after_it():
+    run = pip(1, "ERROR: No matching distribution found for psycopg[binary]<4,>=3.2\n"
+                 "WARNING: There was an error checking the latest version of pip.\n")
+    with pytest.raises(LakebaseSourceError) as err:
+        psycopg_connect(run=run, import_module=importer(9))
+    assert "No matching distribution found" in str(err.value) and "WARNING" not in str(err.value)
+
+
+def test_an_install_that_cannot_start_is_a_lakebase_source_error_too():
+    def run(argv, **kwargs):
+        raise OSError("No such file or directory")
+    with pytest.raises(LakebaseSourceError, match="could not install"):
+        psycopg_connect(run=run, import_module=importer(9))

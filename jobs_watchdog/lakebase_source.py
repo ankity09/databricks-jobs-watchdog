@@ -6,12 +6,15 @@ config_source is lakebase. The run connects as the identity it runs as, with a
 short-lived database credential, so it needs no stored password.
 
 The caller passes in the Databricks API client (WorkspaceClient().api_client)
-and the connect function (psycopg.connect), so this module needs neither
-package and the tests run without a workspace.
+and the connect function (psycopg.connect, from psycopg_connect), so this
+module needs neither package and the tests run without a workspace.
 """
 
+import importlib
 import json
 import re
+import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,6 +27,38 @@ _QUERY = f"SELECT version, document, saved_by, saved_at FROM {APP_SCHEMA}.job_li
 
 class LakebaseSourceError(Exception):
     """Raised when the job list cannot be read from Lakebase."""
+
+
+PSYCOPG_REQUIREMENT = "psycopg[binary]>=3.2,<4"
+
+
+def psycopg_connect(run=subprocess.run, import_module=importlib.import_module):
+    """psycopg.connect, installing psycopg into this Python first when it is missing.
+
+    Only the Lakebase source needs psycopg, so a YAML load never reaches PyPI.
+    A failed install raises LakebaseSourceError on one line, which notebook 02
+    records as a FAILED config_loads row; the config tables keep their rows.
+    """
+    try:
+        return import_module("psycopg").connect
+    except ImportError:
+        pass
+    argv = [sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", PSYCOPG_REQUIREMENT]
+    try:
+        done = run(argv, capture_output=True, text=True)
+        lines = [line.strip() for line in (done.stderr or done.stdout or "").splitlines() if line.strip()]
+        # pip's last ERROR line says why; a WARNING may come after it
+        errors = [line for line in lines if line.startswith("ERROR:")]
+        problem = None if done.returncode == 0 else (errors or lines or [f"pip exit code {done.returncode}"])[-1]
+    except OSError as err:
+        problem = str(err)
+    if problem is not None:
+        detail = " ".join(problem.removeprefix("ERROR:").split())[:160]
+        raise LakebaseSourceError(f"could not install {PSYCOPG_REQUIREMENT}, which reading the job list from Lakebase "
+                                  f"needs ({detail}). Let serverless compute reach PyPI or your package mirror; until "
+                                  "then the scans use the last job list that loaded")
+    importlib.invalidate_caches()
+    return import_module("psycopg").connect
 
 
 @dataclass(frozen=True)
