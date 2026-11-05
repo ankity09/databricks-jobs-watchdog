@@ -389,12 +389,15 @@ def test_the_app_resources_carry_the_appkit_keys_and_permissions():
     assert resources["agents-mlflow-experiment"]["experiment"]["permission"] == "CAN_EDIT"
 
 
-def test_the_lakebase_project_and_database_use_the_variables():
+def test_the_lakebase_project_and_database_are_protected_and_use_the_variables():
     resources = yaml.safe_load(LAKEBASE_FILE.read_text())["resources"]
     project = resources["postgres_projects"]["watchdog_db"]
     database = resources["postgres_databases"]["watchdog_database"]
     assert project["project_id"] == "${var.lakebase_project_id}"
+    role = resources["postgres_roles"]["watchdog_owner"]
     assert database["database_id"] == "${var.lakebase_database}"
+    for resource in (project, database, role):
+        assert resource["lifecycle"]["prevent_destroy"] is True
 
 
 def test_every_app_variable_is_declared_with_the_spec_defaults():
