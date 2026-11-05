@@ -214,7 +214,7 @@ sql/maintenance/       deletes old findings scans (notebook 10)
 sql/views/             the findings_latest view, created by notebook 01
 jobs_watchdog/         Python package the notebooks use
 demo/                  the four sample job notebooks
-scripts/               bundle_vars.py, ensure_tables.py, deploy_regions.py, region_host.py (teardown's host check)
+scripts/               bundle_vars.py, ensure_tables.py, deploy_regions.py, region_host.py (teardown's host check), probe_java_regex.py (checks the Java pattern rules against a SQL warehouse)
 tests/                 pytest, no network: python -m pytest
 docs/                  guides and diagrams
 ```

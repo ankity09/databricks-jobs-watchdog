@@ -10,7 +10,8 @@ is its python entry for the version, else its error.
 
 Both then check that the system-table scan's Java regex (Spark's regexp_like)
 can run the pattern: jobs_watchdog/java_regex.py here, javaregex.ts in the app.
-A row's java field is that check's verdict, pinned against regexp_like.
+A row's java field is that check's verdict, pinned against regexp_like;
+scripts/probe_java_regex.py asks a SQL warehouse again and refreshes it.
 """
 
 import json
