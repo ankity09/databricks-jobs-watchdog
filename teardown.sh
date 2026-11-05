@@ -11,7 +11,9 @@
 #
 # The Lakebase project, its database and the database's owner role (watchdog_db,
 # watchdog_database and watchdog_owner) are unbound from the bundle first, so a
-# plain teardown keeps them and the job list the app holds survives.
+# plain teardown keeps them and the job list the app holds survives. Without -y
+# teardown asks once before it changes anything; after a plain teardown it prints
+# the bind commands for deploying again with the list kept.
 # --drop-lakebase also deletes the project, with everything in it, after the
 # destroy. You type the project ID to confirm unless -y.
 #
@@ -73,15 +75,36 @@ print(" ".join(names))
   fi
 fi
 
+# bundle destroy needs a value for every bundle variable, and warehouse_id has no default.
+export BUNDLE_VAR_warehouse_id="${BUNDLE_VAR_warehouse_id:-unused-for-teardown}"
+
+if ! $assume_yes; then
+  keep_note="The Lakebase project ${lakebase_project} and its job list are kept (add --drop-lakebase to delete them)."
+  if $drop_lakebase; then keep_note="The Lakebase project ${lakebase_project} is deleted afterwards."; fi
+  read -r -p "Remove the Watchdog jobs, the app and its experiment from target ${target}? ${keep_note} Type yes to continue: " answer || answer=""
+  if [[ "$answer" != "yes" ]]; then
+    echo "Nothing was changed."
+    exit 0
+  fi
+fi
+
 # Unbind the Lakebase resources so the destroy leaves them alone. A bundle that
 # never deployed them has nothing to unbind, which is fine.
 for key in watchdog_database watchdog_owner watchdog_db; do
   databricks bundle deployment unbind "$key" -t "$target" ${profile_args[@]+"${profile_args[@]}"} || true
 done
 
-destroy_args=(bundle destroy -t "$target")
-if $assume_yes; then destroy_args+=(--auto-approve); fi
-databricks "${destroy_args[@]}" ${profile_args[@]+"${profile_args[@]}"}
+# The person has confirmed above (or passed -y), so the destroy does not ask again.
+databricks bundle destroy -t "$target" --auto-approve ${profile_args[@]+"${profile_args[@]}"}
+
+if ! $drop_lakebase; then
+  branch="projects/${lakebase_project}/branches/${BUNDLE_VAR_lakebase_branch:-production}"
+  echo "The Lakebase project ${lakebase_project} and its job list were kept. To deploy again and keep them,"
+  echo "bind them before the next bundle deploy (the resource IDs are the Lakebase resource names):"
+  echo "  databricks bundle deployment bind watchdog_db projects/${lakebase_project} -t ${target} --auto-approve"
+  echo "  databricks bundle deployment bind watchdog_owner ${branch}/roles/watchdog-owner -t ${target} --auto-approve"
+  echo "  databricks bundle deployment bind watchdog_database ${branch}/databases/${BUNDLE_VAR_lakebase_database:-watchdog} -t ${target} --auto-approve"
+fi
 
 if $drop_lakebase; then
   confirmed=true

@@ -98,7 +98,7 @@ def test_drop_lakebase_keeps_the_project_unless_the_name_is_typed(sandbox):
     log = sandbox / "calls.log"
     env = dict(os.environ, PATH=f"{sandbox / 'bin'}:{os.environ['PATH']}", FAKE_LOG=str(log))
     result = subprocess.run(["bash", str(sandbox / "teardown.sh"), "--drop-lakebase"], capture_output=True,
-                            text=True, env=env, input="nope\n")
+                            text=True, env=env, input="yes\nnope\n")
     assert result.returncode == 0
     assert "Lakebase project kept." in result.stdout
     assert not any(call.startswith("postgres") for call in log.read_text().splitlines())
@@ -159,3 +159,55 @@ def test_teardown_header_names_every_job_the_bundle_deploys():
     for path in (repo_root() / "resources").glob("*.yml"):
         for job in (yaml.safe_load(path.read_text()) or {}).get("resources", {}).get("jobs", {}):
             assert job in header, job
+
+
+def run_with_input(sandbox, answers, *args):
+    log = sandbox / "calls.log"
+    env = dict(os.environ, PATH=f"{sandbox / 'bin'}:{os.environ['PATH']}", FAKE_LOG=str(log))
+    result = subprocess.run(["bash", str(sandbox / "teardown.sh"), *args], capture_output=True, text=True, env=env,
+                            input=answers)
+    return result, log.read_text().splitlines() if log.exists() else []
+
+
+def test_declining_the_prompt_makes_no_calls(sandbox):
+    result, calls = run_with_input(sandbox, "no\n")
+    assert result.returncode == 0, result.stderr
+    assert "Nothing was changed." in result.stdout
+    assert calls == []
+
+
+def test_yes_at_the_prompt_unbinds_then_destroys_without_asking_again(sandbox):
+    result, calls = run_with_input(sandbox, "yes\n")
+    assert result.returncode == 0, result.stderr
+    assert calls == UNBIND_THEN_DESTROY
+
+
+def test_dash_y_skips_the_prompt(sandbox):
+    result, calls = run_with_input(sandbox, "", "-y")
+    assert result.returncode == 0, result.stderr
+    assert "Type yes" not in result.stdout
+    assert calls == UNBIND_THEN_DESTROY
+
+
+def test_a_plain_teardown_prints_how_to_bind_the_kept_lakebase_resources(sandbox):
+    result, _ = run_with_input(sandbox, "", "-y")
+    assert "bundle deployment bind watchdog_db projects/jobs-watchdog -t dev" in result.stdout
+    assert "branches/production/roles/watchdog-owner" in result.stdout
+    assert "branches/production/databases/watchdog" in result.stdout
+
+
+def test_dropping_the_lakebase_project_prints_no_bind_hint(sandbox):
+    result, _ = run_with_input(sandbox, "", "--drop-lakebase", "-y")
+    assert "bundle deployment bind" not in result.stdout
+
+
+def test_teardown_runs_the_destroy_for_an_accelerator_file_without_a_warehouse(sandbox):
+    assert "warehouse_id" not in (sandbox / "accelerator.local.yaml").read_text()
+    log = sandbox / "calls.log"
+    env = dict(os.environ, PATH=f"{sandbox / 'bin'}:{os.environ['PATH']}", FAKE_LOG=str(log))
+    env.pop("BUNDLE_VAR_warehouse_id", None)
+    (sandbox / "bin" / "databricks").write_text(FAKE_DATABRICKS.replace(
+        'echo "$*" >> "$FAKE_LOG"', 'echo "$* warehouse=$BUNDLE_VAR_warehouse_id" >> "$FAKE_LOG"'))
+    result = subprocess.run(["bash", str(sandbox / "teardown.sh"), "-y"], capture_output=True, text=True, env=env)
+    assert result.returncode == 0, result.stderr
+    assert "bundle destroy -t dev --auto-approve warehouse=unused-for-teardown" in log.read_text().splitlines()
