@@ -4,6 +4,7 @@ import { registerCopilotRoutes } from "./copilot/routes";
 import { ensureSchema } from "./db/schema";
 import { registerIdentityRoutes } from "./identity";
 import { registerJobListRoutes } from "./joblist/routes";
+import { registerScanRoutes } from "./scan/routes";
 
 await createApp({
   plugins: [
@@ -28,6 +29,7 @@ await createApp({
       registerAppConfigRoute(app, appkit);
       registerJobListRoutes(app, { pool: appkit.lakebase.pool });
       registerCopilotRoutes(app, { pool: appkit.lakebase.pool });
+      registerScanRoutes(app);
     });
   },
 });

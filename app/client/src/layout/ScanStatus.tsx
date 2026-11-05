@@ -3,7 +3,7 @@ import { ArrowUpRight, Hourglass, Play, RotateCw } from "lucide-react";
 import { type JSX, useState } from "react";
 import { useNow } from "../hooks/useNow";
 import { useRefreshKey } from "../hooks/useRefreshKey";
-import { type ScanState, scanResultLabel, useScanNow } from "../hooks/useScanNow";
+import { type ScanResultTone, type ScanState, scanResultLabel, scanResultTone, useScanNow } from "../hooks/useScanNow";
 import { useQueryRows, useWatchdogLocation } from "../hooks/useWatchdogRows";
 import { describeProblem } from "../lib/queryProblem";
 import { FreshnessRow } from "../lib/rows";
@@ -40,6 +40,14 @@ function stateLine(state: ScanState): string | null {
     case "error":
       return state.message;
   }
+}
+
+const LINE_TONE: Record<ScanResultTone, string> = { muted: "text-muted-foreground", warning: "text-warning", failed: "text-destructive" };
+
+/** The color of the line under Scan now: an error, and a result that is not a success, in their status tones. */
+function stateTone(state: ScanState): ScanResultTone {
+  if (state.kind === "error") return "failed";
+  return state.kind === "done" ? scanResultTone(state.result) : "muted";
 }
 
 /** What a screen reader hears when Scan now changes. */
@@ -173,7 +181,13 @@ export function ScanStatus(): JSX.Element {
           ) : (
             <Tooltip>
               <TooltipTrigger asChild>
-                <span role="img" aria-label={detail} className="flex size-8 items-center justify-center">
+                {/* Focusable, so a keyboard reaches the tooltip too; still an image named by the last scan. */}
+                <span
+                  role="img"
+                  aria-label={detail}
+                  tabIndex={0}
+                  className="flex size-8 items-center justify-center rounded-md outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                >
                   {loading ? <Skeleton className="motion-reduce:animate-none size-2 rounded-full" /> : <LiveDot fresh={fresh} />}
                 </span>
               </TooltipTrigger>
@@ -228,7 +242,7 @@ export function ScanStatus(): JSX.Element {
           </Button>
         </div>
         {line && scan.state.kind !== "checking" ? (
-          <p className={cn("flex min-w-0 flex-wrap items-center gap-x-1.5 pl-4 text-[11px] leading-4", scan.state.kind === "error" ? "text-destructive" : "text-muted-foreground")}>
+          <p data-tone={stateTone(scan.state)} className={cn("flex min-w-0 flex-wrap items-center gap-x-1.5 pl-4 text-[11px] leading-4", LINE_TONE[stateTone(scan.state)])}>
             <span className="min-w-0">{line}</span>
             {runUrl ? <RunLink url={runUrl} /> : null}
           </p>

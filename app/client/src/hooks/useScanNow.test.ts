@@ -15,13 +15,15 @@ function json(body: unknown, status = 200): Response {
 const RUN_URL = "https://workspace.example.com/jobs/1/runs/77";
 
 interface Routes {
-  status: () => Response;
+  /** GET /api/scan/latest-run. */
+  latest: () => Response;
+  /** POST /api/jobs/default/run (the jobs plugin). */
   run?: () => Response;
-  /** Each poll of GET /runs/:runId takes the next answer; the last one repeats. */
+  /** Each poll of GET /api/scan/runs/:runId takes the next answer; the last one repeats. */
   polls?: Array<() => Response>;
 }
 
-/** fetch for the jobs plugin routes. Returns the calls made, as "METHOD path". */
+/** fetch for Scan now's routes. Returns the calls made, as "METHOD path". */
 function mockJobs(routes: Routes): string[] {
   const calls: string[] = [];
   let poll = 0;
@@ -31,9 +33,9 @@ function mockJobs(routes: Routes): string[] {
       const url = urlOf(input);
       const method = init?.method ?? "GET";
       calls.push(`${method} ${url}`);
-      if (url === "/api/jobs/default/status") return Promise.resolve(routes.status());
+      if (url === "/api/scan/latest-run") return Promise.resolve(routes.latest());
       if (url === "/api/jobs/default/run" && method === "POST") return Promise.resolve(routes.run?.() ?? json({ error: "No run route" }, 500));
-      if (url.startsWith("/api/jobs/default/runs/")) {
+      if (url.startsWith("/api/scan/runs/")) {
         const answers = routes.polls ?? [];
         const answer = answers[Math.min(poll, answers.length - 1)];
         poll += 1;
@@ -45,11 +47,25 @@ function mockJobs(routes: Routes): string[] {
   return calls;
 }
 
-function run(lifeCycle: string, resultState?: string, url: string | null = RUN_URL) {
-  return () => json({ run_id: 77, job_id: 1, run_page_url: url, state: { life_cycle_state: lifeCycle, ...(resultState ? { result_state: resultState } : {}) } });
+/** A run as server/scan/routes.ts sends it. */
+function scanRun(runId: number, lifeCycle: string, resultState: string | null = null, url: string | null = `https://workspace.example.com/jobs/1/runs/${runId}`) {
+  return {
+    run_id: runId,
+    life_cycle_state: lifeCycle,
+    result_state: resultState,
+    trigger: "ONE_TIME",
+    start_time: "2026-11-05T05:20:00.000Z",
+    end_time: lifeCycle === "TERMINATED" ? "2026-11-05T05:23:10.000Z" : null,
+    run_page_url: url,
+  };
 }
 
-const idleStatus = () => json({ status: "TERMINATED", run: { run_id: 70, run_page_url: "https://workspace.example.com/jobs/1/runs/70", state: { life_cycle_state: "TERMINATED", result_state: "SUCCESS" } } });
+/** A poll of run 77. */
+function run(lifeCycle: string, resultState?: string, url: string | null = RUN_URL) {
+  return () => json({ run: scanRun(77, lifeCycle, resultState ?? null, url) });
+}
+
+const idleLatest = () => json({ run: scanRun(70, "TERMINATED", "SUCCESS") });
 
 /** Runs the timers that are due within `ms`, and lets the fetches they start settle. */
 async function wait(ms: number) {
@@ -58,7 +74,7 @@ async function wait(ms: number) {
   });
 }
 
-const polls = (calls: string[]) => calls.filter((call) => call.startsWith("GET /api/jobs/default/runs/"));
+const polls = (calls: string[]) => calls.filter((call) => call.startsWith("GET /api/scan/runs/"));
 
 describe("useScanNow", () => {
   beforeEach(() => {
@@ -69,12 +85,10 @@ describe("useScanNow", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["PENDING", "QUEUED", "RUNNING", "BLOCKED", "TERMINATING"])(
+  it.each(["PENDING", "QUEUED", "RUNNING", "BLOCKED", "TERMINATING", "WAITING_FOR_RETRY"])(
     "shows the scan that is already %s, and starts no other",
     async (lifeCycle) => {
-      const calls = mockJobs({
-        status: () => json({ status: lifeCycle, run: { run_id: 55, run_page_url: "https://workspace.example.com/jobs/1/runs/55", state: { life_cycle_state: lifeCycle } } }),
-      });
+      const calls = mockJobs({ latest: () => json({ run: scanRun(55, lifeCycle) }) });
       const { result } = renderHook(() => useScanNow(vi.fn()));
       await act(() => result.current.start());
       expect(result.current.state).toEqual({ kind: "running", runId: 55, url: "https://workspace.example.com/jobs/1/runs/55", alreadyRunning: true });
@@ -84,7 +98,7 @@ describe("useScanNow", () => {
 
   it("starts a scan, polls its run every 5 s until it ends, then calls onDone once", async () => {
     const calls = mockJobs({
-      status: idleStatus,
+      latest: idleLatest,
       run: () => json({ runId: 77 }),
       polls: [run("PENDING"), run("RUNNING"), run("TERMINATED", "SUCCESS")],
     });
@@ -98,7 +112,7 @@ describe("useScanNow", () => {
     await wait(4_999);
     expect(polls(calls)).toEqual([]);
     await wait(1);
-    expect(polls(calls)).toEqual(["GET /api/jobs/default/runs/77"]);
+    expect(polls(calls)).toEqual(["GET /api/scan/runs/77"]);
     expect(result.current.state).toEqual({ kind: "running", runId: 77, url: RUN_URL, alreadyRunning: false });
 
     await wait(5_000);
@@ -120,7 +134,7 @@ describe("useScanNow", () => {
     ["INTERNAL_ERROR", "FAILED", "FAILED"],
     ["TERMINATED", "FAILED", "FAILED"],
   ])("stops at %s and reports %s as the result", async (lifeCycle, resultState, shown) => {
-    mockJobs({ status: idleStatus, run: () => json({ runId: 77 }), polls: [run(lifeCycle, resultState)] });
+    mockJobs({ latest: idleLatest, run: () => json({ runId: 77 }), polls: [run(lifeCycle, resultState)] });
     const onDone = vi.fn();
     const { result } = renderHook(() => useScanNow(onDone));
     await act(() => result.current.start());
@@ -131,7 +145,7 @@ describe("useScanNow", () => {
 
   it("waits for a scan that was already running, then calls onDone", async () => {
     mockJobs({
-      status: () => json({ status: "RUNNING", run: { run_id: 77, run_page_url: RUN_URL, state: { life_cycle_state: "RUNNING" } } }),
+      latest: () => json({ run: scanRun(77, "RUNNING", null, RUN_URL) }),
       polls: [run("RUNNING"), run("TERMINATED", "SUCCESS")],
     });
     const onDone = vi.fn();
@@ -145,7 +159,7 @@ describe("useScanNow", () => {
   });
 
   it("reports a failed start with the server's message", async () => {
-    mockJobs({ status: idleStatus, run: () => json({ error: "Run failed", plugin: "jobs" }, 500) });
+    mockJobs({ latest: idleLatest, run: () => json({ error: "Run failed", plugin: "jobs" }, 500) });
     const onDone = vi.fn();
     const { result } = renderHook(() => useScanNow(onDone));
     await act(() => result.current.start());
@@ -155,17 +169,17 @@ describe("useScanNow", () => {
   });
 
   it("starts nothing when it cannot check for a running scan", async () => {
-    const calls = mockJobs({ status: () => json({ error: "Forbidden", plugin: "jobs" }, 403) });
+    const calls = mockJobs({ latest: () => json({ error: "forbidden", message: "The app's service principal cannot read the scan job's runs." }, 403) });
     const { result } = renderHook(() => useScanNow(vi.fn()));
     await act(() => result.current.start());
     expect(result.current.state.kind).toBe("error");
-    expect(result.current.state.kind === "error" ? result.current.state.message : "").toContain("Forbidden");
+    expect(result.current.state.kind === "error" ? result.current.state.message : "").toBe("Could not check for a running scan: The app's service principal cannot read the scan job's runs.");
     expect(calls.filter((call) => call.startsWith("POST"))).toEqual([]);
   });
 
   it("keeps polling through one failed poll, and gives up after three in a row", async () => {
-    const failed = () => json({ error: "Get run failed", plugin: "jobs" }, 500);
-    mockJobs({ status: idleStatus, run: () => json({ runId: 77 }), polls: [failed, run("RUNNING"), failed, failed, failed] });
+    const failed = () => json({ error: "jobs_api", message: "The Jobs API did not answer: Get run failed" }, 502);
+    mockJobs({ latest: idleLatest, run: () => json({ runId: 77 }), polls: [failed, run("RUNNING"), failed, failed, failed] });
     const { result } = renderHook(() => useScanNow(vi.fn()));
     await act(() => result.current.start());
     await wait(5_000);
@@ -177,19 +191,47 @@ describe("useScanNow", () => {
     expect(result.current.state.kind === "error" ? result.current.state.message : "").toContain("Get run failed");
   });
 
+  it("starts a scan when the scan job has never run", async () => {
+    const calls = mockJobs({ latest: () => json({ run: null }), run: () => json({ runId: 77 }), polls: [run("RUNNING")] });
+    const { result } = renderHook(() => useScanNow(vi.fn()));
+    await act(() => result.current.start());
+    expect(calls).toEqual(["GET /api/scan/latest-run", "POST /api/jobs/default/run"]);
+    expect(result.current.state).toEqual({ kind: "running", runId: 77, url: null, alreadyRunning: false });
+  });
+
+  it("a second click right after a POST, in another tab, sees the new run and makes no POST", async () => {
+    // One server for both tabs: the POST adds run 77, which the next read of the latest run returns at once.
+    let latest = idleLatest;
+    const calls = mockJobs({
+      latest: () => latest(),
+      run: () => {
+        latest = () => json({ run: scanRun(77, "PENDING", null, RUN_URL) });
+        return json({ runId: 77 });
+      },
+      polls: [run("RUNNING")],
+    });
+    const firstTab = renderHook(() => useScanNow(vi.fn()));
+    const secondTab = renderHook(() => useScanNow(vi.fn()));
+    await act(() => firstTab.result.current.start());
+    await act(() => secondTab.result.current.start());
+    expect(firstTab.result.current.state).toEqual({ kind: "running", runId: 77, url: null, alreadyRunning: false });
+    expect(secondTab.result.current.state).toEqual({ kind: "running", runId: 77, url: RUN_URL, alreadyRunning: true });
+    expect(calls.filter((call) => call.startsWith("POST"))).toEqual(["POST /api/jobs/default/run"]);
+  });
+
   it("ignores a second start while one is going", async () => {
-    const calls = mockJobs({ status: idleStatus, run: () => json({ runId: 77 }), polls: [run("RUNNING")] });
+    const calls = mockJobs({ latest: idleLatest, run: () => json({ runId: 77 }), polls: [run("RUNNING")] });
     const { result } = renderHook(() => useScanNow(vi.fn()));
     await act(async () => {
       await Promise.all([result.current.start(), result.current.start()]);
     });
     await act(() => result.current.start());
     expect(calls.filter((call) => call.startsWith("POST"))).toHaveLength(1);
-    expect(calls.filter((call) => call.endsWith("/status"))).toHaveLength(1);
+    expect(calls.filter((call) => call.endsWith("/api/scan/latest-run"))).toHaveLength(1);
   });
 
   it("can start again once a scan is done", async () => {
-    const calls = mockJobs({ status: idleStatus, run: () => json({ runId: 77 }), polls: [run("TERMINATED", "SUCCESS")] });
+    const calls = mockJobs({ latest: idleLatest, run: () => json({ runId: 77 }), polls: [run("TERMINATED", "SUCCESS")] });
     const { result } = renderHook(() => useScanNow(vi.fn()));
     await act(() => result.current.start());
     await wait(5_000);
@@ -199,7 +241,7 @@ describe("useScanNow", () => {
   });
 
   it("stops polling when the component goes away", async () => {
-    const calls = mockJobs({ status: idleStatus, run: () => json({ runId: 77 }), polls: [run("RUNNING")] });
+    const calls = mockJobs({ latest: idleLatest, run: () => json({ runId: 77 }), polls: [run("RUNNING")] });
     const { result, unmount } = renderHook(() => useScanNow(vi.fn()));
     await act(() => result.current.start());
     unmount();

@@ -24,30 +24,29 @@ const POLL_MS = 5_000;
 /** One failed poll is a blip; three in a row stop the watch. */
 const MAX_FAILED_POLLS = 3;
 
-/** The fields of an SDK Run that Scan now reads. */
-const Run = z.object({
+/** The fields of a run (server/scan/routes.ts sends ScanRun) that Scan now reads. */
+const ScanRun = z.object({
   run_id: z.number(),
-  run_page_url: z.string().nullish(),
-  state: z.object({ life_cycle_state: z.string().nullish(), result_state: z.string().nullish() }).nullish(),
+  life_cycle_state: z.string().nullable(),
+  result_state: z.string().nullable(),
+  run_page_url: z.string().nullable(),
 });
-type Run = z.infer<typeof Run>;
 
-/** GET /api/jobs/default/status: the newest run of the scan job, or null when it has never run. */
-const LatestRun = z.object({ status: z.string().nullable(), run: Run.nullable() });
-/** POST /api/jobs/default/run. */
+/** GET /api/scan/latest-run: the scan job's run that has not ended, else its newest run; null when it has never run. */
+const LatestRun = z.object({ run: ScanRun.nullable() });
+/** GET /api/scan/runs/:runId. */
+const OneRun = z.object({ run: ScanRun });
+/** POST /api/jobs/default/run (the AppKit jobs plugin). */
 const Started = z.object({ runId: z.number() });
 
-function lifeCycleOf(run: Run): string | null {
-  return run.state?.life_cycle_state ?? null;
-}
-
 /**
- * Scan now, through the AppKit jobs plugin (the job runs as the app's service
- * principal). It first reads the scan job's newest run: if that run has not
- * ended, it shows that run instead of starting another. Otherwise it starts a
- * run. Either way it polls the run every 5 s until it ends, then calls onDone
- * once. The plugin caches run reads for up to 60 s, so a state change can
- * show up to a minute late.
+ * Scan now. It first reads the scan job's latest run from the app's own
+ * uncached route (the jobs plugin caches run reads for 60 s): if a run has not
+ * ended, it shows that run instead of starting another, so a second click, even
+ * from another tab right after a start, starts nothing. Otherwise it starts a
+ * run through the jobs plugin (as the app's service principal). Either way it
+ * polls the run every 5 s, from the same uncached route, until it ends, then
+ * calls onDone once.
  */
 export function useScanNow(onDone: () => void): ScanNow {
   const [state, setState] = useState<ScanState>({ kind: "idle" });
@@ -76,14 +75,14 @@ export function useScanNow(onDone: () => void): ScanNow {
     const poll = async () => {
       timer.current = null;
       try {
-        const run = await apiFetch(`/api/jobs/default/runs/${runId}`, Run);
+        const { run } = await apiFetch(`/api/scan/runs/${runId}`, OneRun);
         if (!alive.current) return;
         failedPolls = 0;
         url = run.run_page_url ?? url;
-        const lifeCycle = lifeCycleOf(run);
+        const lifeCycle = run.life_cycle_state;
         if (lifeCycle !== null && ENDED.has(lifeCycle)) {
           busy.current = false;
-          setState({ kind: "done", result: run.state?.result_state ?? lifeCycle, url });
+          setState({ kind: "done", result: run.result_state ?? lifeCycle, url });
           onDoneRef.current();
           return;
         }
@@ -109,7 +108,7 @@ export function useScanNow(onDone: () => void): ScanNow {
 
     let latest: z.infer<typeof LatestRun>;
     try {
-      latest = await apiFetch("/api/jobs/default/status", LatestRun);
+      latest = await apiFetch("/api/scan/latest-run", LatestRun);
     } catch (error) {
       if (!alive.current) return;
       busy.current = false;
@@ -119,9 +118,8 @@ export function useScanNow(onDone: () => void): ScanNow {
     if (!alive.current) return;
 
     const newest = latest.run;
-    const newestState = newest === null ? latest.status : (lifeCycleOf(newest) ?? latest.status);
-    if (newest !== null && newestState !== null && ACTIVE.has(newestState)) {
-      const url = newest.run_page_url ?? null;
+    if (newest !== null && newest.life_cycle_state !== null && ACTIVE.has(newest.life_cycle_state)) {
+      const url = newest.run_page_url;
       setState({ kind: "running", runId: newest.run_id, url, alreadyRunning: true });
       watch(newest.run_id, url, true);
       return;
@@ -162,4 +160,14 @@ const RESULTS: Record<string, string> = {
 /** A run's result_state (or life cycle state) in words. */
 export function scanResultLabel(result: string): string {
   return RESULTS[result] ?? result.charAt(0) + result.slice(1).toLowerCase().replaceAll("_", " ");
+}
+
+/** How a finished scan's result reads: success in the usual muted text, a failure in the failed tone, anything else in the warning tone. */
+export type ScanResultTone = "muted" | "warning" | "failed";
+
+const FAILED_RESULTS = new Set(["FAILED", "TIMEDOUT", "INTERNAL_ERROR", "UPSTREAM_FAILED"]);
+
+export function scanResultTone(result: string): ScanResultTone {
+  if (result === "SUCCESS") return "muted";
+  return FAILED_RESULTS.has(result) ? "failed" : "warning";
 }

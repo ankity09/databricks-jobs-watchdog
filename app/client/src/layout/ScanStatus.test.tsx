@@ -37,19 +37,33 @@ function freshness(minutes: number) {
 }
 
 const RUN_URL = "https://workspace.example.com/jobs/1/runs/77";
-const OTHER_RUN = { run_id: 55, run_page_url: "https://workspace.example.com/jobs/1/runs/55", state: { life_cycle_state: "RUNNING" } };
 
-function run(lifeCycle: string, resultState?: string) {
-  return json({ run_id: 77, job_id: 1, run_page_url: RUN_URL, state: { life_cycle_state: lifeCycle, ...(resultState ? { result_state: resultState } : {}) } });
+/** A run as server/scan/routes.ts sends it. */
+function scanRun(runId: number, lifeCycle: string, resultState: string | null = null) {
+  return {
+    run_id: runId,
+    life_cycle_state: lifeCycle,
+    result_state: resultState,
+    trigger: "ONE_TIME",
+    start_time: "2026-11-05T05:20:00.000Z",
+    end_time: null,
+    run_page_url: `https://workspace.example.com/jobs/1/runs/${runId}`,
+  };
 }
 
-/** The jobs plugin routes: no scan running, a start that gives run 77, and polls that walk through `polls`. */
+const OTHER_RUN = scanRun(55, "RUNNING");
+
+function run(lifeCycle: string, resultState?: string) {
+  return json({ run: scanRun(77, lifeCycle, resultState ?? null) });
+}
+
+/** Scan now's routes: no scan running, a start that gives run 77, and polls that walk through `polls`. */
 function jobsRoutes(polls: Array<() => Response>): MockApiOptions["routes"] {
   let poll = 0;
   return (url, init) => {
-    if (url === "/api/jobs/default/status") return json({ status: "TERMINATED", run: null });
+    if (url === "/api/scan/latest-run") return json({ run: null });
     if (url === "/api/jobs/default/run" && init?.method === "POST") return json({ runId: 77 });
-    if (url === "/api/jobs/default/runs/77") {
+    if (url === "/api/scan/runs/77") {
       const answer = polls[Math.min(poll, polls.length - 1)];
       poll += 1;
       return answer?.();
@@ -169,10 +183,30 @@ describe("ScanStatus", () => {
     expect(refreshes.at(-1)).toBeGreaterThan(refreshes[0] ?? 0);
   });
 
+  it.each([
+    ["SUCCESS", "Done: Succeeded.", "muted"],
+    ["FAILED", "Done: Failed.", "failed"],
+    ["TIMEDOUT", "Done: Timed out.", "failed"],
+    ["SUCCESS_WITH_FAILURES", "Done: Succeeded with failures.", "warning"],
+    ["CANCELED", "Done: Canceled.", "warning"],
+  ])("shows a scan that ended %s in its status tone", async (result, text, tone) => {
+    scanClock("2026-11-05T14:40:00Z");
+    const scanned = freshness(20);
+    mockApi({ queries: { scan_freshness: scanned }, routes: jobsRoutes([() => run("TERMINATED", result)]) });
+    const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+    renderScanStatus();
+    await screen.findByText("Last scan 20 min ago");
+    await user.click(screen.getByRole("button", { name: "Scan now" }));
+    await skip(5_000);
+    const line = (await screen.findByText(text)).closest("p");
+    expect(line).toHaveAttribute("data-tone", tone);
+    expect(line).toHaveClass({ muted: "text-muted-foreground", failed: "text-destructive", warning: "text-warning" }[tone] ?? "");
+  });
+
   it("shows Starting while it checks for a running scan", async () => {
     setClock("2026-11-05T15:30:00Z");
     const neverAnswers = new Promise<Response>(() => undefined);
-    mockApi({ queries: { scan_freshness: freshness(20) }, routes: (url) => (url === "/api/jobs/default/status" ? neverAnswers : undefined) });
+    mockApi({ queries: { scan_freshness: freshness(20) }, routes: (url) => (url === "/api/scan/latest-run" ? neverAnswers : undefined) });
     const user = userEvent.setup();
     renderScanStatus();
     await screen.findByText("Last scan 20 min ago");
@@ -187,7 +221,7 @@ describe("ScanStatus", () => {
       queries: { scan_freshness: freshness(20) },
       routes: (url, init) => {
         if (init?.method === "POST") posts.push(url);
-        if (url === "/api/jobs/default/status") return json({ status: "RUNNING", run: OTHER_RUN });
+        if (url === "/api/scan/latest-run") return json({ run: OTHER_RUN });
         return undefined;
       },
     });
@@ -207,7 +241,7 @@ describe("ScanStatus", () => {
     mockApi({
       queries: { scan_freshness: freshness(20) },
       routes: (url, init) => {
-        if (url === "/api/jobs/default/status") return json({ status: null, run: null });
+        if (url === "/api/scan/latest-run") return json({ run: null });
         if (url === "/api/jobs/default/run" && init?.method === "POST") {
           posts += 1;
           return json({ error: "Forbidden", plugin: "jobs" }, 403);
@@ -269,6 +303,19 @@ describe("ScanStatus", () => {
       expect(screen.queryByText("Last scan 12 min ago")).toBeNull();
     });
 
+    it("lets a keyboard reach the dot, whose tooltip says when the last scan ran", async () => {
+      setClock("2026-11-05T20:40:00Z");
+      mockApi({ queries: { scan_freshness: freshness(12) } });
+      const user = userEvent.setup();
+      renderScanStatus({ open: false });
+      const dot = await screen.findByRole("img", { name: /^Last scan/ });
+      await user.tab();
+      expect(dot).toHaveFocus();
+      expect(await screen.findByRole("tooltip")).toHaveTextContent("Last scan 2026-11-05 20:28 UTC, 12 min ago");
+      await user.tab();
+      expect(screen.getByRole("button", { name: "Scan now" })).toHaveFocus();
+    });
+
     it("has Retry when the last scan is unknown", async () => {
       setClock("2026-11-05T21:30:00Z");
       let fail = true;
@@ -286,7 +333,7 @@ describe("ScanStatus", () => {
       setClock("2026-11-05T22:30:00Z");
       mockApi({
         queries: { scan_freshness: freshness(12) },
-        routes: (url) => (url === "/api/jobs/default/status" ? json({ status: "RUNNING", run: OTHER_RUN }) : undefined),
+        routes: (url) => (url === "/api/scan/latest-run" ? json({ run: OTHER_RUN }) : undefined),
       });
       const user = userEvent.setup();
       renderScanStatus({ open: false });
