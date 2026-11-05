@@ -9,8 +9,9 @@ below. Job parameters override the defaults when the notebooks run as a job.
 from pathlib import Path
 from types import SimpleNamespace
 
-from jobs_watchdog.config import AUTH_MODES, load_accelerator
+from jobs_watchdog.config import AUTH_MODES, CONFIG_SOURCES, load_accelerator
 from jobs_watchdog.identifiers import validate_identifier
+from jobs_watchdog.lakebase_source import LakebaseSourceError, LakebaseTarget
 
 # widget name: (accelerator.yaml section, key, built-in default)
 WIDGETS = {
@@ -27,6 +28,10 @@ WIDGETS = {
     "code_version_tag": ("scan", "code_version_tag", "code_version"),
     "pipeline_url_parameter": ("scan", "pipeline_url_parameter", "PIPELINE_URL"),
     "retention_days": ("scan", "retention_days", "30"),
+    "config_source": ("scan", "config_source", "yaml"),
+    "lakebase_project_id": ("app", "lakebase_project_id", "jobs-watchdog"),
+    "lakebase_branch": (None, None, "production"),
+    "lakebase_database": (None, None, "watchdog"),
 }
 
 
@@ -79,6 +84,16 @@ def read_settings(values, repo_root):
             raise ValueError(f"auth_mode must be one of {sorted(AUTH_MODES)}, got {settings['auth_mode']!r}")
         if settings["auth_mode"] == "service_principal" and not settings.get("secret_scope"):
             raise ValueError("service_principal mode needs secret_scope: the secret scope holding the OAuth secret")
+    if "config_source" in settings and settings["config_source"] not in CONFIG_SOURCES:
+        raise ValueError(f"config_source must be one of {sorted(CONFIG_SOURCES)}, got {settings['config_source']!r}")
+    lakebase = {"project_id": "jobs-watchdog", "branch": "production", "database": "watchdog"}
+    given = {key: settings[f"lakebase_{key}"] for key in lakebase if f"lakebase_{key}" in settings}
+    if given:
+        # LakebaseTarget holds the one set of rules for these names; any not given use the defaults
+        try:
+            LakebaseTarget(**(lakebase | given))
+        except LakebaseSourceError as err:
+            raise ValueError(str(err)) from err
     if "monitored_jobs_path" in settings:
         path = Path(settings["monitored_jobs_path"])
         settings["monitored_jobs_path"] = path if path.is_absolute() else Path(repo_root) / path

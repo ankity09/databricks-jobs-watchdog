@@ -9,6 +9,8 @@ from jobs_watchdog.config import (
     load_accelerator,
     load_monitored_jobs,
     load_monitored_workspaces,
+    parse_monitored_jobs,
+    parse_monitored_workspaces,
 )
 
 REPO = Path(__file__).resolve().parents[1]
@@ -473,3 +475,16 @@ def test_a_gap_limit_from_defaults_does_not_apply_to_continuous_jobs(tmp_path):
     # a scheduled job's gap between runs (hours) is not a stream's allowed downtime (minutes)
     jobs, _ = load_monitored_jobs(write(tmp_path, "defaults:\n  max_gap_minutes: 1440\njobs:" + VALID_JOB))
     assert jobs[0].max_gap_minutes == 30
+
+
+def test_a_document_from_any_source_gets_the_same_rules():
+    data = {"jobs": [{"job_name": "orders_ingest", "max_gap_minutes": 60}],
+            "workspaces": [{"workspace_id": 123, "environment": "lower"}]}
+    jobs, deps = parse_monitored_jobs(data, "Lakebase job list version 3")
+    assert [j.job_name for j in jobs] == ["orders_ingest"] and deps == []
+    assert parse_monitored_workspaces(data, "Lakebase job list version 3")[0].workspace_id == "123"
+
+
+def test_errors_name_the_source():
+    with pytest.raises(ConfigError, match="Lakebase job list version 3 lists no jobs"):
+        parse_monitored_jobs({"jobs": []}, "Lakebase job list version 3")

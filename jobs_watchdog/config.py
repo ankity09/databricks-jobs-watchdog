@@ -272,23 +272,23 @@ def _parse_dependency(raw, job_names):
     return Dependency(job_name, depends_on, dependency_type, str(raw.get("notes") or ""))
 
 
-def load_monitored_jobs(path):
-    """Return (jobs, dependencies) from a monitored-jobs YAML file.
+def parse_monitored_jobs(data, source):
+    """Return (jobs, dependencies) from a monitored-jobs document already read into a dict.
 
     The optional top-level defaults section fills every key a job leaves out.
     A job's environments section overrides settings for one environment label,
-    and each label must be defined in the workspaces section.
+    and each label must be defined in the workspaces section. source names where
+    the document came from, for error messages.
     """
-    data = _read_yaml(path)
     defaults = _parse_defaults(data.get("defaults"))
     labels = {_parse_workspace(raw).environment for raw in data.get("workspaces") or []}
     jobs = [_parse_job(raw, defaults, labels) for raw in data.get("jobs") or []]
     if not jobs:
-        raise ConfigError(f"{path} lists no jobs")
+        raise ConfigError(f"{source} lists no jobs")
     seen = set()
     for job in jobs:
         if job.job_name in seen:
-            raise ConfigError(f"duplicate job_name {job.job_name!r} in {path}")
+            raise ConfigError(f"duplicate job_name {job.job_name!r} in {source}")
         seen.add(job.job_name)
     deps = [_parse_dependency(raw, seen) for raw in data.get("dependencies") or []]
     parents = {}
@@ -300,6 +300,11 @@ def load_monitored_jobs(path):
                               f"{dep.depends_on}; a job can have only one parent")
         parents[dep.job_name] = dep.depends_on
     return jobs, deps
+
+
+def load_monitored_jobs(path):
+    """Return (jobs, dependencies) from a monitored-jobs YAML file."""
+    return parse_monitored_jobs(_read_yaml(path), str(path))
 
 
 _ENVIRONMENT = re.compile(r"[A-Za-z0-9_-]+")
@@ -325,9 +330,8 @@ def _parse_workspace(raw):
     return MonitoredWorkspace(workspace_id, workspace_name, str(environment), str(raw.get("notes") or ""))
 
 
-def load_monitored_workspaces(path):
-    """The optional workspaces section of a monitored-jobs file: an environment per workspace."""
-    data = _read_yaml(path)
+def parse_monitored_workspaces(data, source):
+    """The optional workspaces section of a monitored-jobs document: an environment per workspace."""
     workspaces = [_parse_workspace(raw) for raw in data.get("workspaces") or []]
     seen = set()
     for workspace in workspaces:
@@ -336,9 +340,14 @@ def load_monitored_workspaces(path):
             if key[1] is None:
                 continue
             if key in seen:
-                raise ConfigError(f"workspace {key[1]} is listed twice in {path}")
+                raise ConfigError(f"workspace {key[1]} is listed twice in {source}")
             seen.add(key)
     return workspaces
+
+
+def load_monitored_workspaces(path):
+    """The optional workspaces section of a monitored-jobs file: an environment per workspace."""
+    return parse_monitored_workspaces(_read_yaml(path), str(path))
 
 
 def load_accelerator(path, require_complete=False):
