@@ -211,3 +211,13 @@ def test_teardown_runs_the_destroy_for_an_accelerator_file_without_a_warehouse(s
     result = subprocess.run(["bash", str(sandbox / "teardown.sh"), "-y"], capture_output=True, text=True, env=env)
     assert result.returncode == 0, result.stderr
     assert "bundle destroy -t dev --auto-approve warehouse=unused-for-teardown" in log.read_text().splitlines()
+
+
+def test_config_option_reads_another_accelerator_file(sandbox):
+    other = sandbox / "accelerator.prod-eu.yaml"
+    other.write_text(ACCELERATOR.replace("schema: watchdog", "schema: other_schema"))
+    result, calls = run(sandbox, ["findings", "monitored_jobs", "job_dependencies"], "-t", "production", "-c", str(other),
+                        "--drop-schema", "-y")
+    assert result.returncode == 0, result.stderr
+    assert "schemas delete main.other_schema --force" in calls
+    assert any(call.startswith("bundle destroy -t production --auto-approve") for call in calls)

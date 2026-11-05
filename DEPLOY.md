@@ -19,7 +19,7 @@ Ask for each value **one at a time**. Offer the default where there is one, and 
 
 1. **catalog** (required): the catalog that will hold the Watchdog schema. The operator needs `USE CATALOG` and `CREATE SCHEMA` on it, or, when the schema already exists, `USE CATALOG` on the catalog plus `USE SCHEMA`, `CREATE TABLE`, `SELECT` and `MODIFY` on the schema.
 2. **schema** (default `watchdog`): the schema for the five Watchdog tables and the `findings_latest` view.
-3. **region** (required): the cloud region of this workspace's metastore, for example `us-east-2`. `SELECT current_metastore()` usually shows it in the form `<cloud>:<region>:<id>`. It is recorded on every finding. A Watchdog sees only the workspaces in its own region, so run one per region.
+3. **region** (required): the cloud region of this workspace's metastore, for example `us-east-2`. `SELECT current_metastore()` usually shows it in the form `<cloud>:<region>:<id>`. It is recorded on every finding. A Watchdog sees only the workspaces in its own region, so run one per region ([docs/multi-region.md](docs/multi-region.md) shows how to deploy several from one repo).
 4. **auth mode** (default `current_workspace`):
    - `current_workspace`: the Jobs API scan checks only this workspace, as the identity running the notebooks or the job.
    - `service_principal`: the Jobs API scan checks every workspace in the region that has jobs, signing in as a service principal.

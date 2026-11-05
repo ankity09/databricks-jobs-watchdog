@@ -9,6 +9,7 @@ __pycache__/
 
 # Local-only config (never commit real workspace values)
 accelerator.local.yaml
+accelerator.*.local.yaml
 config/*.local.yml
 
 # Execution scratch
