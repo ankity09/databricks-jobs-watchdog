@@ -238,7 +238,7 @@ function checkJobIds(c: Collector, path: string, raw: unknown, where: string): v
       c.add(path, `${where}: job_ids must be whole numbers, got ${pyRepr(value)}`);
       return;
     }
-    const text = String(value).trim();
+    const text = pyStrip(String(value));
     if (!isDigits(text)) {
       c.add(path, `${where}: job_ids must be whole numbers, got ${pyRepr(value)}`);
       return;

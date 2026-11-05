@@ -174,6 +174,11 @@ describe("raw parse messages", () => {
     expect(ids([true])[0].message).toContain("got True");
     expect(ids([1n, 1n])[0].message).toBe("job a: job ID 1 is listed twice");
   });
+  it("job IDs are stripped the way Python's strip() does, not trim()", () => {
+    const ids = (v: unknown[]) => validateDocument({ jobs: [{ job_name: "a", max_gap_minutes: 1, job_ids: v }] });
+    expect(ids(["\x1c123\x85"])).toEqual([]);
+    expect(ids(["\ufeff123"])[0].message).toBe("job a: job_ids must be whole numbers, got '\ufeff123'");
+  });
   it("a float workspace_id is not digits", () => {
     const issues = validateDocument({ workspaces: [{ workspace_id: new PyFloat(12), environment: "p" }], jobs: [{ job_name: "a", max_gap_minutes: 1 }] });
     expect(issues[0].message).toBe("workspace 12.0: workspace_id must be digits, got '12.0'");
