@@ -1,0 +1,99 @@
+@import "tailwindcss";
+@import "@databricks/appkit-ui/styles.css";
+@import "@fontsource/dm-sans/400.css";
+@import "@fontsource/dm-sans/500.css";
+@import "@fontsource/dm-sans/600.css";
+@import "@fontsource/dm-sans/700.css";
+@import "@fontsource/dm-mono/400.css";
+@import "@fontsource/dm-mono/500.css";
+
+/*
+ * Light theme only, in the Databricks workspace (DuBois) colors. The dark
+ * values are overridden with the light ones below, index.html sets class="light"
+ * so appkit-ui's dark media block never applies, and dark: utilities only
+ * match a .dark class, which the app never sets.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "DM Sans", sans-serif;
+  --font-mono: "DM Mono", monospace;
+}
+
+:root,
+.dark {
+  --background: #FFFFFF;
+  --card: #FFFFFF;
+  --popover: #FFFFFF;
+  --foreground: #1B3139;
+  --card-foreground: #1B3139;
+  --popover-foreground: #1B3139;
+  --secondary-foreground: #1B3139;
+  --accent-foreground: #1B3139;
+  --primary: #FF3621;
+  --ring: #FF3621;
+  --sidebar-primary: #FF3621;
+  --sidebar-ring: #FF3621;
+  --primary-foreground: #FFFFFF;
+  --sidebar-primary-foreground: #FFFFFF;
+  --secondary: #EEEDE9;
+  --accent: #EEEDE9;
+  --sidebar-accent: #EEEDE9;
+  --muted: #F7F7F5;
+  --sidebar: #F7F7F5;
+  --muted-foreground: #5F7281;
+  --border: #E3E2DE;
+  --sidebar-border: #E3E2DE;
+  --input: #D7D6D2;
+  --destructive: #C42B1C;
+  --warning: #B26B00;
+  --success: #1E7F4F;
+  --sidebar-foreground: #1B3139;
+  --sidebar-accent-foreground: #1B3139;
+  --radius: 0.375rem;
+}
+
+/* appkit-ui's dark block uses :root:not(.light), so the override needs that selector to win. */
+@media (prefers-color-scheme: dark) {
+  :root,
+  :root:not(.light) {
+    color-scheme: light;
+    --background: #FFFFFF;
+    --card: #FFFFFF;
+    --popover: #FFFFFF;
+    --foreground: #1B3139;
+    --card-foreground: #1B3139;
+    --popover-foreground: #1B3139;
+    --secondary-foreground: #1B3139;
+    --accent-foreground: #1B3139;
+    --primary: #FF3621;
+    --ring: #FF3621;
+    --sidebar-primary: #FF3621;
+    --sidebar-ring: #FF3621;
+    --primary-foreground: #FFFFFF;
+    --sidebar-primary-foreground: #FFFFFF;
+    --secondary: #EEEDE9;
+    --accent: #EEEDE9;
+    --sidebar-accent: #EEEDE9;
+    --muted: #F7F7F5;
+    --sidebar: #F7F7F5;
+    --muted-foreground: #5F7281;
+    --border: #E3E2DE;
+    --sidebar-border: #E3E2DE;
+    --input: #D7D6D2;
+    --destructive: #C42B1C;
+    --warning: #B26B00;
+    --success: #1E7F4F;
+    --sidebar-foreground: #1B3139;
+    --sidebar-accent-foreground: #1B3139;
+    --radius: 0.375rem;
+  }
+}
+
+html {
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: light;
+}
