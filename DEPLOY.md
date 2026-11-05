@@ -104,7 +104,44 @@ Known degradations:
 | The schema cannot be created | Stop. A catalog owner or metastore admin must grant `CREATE SCHEMA`, or create the schema and grant access to it. |
 | System tables unreadable | Stop. A metastore admin must grant access to `system.lakeflow`. |
 
-## Step 6. Verify
+## Step 6. Install the app
+
+The bundle deploys the Watchdog app, its Lakebase project and the copilot's Genie agent in step 5. This step puts your job list in the app and points the scan at it. [docs/app.md](docs/app.md) explains the app.
+
+**Prerequisites.** Check these before step 5, and report any that fail:
+
+- Databricks Apps, Lakebase and Genie are turned on in the workspace, and the operator may create an app, a Lakebase project and a Genie space.
+- User authorization for apps is on, with the `sql` and `dashboards.genie` scopes allowed. A workspace admin sets this. The app cannot start without it, and it has no fallback.
+- `target.warehouse_id` names a Pro or Serverless SQL warehouse. A Classic warehouse fails the first deploy at the Genie agent.
+- The schema and its tables exist before the first `bundle deploy`, because the Genie agent cannot be created over a schema that does not exist. `scripts/ensure_tables.py` does this (step 5, path B). It is safe to run again.
+- The people who will use the app have the grants in [Who can use the app](docs/multi-region.md#who-can-use-the-app): access to the app (the bundle gives `CAN USE` to `app.users_group`), `CAN USE` on the warehouse, `SELECT` on the Watchdog schema, and `SELECT` on `system.lakeflow.jobs` and `system.access.workspaces_latest` for the job picker. Without these, Monitoring and the picker show a message that names the missing table.
+- Serverless compute can install `psycopg` from PyPI or your package mirror. The scan needs it only when it reads the job list from the app.
+
+**A fresh workspace.** The first deploy into a workspace that has never had a Watchdog needs `target.warehouse_id` set (the deploy fails without it), the tables created first (above), and the app's name and Lakebase project ID to be free: they must be unique in the workspace, so there is one install per workspace.
+
+**The steps, in order.**
+
+1. Set `target.warehouse_id` in `accelerator.local.yaml`.
+2. Deploy, then start the app. Step 5, path B, runs these commands; the two that matter here are:
+
+   ```bash
+   databricks bundle deploy -t dev --profile <profile>
+   databricks bundle run watchdog_app -t dev --profile <profile>
+   ```
+
+   `bundle run watchdog_app` deploys the app's code and starts it. The platform installs the app's packages and builds it, so the workspace needs access to an npm registry or a mirror. The first start creates the app's Lakebase schema.
+3. Open the app (the `watchdog_app` link in the Apps page) and go to Jobs and dependencies, then Job list. Click Import YAML, choose your monitored-jobs file, read the preview of the differences, and confirm. A file that breaks a rule is not imported, and the message names the job and the field.
+4. Set `scan.config_source: lakebase` in `accelerator.local.yaml`, run the `eval "$(python3 scripts/bundle_vars.py --export accelerator.local.yaml)"` line again, and deploy again. Run `watchdog_scan` once, or click Scan now in the app. The banner on the Job list should clear, and the `config_loads` table should have an `OK` row with `source` `lakebase`. Keep `scan.schedule_status` at `PAUSED` until the app holds the job list: with `lakebase`, a scan fails at its first step until it does.
+
+Until step 4, the scan keeps reading the YAML file, and the app says so in a banner. To go back, set `scan.config_source` to `yaml` and deploy again. Export YAML in the app gives you the newest list as a file.
+
+**Teardown and a redeploy.** Step 8 has the commands.
+
+- A plain teardown deletes the app, the Genie agent (and everyone's copilot conversations) and the jobs. It keeps the Lakebase project with the job list.
+- `--drop-lakebase` also deletes the project and the job list, after the operator types the project ID. Export the list first if you want it.
+- A redeploy after a plain teardown needs a second step: the new app has a new service principal, and it cannot use the kept job list until it gets access. Teardown prints the commands: bind the kept Lakebase resources, deploy, run the app, then run `databricks bundle run watchdog_app_access -t <target>`. [Deploy again after a teardown](docs/multi-region.md#deploy-again-after-a-teardown) explains each one. Say plainly to the operator that a full teardown and redeploy has not been run end to end. The grant, the access check and the cache-schema step were tested piece by piece on Lakebase branches, and the page lists the checks to run after the first real redeploy.
+
+## Step 7. Verify
 
 Run `notebooks/07_validate_phase_1` with the same `catalog` and `schema`, and the `scan_id` from step 5 (or empty, to check each source's newest scan). Print its PASS and FAIL lines. All five should pass:
 
@@ -127,7 +164,7 @@ For the current status of every check, query `<catalog>.<schema>.findings_latest
 
 System tables run about an hour behind. A job created in the last hour shows `not_found` from the system tables while the Jobs API already reports it. Run notebook 05 again later to see it.
 
-## Step 7. Teardown
+## Step 8. Teardown
 
 Point the operator at `teardown.sh`:
 

@@ -155,7 +155,7 @@ Notebook 02 adds one row every time it loads the job list, whether the load work
 | Column | Type | Meaning |
 |---|---|---|
 | `loaded_at` | TIMESTAMP | when the load ran, in UTC |
-| `scan_id` | STRING | the scan the load belongs to (the job's run ID) |
+| `scan_id` | STRING | the scan the load belongs to (the job's run ID, or a new ID for a run by hand) |
 | `source` | STRING | `yaml` (the monitored-jobs file) or `lakebase` (the list saved in the Watchdog app) |
 | `source_ref` | STRING | the file's path, or the Lakebase database's path |
 | `version` | BIGINT | the app's job list version; empty for YAML |
@@ -164,6 +164,36 @@ Notebook 02 adds one row every time it loads the job list, whether the load work
 | `error` | STRING | why the load failed, for example a rule the list breaks or a package that could not be installed; empty when it worked |
 
 A serverless run that retries its task writes one row per attempt, with the same `scan_id`; the newest row is the one that counts.
+
+## The job-list document
+
+The Watchdog app keeps the job list in Lakebase, not in Delta. It is one row per saved version in `watchdog_app.job_list_versions` (database `watchdog`), described in [app.md](app.md#what-the-app-stores). The row's `document` column holds the whole list as JSON, in the same shape as the YAML file: the same four sections and exactly the keys the Python loader accepts, so import and export are exact.
+
+```json
+{
+  "defaults": {"severity": "WARNING", "owner": "data-platform", "job_name_exclude_regex": "_test(_|$)"},
+  "workspaces": [{"workspace_name": "prod-workspace", "environment": "production"}],
+  "jobs": [
+    {
+      "job_name": "orders_ingest",
+      "job_name_regex": "^orders_ingest$",
+      "schedule_type": "scheduled",
+      "max_gap_minutes": 60,
+      "severity": "CRITICAL",
+      "environments": {"lower": {"severity": "WARNING"}}
+    }
+  ],
+  "dependencies": [{"job_name": "orders_report", "depends_on": "orders_ingest", "dependency_type": "job"}]
+}
+```
+
+- `defaults` is optional and holds any job setting except `job_name`, `job_name_regex`, `environments` and `job_ids`.
+- `workspaces` is optional. Each entry has an `environment` and a `workspace_id` or a `workspace_name`.
+- `jobs` is required. Each job's `environments` section sits inside the job, and `job_ids` is a list of strings.
+- `dependencies` is optional. `dependency_type` is `job`, `child_job` or `service`.
+- Text settings are stored as the text the Python loader reads. A job named `2024` is the text `2024`, and a job ID is always a string.
+
+Notebook 02 reads the newest version, checks it with the same rules as a YAML file, fills in the defaults and writes the same four config tables. `config_loads` records which version it loaded. The sections and keys are those described in the tables above.
 
 ## findings
 
