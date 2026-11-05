@@ -5,6 +5,18 @@ import type { SQLTypeMarker, SQLStringMarker, SQLNumberMarker, SQLBooleanMarker,
 
 declare module "@databricks/appkit-ui/react" {
   interface QueryRegistry {
+    config_load_latest: {
+        name: "config_load_latest";
+        parameters: {
+          /** STRING - use sql.string() */
+          catalog: SQLStringMarker;
+          /** STRING - use sql.string() */
+          schema: SQLStringMarker;
+          /** INT - use sql.int() */
+          refresh: SQLNumberMarker;
+        };
+        result: unknown;
+      };
     job_live_status: {
         name: "job_live_status";
         parameters: {
@@ -28,6 +40,21 @@ declare module "@databricks/appkit-ui/react" {
           refresh: SQLNumberMarker;
         };
         result: unknown;
+      };
+    workspaces: {
+        name: "workspaces";
+        parameters: {
+          /** INT - use sql.int() */
+          refresh: SQLNumberMarker;
+        };
+        result: Array<{
+          /** @sqlType STRING */
+          workspace_id: string;
+          /** The human-readable name of the workspace. */
+          workspace_name: string;
+          /** Lifecycle status of the workspace: NOT_PROVISIONED | PROVISIONING | RUNNING | FAILED | BANNED */
+          status: string;
+        }>;
       };
   }
 }
