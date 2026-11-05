@@ -1,12 +1,21 @@
 /**
  * Does a pattern compile with Python's re? The Python loader checks every
  * job_name_regex and job_name_exclude_regex with re.compile, and JavaScript's
- * RegExp accepts and refuses different patterns (it refuses (?i) and (?>a); it
+ * RegExp accepts and refuses different patterns (it refuses (?i) and (?P<x>a); it
  * accepts \p{L}, \k<x>, (?<name>a), [] and a look-behind of any width). So this
- * is a port of CPython 3.14's parser (re/_parser.py) and of the one check its
+ * is a port of CPython's parser (re/_parser.py) and of the one check its
  * compiler adds (re/_compiler.py: a look-behind must have a fixed width). It
- * only checks syntax; nothing here matches text. tests/fixtures/regex-patterns.json
- * pins it against Python's re (pytest checks the file, vitest checks this port).
+ * only checks syntax; nothing here matches text.
+ *
+ * Which Python? The scan runs on serverless compute, whose Python can be as old
+ * as 3.10 (the default notebook environment is 3.10.12 in our test workspace).
+ * So a pattern passes only when Python 3.10 and every later version up to 3.14
+ * compile it, and the message is that of the newest version that refuses it.
+ * In practice: no atomic groups (?>...) and no possessive repeats (a*+), which
+ * 3.10 lacks; no \z, which only 3.14 has; and inline global flags only at the
+ * start, as 3.11 and later require. tests/fixtures/regex-patterns.json pins this
+ * per Python version (pytest checks it on the Python it runs on, vitest checks
+ * this port).
  *
  * The one gap: a \N{...} character name. Python looks the name up in its
  * Unicode database, which JavaScript does not have, so the app refuses every
@@ -47,7 +56,8 @@ const isIdentifier = (name: string): boolean => /^[\p{XID_Start}_]\p{XID_Continu
 const ESCAPES = new Map([["\\a", 7], ["\\b", 8], ["\\f", 12], ["\\n", 10], ["\\r", 13], ["\\t", 9], ["\\v", 11], ["\\\\", 92]]);
 /** Escapes for a class of characters (usable in a set) or a position (not in a set). */
 const CATEGORY_SETS = new Set(["\\d", "\\D", "\\s", "\\S", "\\w", "\\W"]);
-const CATEGORY_POSITIONS = new Set(["\\A", "\\b", "\\B", "\\z", "\\Z"]);
+/** \z is 3.14's; Python 3.10 to 3.13 refuse it, so it is left out. */
+const CATEGORY_POSITIONS = new Set(["\\A", "\\b", "\\B", "\\Z"]);
 
 /** Python's len(): code points, not UTF-16 units. */
 const len = (text: string): number => Array.from(text).length;
@@ -94,7 +104,6 @@ type Node =
   | { op: "AT" }
   | { op: "BRANCH"; items: SubPattern[] }
   | { op: "SUBPATTERN"; group: number | null; addFlags: number; delFlags: number; p: SubPattern }
-  | { op: "ATOMIC_GROUP"; p: SubPattern }
   | { op: "REPEAT"; min: bigint; max: bigint; item: SubPattern }
   | { op: "GROUPREF"; group: number }
   | { op: "GROUPREF_EXISTS"; group: number; yes: SubPattern; no: SubPattern | null }
@@ -163,7 +172,6 @@ class SubPattern {
           hi += j;
           break;
         }
-        case "ATOMIC_GROUP":
         case "SUBPATTERN": {
           const [i, j] = node.p.getwidth();
           lo += i;
@@ -474,7 +482,8 @@ function parseRepeat(source: Tokenizer, sub: SubPattern, thisToken: string): boo
   let item = new SubPattern(sub.state);
   item.data.push(last);
   if (last.op === "SUBPATTERN" && last.group === null && !last.addFlags && !last.delFlags) item = last.p;
-  if (!source.match("?")) source.match("+"); // lazy or possessive: the same width
+  // A lazy repeat (a*?). A possessive one (a*+) is 3.11's: Python 3.10 reads the + as a second repeat.
+  source.match("?");
   sub.data[sub.data.length - 1] = { op: "REPEAT", min, max, item };
   return true;
 }
@@ -482,7 +491,6 @@ function parseRepeat(source: Tokenizer, sub: SubPattern, thisToken: string): boo
 function parseGroup(source: Tokenizer, state: State, sub: SubPattern, verbose: boolean, nested: number, first: boolean): boolean {
   const start = source.tell() - 1;
   let capture = true;
-  let atomic = false;
   let name: string | null = null;
   let addFlags = 0;
   let delFlags = 0;
@@ -558,9 +566,6 @@ function parseGroup(source: Tokenizer, state: State, sub: SubPattern, verbose: b
       if (!source.match(")")) throw source.error("missing ), unterminated subpattern", source.tell() - start);
       sub.data.push({ op: "GROUPREF_EXISTS", group: condgroup, yes, no });
       return true;
-    } else if (char === ">") {
-      capture = false;
-      atomic = true;
     } else if (FLAGS.has(char) || char === "-") {
       const flags = parseFlags(source, state, char);
       if (flags === null) {
@@ -586,7 +591,7 @@ function parseGroup(source: Tokenizer, state: State, sub: SubPattern, verbose: b
   const p = parseSub(source, state, subVerbose, nested + 1);
   if (!source.match(")")) throw source.error("missing ), unterminated subpattern", source.tell() - start);
   if (group !== null) state.closegroup(group, p);
-  sub.data.push(atomic ? { op: "ATOMIC_GROUP", p } : { op: "SUBPATTERN", group, addFlags, delFlags, p });
+  sub.data.push({ op: "SUBPATTERN", group, addFlags, delFlags, p });
   return true;
 }
 
@@ -642,7 +647,6 @@ function checkLookbehinds(sub: SubPattern): void {
         node.items.forEach(checkLookbehinds);
         break;
       case "SUBPATTERN":
-      case "ATOMIC_GROUP":
         checkLookbehinds(node.p);
         break;
       case "REPEAT":

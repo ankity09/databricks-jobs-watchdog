@@ -299,12 +299,12 @@
   "jobs": [
    {
     "job_name": "orders_ingest",
-    "job_name_regex": "(?i)^orders_ingest$"
+    "job_name_regex": "(?i)^orders_ingest$",
+    "job_name_exclude_regex": "(?i)_TEST$"
    },
    {
     "job_name": "orders_enrich",
-    "job_name_regex": "^orders_(?>enrich|backfill)$",
-    "job_name_exclude_regex": "_test_*+$"
+    "job_name_regex": "(?x) ^orders _enrich $"
    },
    {
     "job_name": "orders_report",

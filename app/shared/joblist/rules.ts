@@ -4,8 +4,9 @@
  * Python's message text, so the first issue is the error Python raises. Unlike
  * Python, all issues are collected, so the form can show every problem.
  *
- * Patterns are checked with a port of Python's own re parser (pyregex.ts), so a
- * pattern compiles here exactly when re.compile accepts it, with Python's message.
+ * Patterns are checked with a port of Python's own re parser (pyregex.ts). The
+ * scan's serverless Python may be any version from 3.10 to 3.14, so a pattern
+ * passes only when all of them compile it, with Python's message.
  *
  * Differences that cannot be avoided in JavaScript:
  * - A \N{...} character name in a pattern is refused: the app has no Unicode name database to look it up.
