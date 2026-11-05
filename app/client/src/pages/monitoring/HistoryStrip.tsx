@@ -224,13 +224,11 @@ export function HistoryStrip({ jobs }: HistoryStripProps) {
 
   return (
     <section aria-labelledby="history-heading" className="rounded-lg border border-border bg-card p-4 shadow-xs">
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 id="history-heading" className="text-sm font-semibold">
-            Scan history
-          </h2>
-          <p className="mt-0.5 text-xs text-pretty text-muted-foreground">Each cell is one scan, oldest on the left. Hover a cell to see when it ran and what it found.</p>
-        </div>
+      {/* The range switch sits by the heading, over the job names: a cell's tooltip opens above the cells, so it never covers it. */}
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <h2 id="history-heading" className="text-sm font-semibold">
+          Scan history
+        </h2>
         <ToggleGroup
           type="single"
           variant="outline"
@@ -248,6 +246,7 @@ export function HistoryStrip({ jobs }: HistoryStripProps) {
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
+        <p className="basis-full text-xs text-pretty text-muted-foreground">Each cell is one scan, oldest on the left. Hover a cell to see when it ran and what it found.</p>
       </div>
       {body}
       {model !== null && model.columns.length > 0 && jobs.length > 0 ? (
