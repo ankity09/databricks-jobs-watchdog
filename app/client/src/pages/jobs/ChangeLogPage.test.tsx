@@ -217,6 +217,26 @@ describe("ChangeLogPage", () => {
     expect(olderButton()).not.toBeInTheDocument();
   });
 
+  it("shows the changes of a version whose stored workspace name and job name are not text", async () => {
+    // Saved before the server stored text as text: workspace_name: 2024 (and no ID) and job_name: 20241105, as parsed.
+    const stored = JSON.parse(
+      JSON.stringify({
+        ...V2,
+        version: 3,
+        summary: "Labeled workspace 2024 as lower",
+        changeKind: "create",
+        changeTarget: "workspace:2024",
+        document: { workspaces: [{ workspace_name: 2024, environment: "lower" }], jobs: [...V2.document.jobs, { job_name: 20241105, max_gap_minutes: 60 }] },
+      }),
+    ) as VersionDetail;
+    mockApi([V1, V2, stored]);
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "Labeled workspace 2024 as lower" }));
+    const sheet = await screen.findByRole("dialog", { name: "Version 3" });
+    expect(await within(sheet).findByRole("table", { name: "Workspace label 2024" })).toBeInTheDocument();
+    expect(within(sheet).getByRole("table", { name: "Job 20241105" })).toBeInTheDocument();
+  });
+
   it("names the next step when nothing is saved yet", async () => {
     mockApi([]);
     renderPage();

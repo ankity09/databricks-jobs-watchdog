@@ -459,3 +459,43 @@ describe("SettingsPage saves from the version each form opened at", () => {
     expect(await screen.findByText("Saved version 6: Changed notes on workspace 1111111111111111.")).toBeInTheDocument();
   });
 });
+
+describe("SettingsPage with stored values that are not text", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("shows and edits a label whose stored name, label and notes are numbers, as the loader reads them", async () => {
+    setClock("2026-11-05T21:30:00Z");
+    // Saved before the server stored text as text: workspace_name: 2024, environment: 1 and notes: 2024, as parsed.
+    const stored = JSON.parse(
+      JSON.stringify({
+        ...STATE,
+        document: { ...DOC, workspaces: [...(DOC.workspaces ?? []), { workspace_name: 2024, environment: 1, notes: 2024 }] },
+      }),
+    ) as JobListState;
+    const { posts } = mockApi({ state: stored });
+    renderPage();
+    const labels = await screen.findByRole("region", { name: "Workspace labels" });
+    expect(within(labels).getByText("2024", { selector: "span" })).toBeInTheDocument();
+    await userEvent.click(within(labels).getByRole("button", { name: "Edit the label for 2024" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit the label for 2024" });
+    expect(within(dialog).getByLabelText("Environment label")).toHaveValue("1");
+    const notes = within(dialog).getByLabelText("Notes");
+    expect(notes).toHaveValue("2024");
+    await userEvent.type(notes, " and later");
+    const save = within(dialog).getByRole("button", { name: "Save label" });
+    await waitFor(() => expect(save).toBeEnabled(), { timeout: 3000 });
+    await userEvent.click(save);
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]).toEqual({
+      baseVersion: 4,
+      change: {
+        kind: "upsert",
+        target: { type: "workspace", key: "2024" },
+        value: { workspace_name: "2024", environment: "1", notes: "2024 and later" },
+      },
+    });
+  });
+});

@@ -406,4 +406,36 @@ describe("JobListPage", () => {
     expect(server.saves.map((body) => body.baseVersion)).toEqual([12, 12]);
     expect(server.state().document.jobs.find((job) => job.job_name === "orders_ingest")?.enabled).toBe(false);
   });
+
+  it("shows and edits a job whose stored name and notes are not text, as the loader reads them", async () => {
+    setClock("2026-11-05T21:30:00Z");
+    // Saved before the server stored text as text: YAML's job_name: 20241105 and notes: yes, as parsed.
+    const stored = JSON.parse(
+      JSON.stringify({ ...SAVED, document: { ...DOC, jobs: [...DOC.jobs, { job_name: 20241105, max_gap_minutes: 60, notes: true }] } }),
+    ) as JobListState;
+    const posts: unknown[] = [];
+    mockApi(stored, (body) => {
+      posts.push(body);
+      return json(201, { version: 13, summary: "Changed max_gap_minutes on 20241105 from 60 to 90", document: stored.document });
+    });
+    renderPage();
+    await screen.findByRole("button", { name: "Edit 20241105" });
+    const dated = within(row("20241105"));
+    expect(dated.getByText("^20241105$")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit 20241105" }));
+    expect(await screen.findByLabelText("Notes")).toHaveValue("True");
+    const gap = screen.getByLabelText("Max gap (minutes)");
+    await userEvent.clear(gap);
+    await userEvent.type(gap, "90");
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
+    await waitFor(() => expect(posts).toHaveLength(1));
+    // The notes stay, as the text the loader reads.
+    expect(posts[0]).toEqual({
+      baseVersion: 12,
+      change: { kind: "upsert", target: { type: "job", name: "20241105" }, value: { job_name: "20241105", max_gap_minutes: 90, notes: "True" } },
+    });
+  });
 });
