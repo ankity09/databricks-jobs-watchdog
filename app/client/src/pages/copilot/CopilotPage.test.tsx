@@ -5,7 +5,7 @@ import { createMemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../../App";
 import { routes } from "../../routes";
-import { messageResult, sseEvent, sseResponse } from "../../test/sse";
+import { controlledSse, messageResult, sseEvent, sseResponse } from "../../test/sse";
 
 const SAMPLE_QUESTIONS = [
   "What is failing right now?",
@@ -148,6 +148,62 @@ describe("the copilot page", () => {
     expect(await screen.findByText("A quiet day.")).toBeInTheDocument();
     expect(screen.getByText("Summarize the last 24 hours.")).toBeInTheDocument();
     expect(genieCalls.map((c) => c.method)).toEqual(["GET", "GET"]);
+  });
+
+  it("holds a question while the chat cannot be loaded, and sends it once Retry loads the chat", async () => {
+    const user = userEvent.setup();
+    const load = controlledSse();
+    genieAnswers = [
+      load.response,
+      sseResponse([messageResult({ conversationId: "conv-7", messageId: "msg-1", question: "Summarize the last 24 hours.", text: "A quiet day." })]),
+      answer("conv-7", "msg-2", "What does it affect?", "Nothing runs downstream of it."),
+    ];
+    await renderAt("/copilot/conv-7");
+
+    // A question typed while the saved chat loads; then the chat fails to load.
+    const input = screen.getByRole("textbox", { name: "Question" });
+    await user.type(input, "What does it affect?");
+    load.push(sseEvent("error", { error: "Conversation conv-7 not found" }));
+    load.close();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("This chat could not be loaded.");
+
+    // Neither Enter nor Send sends it to a chat that is not on the page, and it stays in the input.
+    await user.keyboard("{Enter}");
+    const send = screen.getByRole("button", { name: "Send" });
+    await user.click(send);
+    expect(genieCalls.map((c) => c.method)).toEqual(["GET"]);
+    expect(input).toHaveValue("What does it affect?");
+    expect(input).toBeDisabled();
+    expect(send).toBeDisabled();
+
+    // Retry loads the chat; the question then goes to it and shows under its answers.
+    await user.click(within(alert).getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("A quiet day.")).toBeInTheDocument();
+    expect(input).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Nothing runs downstream of it.")).toBeInTheDocument();
+    expect(screen.getByText("What does it affect?")).toBeInTheDocument();
+    expect(input).toHaveValue("");
+    expect(genieCalls.map((c) => [c.method, c.body])).toEqual([
+      ["GET", null],
+      ["GET", null],
+      ["POST", { content: "What does it affect?", conversationId: "conv-7" }],
+    ]);
+  });
+
+  it("leaves a chat that cannot be loaded for a new one with New chat", async () => {
+    const user = userEvent.setup();
+    genieAnswers = [json({ error: "Conversation not found" }, 404), answer("conv-2", "msg-1", "What is failing right now?", "orders_ingest failed.")];
+    const router = await renderAt("/copilot/conv-7");
+    await screen.findByRole("alert");
+
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/copilot"));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Question" }), "What is failing right now?{Enter}");
+    expect(await screen.findByText("orders_ingest failed.")).toBeInTheDocument();
+    expect(genieCalls.map((c) => c.body)).toEqual([null, { content: "What is failing right now?" }]);
   });
 
   it("starts over with New chat", async () => {

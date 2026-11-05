@@ -66,12 +66,14 @@ function CopilotChat({ chatKey, conversationId }: CopilotChatProps) {
   }, [chat.messages, chat.status]);
 
   const busy = chat.streaming || chat.loading;
+  // A chat that could not be loaded takes no question until Retry loads it: one sent then would go to that conversation without showing on the page.
+  const canAsk = !busy && chat.loadError === null;
   const ask = (question: string) => {
-    if (!busy) void chat.send(question);
+    if (canAsk) void chat.send(question);
   };
   const submit = () => {
     const question = draft.trim();
-    if (!question || busy) return;
+    if (!question || !canAsk) return;
     setDraft("");
     void chat.send(question);
   };
@@ -144,11 +146,12 @@ function CopilotChat({ chatKey, conversationId }: CopilotChatProps) {
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={onKeyDown}
+              disabled={chat.loadError !== null}
               rows={1}
               placeholder="Ask about failures, missed schedules or what a failure affects"
               className="max-h-40 min-h-10 resize-none bg-background text-sm"
             />
-            <Button type="submit" disabled={busy || draft.trim() === ""} className="h-10 gap-1.5 px-3.5">
+            <Button type="submit" disabled={!canAsk || draft.trim() === ""} className="h-10 gap-1.5 px-3.5">
               <SendHorizontal aria-hidden="true" className="size-4" />
               Send
             </Button>
