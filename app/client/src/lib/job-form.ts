@@ -4,10 +4,22 @@ import type { EnvironmentOverrides, JobEntry, JobListDocument, ScheduleType, Sev
  * The job editor's form values, and the conversion to and from a JobEntry.
  *
  * Inputs hold strings. An empty field means the key is not set, so the
- * default applies. One rule keeps an edit from changing what the scan reads:
- * a field that is still empty keeps the saved value when that value was null
- * or "", because in the YAML loader such a value blocks the default (for
- * example `max_runtime_minutes: null` turns off a default runtime limit).
+ * default applies. These rules keep an edit from changing what the scan reads
+ * (jobs_watchdog/config.py is the authority), so a job saved without a change
+ * to a field comes back as it was saved:
+ *
+ * - A field that is still empty keeps the saved value when that value was null
+ *   or "", because in the loader such a value blocks the default (for example
+ *   `max_runtime_minutes: null` turns off a default runtime limit).
+ * - Text keeps its saved form, surrounding spaces too, until it is edited: the
+ *   loader keeps job names and owners as written, and a trimmed name would
+ *   save the job under another name.
+ * - `environments` saved as {} or null, and an environment saved as {}, stay
+ *   as saved. The loader reads them as unset.
+ * - Job IDs are a list with at least one ID, or not set. The loader rejects an
+ *   empty list at job and at environment level ("job_ids must be a list of one
+ *   or more job IDs"), so the form never writes one: an emptied list is unset,
+ *   which in an environment means the job's own IDs apply there ("As the job").
  */
 
 export const INHERIT = "inherit";
@@ -137,6 +149,16 @@ function blocksDefault(source: object, key: string): boolean {
   return value === null || value === "";
 }
 
+/** Typed text, trimmed, or the saved text while the field still shows it exactly. */
+function keptOrTrimmed(typed: string, saved: unknown): string {
+  return typeof saved === "string" && typed === saved ? saved : typed.trim();
+}
+
+/** A mapping with no keys, which the loader reads as unset. */
+function isEmptyMapping(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value).length === 0;
+}
+
 type OptionalKey = Exclude<keyof JobEntry, "job_name">;
 
 /** Sets `key`, removes it when `value` is undefined, or keeps the saved value when it blocks a default. */
@@ -153,16 +175,18 @@ function overrides(row: OverrideFormValues, saved: unknown): EnvironmentOverride
     else if (!blocksDefault(base, key)) delete next[key];
   };
   set("severity", row.severity === INHERIT ? undefined : row.severity);
-  set("owner", row.owner.trim() === "" ? undefined : row.owner.trim());
+  const owner = keptOrTrimmed(row.owner, base.owner);
+  set("owner", owner === "" ? undefined : owner);
   set("enabled", row.enabled === INHERIT ? undefined : row.enabled === "on");
   for (const key of NUMBER_KEYS) set(key, numberOf(row[key]));
+  // Never an empty list: the loader rejects one. Unset, the job's own IDs apply in this environment.
   set("job_ids", row.job_ids.length > 0 ? [...row.job_ids] : undefined);
   return next;
 }
 
 /** The entry the form describes, built on `base` (the entry the editor opened with). */
 export function toEntry(values: JobFormValues, base: JobEntry): JobEntry {
-  const entry: JobEntry = { ...base, job_name: values.job_name.trim() };
+  const entry: JobEntry = { ...base, job_name: keptOrTrimmed(values.job_name, base.job_name) };
   put(entry, base, "job_name_regex", values.job_name_regex === "" ? undefined : values.job_name_regex);
   // "No exclusion" is the checkbox, so an empty pattern without it means the default applies.
   if (values.exclude_off) entry.job_name_exclude_regex = base.job_name_exclude_regex === "" ? "" : null;
@@ -172,7 +196,8 @@ export function toEntry(values: JobFormValues, base: JobEntry): JobEntry {
   put(entry, base, "schedule_type", values.schedule_type === INHERIT ? undefined : values.schedule_type);
   for (const key of NUMBER_KEYS) put(entry, base, key, numberOf(values[key]));
   put(entry, base, "severity", values.severity === INHERIT ? undefined : values.severity);
-  put(entry, base, "owner", values.owner.trim() === "" ? undefined : values.owner.trim());
+  const owner = keptOrTrimmed(values.owner, base.owner);
+  put(entry, base, "owner", owner === "" ? undefined : owner);
   put(entry, base, "enabled", values.enabled ?? undefined);
   put(entry, base, "notes", values.notes === "" ? undefined : values.notes);
 
@@ -180,10 +205,10 @@ export function toEntry(values: JobFormValues, base: JobEntry): JobEntry {
   const environments: Record<string, EnvironmentOverrides> = {};
   for (const row of values.environments) {
     const next = overrides(row, saved[row.label]);
-    if (Object.keys(next).length > 0) environments[row.label] = next;
+    if (Object.keys(next).length > 0 || isEmptyMapping(saved[row.label])) environments[row.label] = next;
   }
   if (Object.keys(environments).length > 0) entry.environments = environments;
-  else delete entry.environments;
+  else if (!("environments" in base && (base.environments === null || isEmptyMapping(base.environments)))) delete entry.environments;
   return entry;
 }
 

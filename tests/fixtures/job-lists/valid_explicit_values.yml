@@ -1,0 +1,52 @@
+# Explicit values the loader accepts. Each one either blocks a default or
+# means the same as leaving the key out, and the app's job editor must keep
+# it when it saves a job without touching that field. The corpus test checks
+# that this file loads; the editor's round-trip test checks that each job
+# comes back from the form unchanged.
+defaults:
+  max_gap_minutes: 60
+  max_runtime_minutes: 120
+  owner: platform-team
+  notes: Checked by the platform team.
+  job_name_exclude_regex: _test$
+workspaces:
+  - workspace_id: "1111111111111111"
+    environment: production
+  - workspace_name: example-lower
+    environment: lower
+jobs:
+  # null blocks a default: no runtime limit, no owner, no notes, no exclusion.
+  - job_name: blocks_defaults_with_null
+    max_runtime_minutes: null
+    owner: null
+    notes: null
+    job_name_exclude_regex: null
+  # So does an empty text.
+  - job_name: blocks_defaults_with_empty_text
+    owner: ""
+    notes: ""
+    job_name_exclude_regex: ""
+  # These mean the same as leaving the key out.
+  - job_name: same_as_unset
+    job_name_regex: ""
+    job_ids: null
+    environments: {}
+  - job_name: same_as_unset_too
+    job_name_regex: null
+    environments: null
+  # In an environment, null clears the job's own value there, "" clears the
+  # owner, and an empty mapping changes nothing.
+  - job_name: environment_overrides
+    job_ids: [123]
+    max_retries: 2
+    environments:
+      production:
+        owner: ""
+        max_retries: null
+      lower: {}
+  # Text the loader keeps as written, surrounding spaces too.
+  - job_name: " padded name "
+    owner: " ingestion-team "
+    environments:
+      lower:
+        owner: " lower-team "

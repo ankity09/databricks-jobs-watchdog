@@ -136,6 +136,27 @@ describe("JobEditorSheet", () => {
     await vi.waitFor(() => expect(save).toBeEnabled());
   });
 
+  it("keeps a job's explicit values through an edit: Save stays off with no change, and a notes change saves them as they were", async () => {
+    // Values the loader accepts and the form has no field state for: an empty environment mapping and text with spaces.
+    const explicit: JobEntry = {
+      job_name: " padded name ",
+      schedule_type: "triggered",
+      owner: " ingestion-team ",
+      environments: { lower: {}, production: { owner: " prod-team " } },
+    };
+    const { onSave } = renderSheet({ initial: explicit, document: { ...DOC, jobs: [...DOC.jobs, explicit] } });
+    const save = screen.getByRole("button", { name: "Save changes" });
+    // Let the first check run, so Save is off for no change rather than for a check still to come.
+    await vi.waitFor(() => expect(field("Notes")).toBeInTheDocument());
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(save).toBeDisabled();
+    await userEvent.type(field("Notes"), "Checked by hand.");
+    await vi.waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0]?.[0]).toEqual({ ...explicit, notes: "Checked by hand." });
+  });
+
   it("makes the job name read-only in edit mode, with the rename hint", () => {
     renderSheet();
     expect(field("Job name")).toHaveAttribute("readonly");
