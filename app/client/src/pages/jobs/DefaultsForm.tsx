@@ -151,8 +151,8 @@ function DefaultsFields({ document, version, notice, focus, onSave, onSaved, onR
   // The form starts again after a reload or a save; focus moves to the notice that says so, or to the card.
   const noticeRef = useRef<HTMLParagraphElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
-  // Whether focus is in the form. It stays true when focus drops to the page body, as when a button the person
-  // just used turns off (Undo changes), and turns false when the person moves focus somewhere else.
+  // Whether focus is in the form: false as soon as focus leaves it for anything, the page body too. It stays true
+  // only when the focused element goes away with no blur (browsers send none for a removed element).
   const focusHere = useRef(false);
   useEffect(() => {
     if (focus === "notice") noticeRef.current?.focus();
@@ -214,7 +214,7 @@ function DefaultsFields({ document, version, notice, focus, onSave, onSaved, onR
         focusHere.current = true;
       }}
       onBlur={(event) => {
-        if (event.relatedTarget instanceof Node && !event.currentTarget.contains(event.relatedTarget)) focusHere.current = false;
+        if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) focusHere.current = false;
       }}
       tabIndex={-1}
       className="gap-4 py-5 outline-none focus-visible:ring-2 focus-visible:ring-ring"

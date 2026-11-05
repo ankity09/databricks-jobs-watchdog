@@ -234,6 +234,19 @@ describe("JobEditorSheet", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it("keeps a stored -1 through an unrelated edit, with the loader's message for it", async () => {
+    // Saved under other rules: the loader reads max_retries -1 and says "got -1".
+    const stored = JSON.parse('{"job_name": "orders_enrich", "max_gap_minutes": 90, "max_retries": -1}') as JobEntry;
+    const { onSave } = renderSheet({ initial: stored, document: { ...DOC, jobs: [DOC.jobs[0], stored] } });
+    const retries = field("Max retries");
+    expect(retries).toHaveValue("-1");
+    await vi.waitFor(() => expect(retries).toHaveAccessibleDescription(/max_retries must be a whole number of zero or more, got -1$/));
+    await userEvent.type(field("Owner"), "data-team");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(retries).toHaveAccessibleDescription(/max_retries must be a whole number of zero or more, got -1$/);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it("refuses a number too large to keep every digit", async () => {
     renderSheet();
     const gap = field("Max gap (minutes)");
