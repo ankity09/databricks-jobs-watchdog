@@ -7,9 +7,11 @@ import { withRetry } from "./retry";
  * the only table is the job list's version history.
  *
  * After a plain teardown and a new deploy, the app has a new service principal
- * and the kept schema belongs to the identity that ran the teardown, so the
- * check below is refused (42501) until the watchdog_app_access job grants the
- * new service principal access (jobs_watchdog/app_access.py).
+ * and the kept schema belongs to another role: the identity that ran the
+ * teardown, as Databricks describes deleting an app (a full teardown and
+ * redeploy has not been run yet; docs/multi-region.md says how to check one).
+ * So the check below is refused (42501) until the watchdog_app_access job grants
+ * the new service principal access (jobs_watchdog/app_access.py).
  */
 const SCHEMA_DDL = `
 CREATE SCHEMA IF NOT EXISTS watchdog_app;
@@ -60,7 +62,7 @@ export const NO_ACCESS_MESSAGE =
 export function schemaErrorLog(error: unknown): string {
   if (isPermissionDenied(error)) {
     return "[lakebase] The app's service principal cannot use the watchdog_app schema (permission denied, 42501). " +
-      "After a teardown and a new deploy, the kept job list belongs to the identity that ran the teardown: run the " +
+      "After a teardown and a new deploy, the kept job list belongs to another role, normally the identity that ran the teardown: run the " +
       "watchdog_app_access job as that identity (databricks bundle run watchdog_app_access -t <target>). " +
       "The job list answers 503 until then, and tries again on each request.";
   }

@@ -164,12 +164,35 @@ Run the teardown as the same identity that deployed the region, for the reason g
 
 ## Deploy again after a teardown
 
-A plain teardown deletes the app and its service principal, but keeps the Lakebase project with the job list. Lakebase hands the app's `watchdog_app` schema to the identity that ran the teardown. The next deploy creates the app again with a new service principal, which cannot use that schema until it gets access. Changing `app.name` after a deploy replaces the app in the same way. To deploy again with the list kept, as the identity that ran the teardown:
+A plain teardown deletes the app and its service principal, but keeps the Lakebase project with the job list. The next deploy creates the app again with a new service principal, which cannot use the kept `watchdog_app` schema until it gets access. Changing `app.name` after a deploy replaces the app in the same way.
+
+How sure this is: the steps below rest on how Databricks describes deleting an app, that its objects go to the identity that deleted it, which for a teardown is the identity that ran it. A full teardown and redeploy has not been run yet. What was checked, on Lakebase branches: a role with only `CONNECT` and `CREATE` on the database gets 42501 on the app's startup statements, as the new app would; after the access job's grant the same role reads and writes the job list, and a running app answers again without a restart; and notebook 11 on serverless gives a deployed app's service principal access and changes nothing on a second run. AppKit's cache step was checked on PostgreSQL 16. After your first teardown and redeploy, [check the handover](#check-the-handover-after-a-redeploy).
+
+To deploy again with the list kept, as the identity that ran the teardown:
 
 1. Bind the kept Lakebase resources to the bundle again. Teardown prints the three `databricks bundle deployment bind` commands at the end; without them the next deploy fails on the project that already exists.
 2. Deploy and start the app: `databricks bundle deploy -t <target>`, then `databricks bundle run watchdog_app -t <target>`.
-3. Give the new service principal access: `databricks bundle run watchdog_app_access -t <target>`. The job runs notebook 11, which grants it `USAGE` and `CREATE` on `watchdog_app` and `SELECT` and `INSERT` on its tables. It changes nothing when the app already has access. AppKit's query cache lives in its own schema, `appkit`, which changes hands too, and grants cannot fix it: AppKit's start runs `CREATE INDEX IF NOT EXISTS` on its table, which only the owner may run, and you cannot make the app's role the owner. So the job drops `appkit` when someone else owns it; the app creates it again at its next start and caches query results in memory until then.
+3. Give the new service principal access: `databricks bundle run watchdog_app_access -t <target>`. The job runs notebook 11, which grants it `USAGE` and `CREATE` on `watchdog_app` and `SELECT` and `INSERT` on its tables. It changes nothing when the app already has access. AppKit's query cache lives in its own schema, `appkit`, which should change hands in the same way, and grants cannot fix it: AppKit's start runs `CREATE INDEX IF NOT EXISTS` on its table, which only the owner may run, and you cannot make the app's role the owner. So the job drops `appkit` when someone else owns it; the app creates it again at its next start and caches query results in memory until then.
 
 `scripts/deploy_regions.py` does steps 2 and 3 for each region. Until step 3, the app's job list says "The app has no access to its job list in Lakebase", and the app log names the job. The app tries again on each request, so it needs no restart. The scans keep reading the list meanwhile, because they run as the deploying identity.
 
 If notebook 11 says the schema belongs to another role (the old app's service principal, when Lakebase did not hand the schema over), a Lakebase admin deletes that role and gives its objects to you, for example `databricks postgres delete-role <branch>/roles/dbrx-apps-<old client ID> --reassign-owned-to "<your Postgres role>"`. Then run step 3 again.
+
+### Check the handover after a redeploy
+
+1. Read what the access job did: notebook 11's one line, in the job run (`databricks bundle run watchdog_app_access -t <target>` prints its link). It says it gave the new service principal access, or that the app already has access or owns the schema, and whether it dropped AppKit's cache schema. If it says the schema belongs to another role, follow the paragraph above.
+2. Open the app's Job list. It should show the kept versions, not "The app has no access to its job list in Lakebase".
+3. In the Lakebase SQL editor on the branch, as the deploying identity, check the owners and the new app's rights. `<client ID>` is the new app's `service_principal_client_id` from `databricks apps get <app name>`:
+
+   ```sql
+   SELECT nspname, pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname IN ('watchdog_app', 'appkit');
+   SELECT has_schema_privilege('<client ID>', 'watchdog_app', 'USAGE') AS can_use,
+          has_schema_privilege('<client ID>', 'watchdog_app', 'CREATE') AS can_create,
+          has_table_privilege('<client ID>', 'watchdog_app.job_list_versions', 'SELECT') AS can_read,
+          has_table_privilege('<client ID>', 'watchdog_app.job_list_versions', 'INSERT') AS can_write;
+   ```
+
+   All four should be true. The owner of `watchdog_app` should be the identity that ran the teardown (or the new app, if it created the schema), and `appkit` should be missing or owned by the client ID.
+4. Restart the app once (`databricks bundle run watchdog_app -t <target>`). Its log should then have no `Migration step ... failed` line from AppKit's cache.
+
+If a check fails, the handover did not go as described here: keep step 1's line and step 3's owners for the report.

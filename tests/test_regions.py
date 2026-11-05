@@ -330,3 +330,16 @@ def test_the_view_check_ignores_case_as_information_schema_stores_names_in_lower
     check = next(s for s in steps if s.only_if_missing)
     body = json.loads(check.only_if_missing[check.only_if_missing.index("--json") + 1])
     assert "lower(:schema)" in body["statement"] and "lower(:view)" in body["statement"]
+
+
+def test_the_redeploy_handover_is_not_stated_as_fact_and_the_docs_say_how_to_check_it():
+    # A full teardown and redeploy has not been run; the handover rests on how Databricks describes deleting an app.
+    guide = (repo_root() / "docs" / "multi-region.md").read_text()
+    assert "A full teardown and redeploy has not been run yet" in guide and "checked, on Lakebase branches" in guide
+    steps = guide[guide.index("### Check the handover after a redeploy"):]
+    assert "has_schema_privilege" in steps and "pg_namespace" in steps and "Job list" in steps
+    for name in ("docs/multi-region.md", "notebooks/11_grant_app_access.py", "jobs_watchdog/app_access.py",
+                 "app/server/db/schema.ts", "resources/watchdog_app_access.job.yml"):
+        text = " ".join((repo_root() / name).read_text().split())
+        assert "Lakebase hands" not in text and "Lakebase then hands" not in text, name
+        assert "belongs to the identity that ran the teardown" not in text, name

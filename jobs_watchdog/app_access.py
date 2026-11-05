@@ -2,8 +2,10 @@
 
 The app's service principal creates the schema watchdog_app on its first start,
 so it owns it. A plain teardown deletes the app, and the app's service principal
-with it, but keeps the Lakebase project and the job list: Lakebase hands the
-schema and its table to the identity that deleted the app. The next deploy
+with it, but keeps the Lakebase project and the job list. The schema and its
+table then belong to another role: the identity that deleted the app, as
+Databricks describes it (a full teardown and redeploy has not been run yet;
+docs/multi-region.md says how to check one). The next deploy
 creates a new app with a new service principal, which may connect and create a
 schema but cannot use that one, so the app's job list answers "no access".
 
@@ -16,7 +18,7 @@ principal while the Lakebase project was kept). When the app owns the schema,
 or has those rights already, it changes nothing.
 
 AppKit keeps a cache of query results in its own schema, appkit, in the same
-database, and that schema changes hands in a teardown too. Grants cannot fix it:
+database, and that schema should change hands in a teardown too. Grants cannot fix it:
 AppKit's start runs CREATE INDEX IF NOT EXISTS on its table, which only the
 table's owner may run, and the deploying identity cannot make the app's role the
 owner. So when appkit belongs to someone else, grant_app_access drops it, as its
