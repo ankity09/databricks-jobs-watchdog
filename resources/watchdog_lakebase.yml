@@ -17,6 +17,7 @@ resources:
     watchdog_owner:
       role_id: watchdog-owner
       postgres_role: watchdog_owner
+      auth_method: NO_LOGIN  # it only owns the database; nobody logs in as it
       parent: ${resources.postgres_projects.watchdog_db.name}/branches/${var.lakebase_branch}
       lifecycle:
         prevent_destroy: true
