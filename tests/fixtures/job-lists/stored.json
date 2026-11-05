@@ -1,0 +1,427 @@
+{
+ "valid_anchors_merge_keys.yml": {
+  "jobs": [
+   {
+    "job_name": "orders_ingest",
+    "max_gap_minutes": 60,
+    "owner": "platform-team"
+   },
+   {
+    "job_name": "orders_enrich",
+    "max_gap_minutes": 60,
+    "owner": "platform-team"
+   }
+  ]
+ },
+ "valid_continuous_ignores_default_gap.yml": {
+  "defaults": {
+   "max_gap_minutes": 90
+  },
+  "jobs": [
+   {
+    "job_name": "orders_ingest",
+    "schedule_type": "continuous"
+   }
+  ]
+ },
+ "valid_example.yml": {
+  "defaults": {
+   "schedule_type": "scheduled",
+   "severity": "WARNING",
+   "owner": "platform-team",
+   "job_name_exclude_regex": "_test(_|$)"
+  },
+  "workspaces": [
+   {
+    "workspace_name": "example-prod",
+    "environment": "production"
+   },
+   {
+    "workspace_name": "example-prod-eu",
+    "environment": "production",
+    "notes": "Production in a second region; that region runs its own Watchdog"
+   },
+   {
+    "workspace_name": "example-staging",
+    "environment": "lower"
+   },
+   {
+    "workspace_id": "1111111111111111",
+    "environment": "lower",
+    "notes": "Development, given by workspace ID instead of name"
+   }
+  ],
+  "jobs": [
+   {
+    "job_name": "watchdog_demo_succeeds",
+    "job_name_regex": "watchdog_demo_succeeds",
+    "max_gap_minutes": 1440,
+    "max_runtime_minutes": 30,
+    "max_retries": 1,
+    "notes": "Sample job from the demo target; succeeds every run."
+   },
+   {
+    "job_name": "watchdog_demo_fails",
+    "job_name_regex": "watchdog_demo_fails",
+    "max_gap_minutes": 1440,
+    "max_runtime_minutes": 30,
+    "max_retries": 1,
+    "severity": "CRITICAL",
+    "notes": "Sample job from the demo target; fails on purpose."
+   },
+   {
+    "job_name": "watchdog_demo_slow",
+    "job_name_regex": "watchdog_demo_slow",
+    "max_gap_minutes": 300,
+    "max_runtime_minutes": 1,
+    "max_retries": 1,
+    "notes": "Sample job from the demo target; runs about three minutes, so it warns for long runtime."
+   },
+   {
+    "job_name": "watchdog_demo_retries",
+    "job_name_regex": "watchdog_demo_retries",
+    "max_gap_minutes": 420,
+    "max_runtime_minutes": 30,
+    "max_retries": 1,
+    "notes": "Sample job from the demo target; its task retries twice, so it warns for a retry loop."
+   },
+   {
+    "job_name": "orders_ingest",
+    "job_name_regex": "^orders_ingest(_[a-z]+)?_(prod|dev)$",
+    "schedule_type": "continuous",
+    "max_retries": 3,
+    "min_attempt_minutes": 10,
+    "severity": "CRITICAL",
+    "owner": "ingestion-team",
+    "enabled": false,
+    "notes": "Continuous ingestion; everything downstream depends on it.",
+    "environments": {
+     "lower": {
+      "severity": "WARNING"
+     }
+    }
+   },
+   {
+    "job_name": "orders_enrich",
+    "job_name_regex": "^orders_enrich_(web|mobile)(_(eu|us))?_(prod|dev)$",
+    "max_gap_minutes": 90,
+    "max_runtime_minutes": 45,
+    "max_retries": 2,
+    "owner": "ingestion-team",
+    "enabled": false,
+    "notes": "Runs hourly, once per variant.",
+    "environments": {
+     "lower": {
+      "enabled": false
+     },
+     "production": {
+      "job_ids": [
+       "123456789012345",
+       "234567890123456"
+      ]
+     }
+    }
+   },
+   {
+    "job_name": "daily_revenue_report",
+    "job_name_regex": "^daily_revenue_report(_(eu|us))?_(prod|dev)$",
+    "max_gap_minutes": 1500,
+    "max_runtime_minutes": 120,
+    "max_retries": 1,
+    "owner": "analytics-team",
+    "enabled": false,
+    "notes": "Runs once a day, then starts daily_revenue_export.",
+    "environments": {
+     "lower": {
+      "max_gap_minutes": 4500,
+      "owner": "analytics-dev"
+     }
+    }
+   },
+   {
+    "job_name": "daily_revenue_export",
+    "job_name_regex": "^daily_revenue_export(_(eu|us))?_(prod|dev)$",
+    "schedule_type": "triggered",
+    "max_runtime_minutes": 30,
+    "owner": "analytics-team",
+    "enabled": false,
+    "notes": "A child job; daily_revenue_report starts it with a Run Job task. Its rows name that parent in parent_job."
+   }
+  ],
+  "dependencies": [
+   {
+    "job_name": "watchdog_demo_succeeds",
+    "depends_on": "watchdog_demo_fails",
+    "dependency_type": "job"
+   },
+   {
+    "job_name": "orders_enrich",
+    "depends_on": "orders_ingest",
+    "dependency_type": "job"
+   },
+   {
+    "job_name": "daily_revenue_report",
+    "depends_on": "orders_enrich",
+    "dependency_type": "job"
+   },
+   {
+    "job_name": "daily_revenue_export",
+    "depends_on": "daily_revenue_report",
+    "dependency_type": "child_job",
+    "notes": "daily_revenue_report starts it as its last task."
+   },
+   {
+    "job_name": "orders_ingest",
+    "depends_on": "kafka",
+    "dependency_type": "service",
+    "notes": "Reads order events from Kafka."
+   },
+   {
+    "job_name": "orders_enrich",
+    "depends_on": "config_api",
+    "dependency_type": "service",
+    "notes": "Looks up customer settings from a config service."
+   },
+   {
+    "job_name": "daily_revenue_export",
+    "depends_on": "object_storage",
+    "dependency_type": "service",
+    "notes": "Writes the export files to a storage bucket."
+   }
+  ]
+ },
+ "valid_explicit_values.yml": {
+  "defaults": {
+   "max_gap_minutes": 60,
+   "max_runtime_minutes": 120,
+   "owner": "platform-team",
+   "notes": "Checked by the platform team.",
+   "job_name_exclude_regex": "_test$"
+  },
+  "workspaces": [
+   {
+    "workspace_id": "1111111111111111",
+    "environment": "production"
+   },
+   {
+    "workspace_name": "example-lower",
+    "environment": "lower"
+   }
+  ],
+  "jobs": [
+   {
+    "job_name": "blocks_defaults_with_null",
+    "max_runtime_minutes": null,
+    "owner": null,
+    "notes": null,
+    "job_name_exclude_regex": null
+   },
+   {
+    "job_name": "blocks_defaults_with_empty_text",
+    "owner": "",
+    "notes": "",
+    "job_name_exclude_regex": ""
+   },
+   {
+    "job_name": "same_as_unset",
+    "job_name_regex": "",
+    "job_ids": null,
+    "environments": {}
+   },
+   {
+    "job_name": "same_as_unset_too",
+    "job_name_regex": null,
+    "environments": null
+   },
+   {
+    "job_name": "environment_overrides",
+    "job_ids": [
+     "123"
+    ],
+    "max_retries": 2,
+    "environments": {
+     "production": {
+      "owner": "",
+      "max_retries": null
+     },
+     "lower": {}
+    }
+   },
+   {
+    "job_name": " padded name ",
+    "owner": " ingestion-team ",
+    "environments": {
+     "lower": {
+      "owner": " lower-team "
+     }
+    }
+   }
+  ]
+ },
+ "valid_job_ids_numbers_and_strings.yml": {
+  "workspaces": [
+   {
+    "workspace_name": "example-prod",
+    "environment": "production"
+   }
+  ],
+  "jobs": [
+   {
+    "job_name": "orders_ingest",
+    "max_gap_minutes": 60,
+    "job_ids": [
+     "123456789012345",
+     "234567890123456"
+    ],
+    "environments": {
+     "production": {
+      "job_ids": [
+       "345678901234567",
+       "456789012345678"
+      ]
+     }
+    }
+   }
+  ]
+ },
+ "valid_minimal.yml": {
+  "jobs": [
+   {
+    "job_name": "orders_ingest",
+    "max_gap_minutes": 60
+   }
+  ]
+ },
+ "valid_service_dependency.yml": {
+  "jobs": [
+   {
+    "job_name": "orders_ingest",
+    "max_gap_minutes": 60
+   }
+  ],
+  "dependencies": [
+   {
+    "job_name": "orders_ingest",
+    "depends_on": "kafka",
+    "dependency_type": "service"
+   }
+  ]
+ },
+ "valid_text_from_other_types.yml": {
+  "defaults": {
+   "max_gap_minutes": 60,
+   "owner": "7"
+  },
+  "workspaces": [
+   {
+    "workspace_name": "2024",
+    "environment": "1",
+    "notes": "2024"
+   },
+   {
+    "workspace_id": "1111111111111111",
+    "environment": "production",
+    "notes": "True"
+   }
+  ],
+  "jobs": [
+   {
+    "job_name": "20241105",
+    "owner": "42",
+    "notes": "True",
+    "environments": {
+     "1": {
+      "owner": "9"
+     }
+    }
+   },
+   {
+    "job_name": "True",
+    "schedule_type": "triggered",
+    "notes": "60.0",
+    "owner": ""
+   },
+   {
+    "job_name": "2024-11-05",
+    "notes": "2024-11-05 10:30:00",
+    "job_name_exclude_regex": "2024"
+   },
+   {
+    "job_name": "750",
+    "notes": "1e3"
+   }
+  ],
+  "dependencies": [
+   {
+    "job_name": "True",
+    "depends_on": "20241105",
+    "notes": "7"
+   },
+   {
+    "job_name": "2024-11-05",
+    "depends_on": "1.5",
+    "dependency_type": "service"
+   }
+  ]
+ },
+ "valid_triggered_child.yml": {
+  "jobs": [
+   {
+    "job_name": "daily_revenue_report",
+    "schedule_type": "scheduled",
+    "max_gap_minutes": 1500
+   },
+   {
+    "job_name": "daily_revenue_export",
+    "schedule_type": "triggered"
+   }
+  ],
+  "dependencies": [
+   {
+    "job_name": "daily_revenue_export",
+    "depends_on": "daily_revenue_report",
+    "dependency_type": "child_job"
+   }
+  ]
+ },
+ "valid_workspaces_by_id_and_name.yml": {
+  "workspaces": [
+   {
+    "workspace_id": "1111111111111111",
+    "environment": "lower"
+   },
+   {
+    "workspace_name": "example-prod",
+    "environment": "production"
+   }
+  ],
+  "jobs": [
+   {
+    "job_name": "orders_ingest",
+    "max_gap_minutes": 60,
+    "environments": {
+     "lower": {
+      "severity": "WARNING"
+     },
+     "production": {
+      "owner": "platform-team"
+     }
+    }
+   }
+  ]
+ },
+ "valid_yaml11_booleans.yml": {
+  "jobs": [
+   {
+    "job_name": "orders_ingest",
+    "max_gap_minutes": 60,
+    "enabled": true
+   },
+   {
+    "job_name": "orders_enrich",
+    "max_gap_minutes": 60,
+    "notes": "no"
+   }
+  ]
+ }
+}

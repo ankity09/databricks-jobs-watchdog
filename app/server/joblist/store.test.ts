@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Change } from "../../shared/joblist/types";
+import type { Change, JobEntry, JobListDocument } from "../../shared/joblist/types";
 import { MemoryVersionRepo } from "./memory-repo";
 import { ConflictError, createJobListStore, InvalidError, NotFoundError } from "./store";
 
@@ -130,5 +130,61 @@ describe("restore", () => {
     const { store } = setup();
     await store.saveChange({ baseVersion: null, change: add("a"), savedBy: "me" });
     await expect(store.restore({ version: 1, baseVersion: null, savedBy: "me" })).rejects.toBeInstanceOf(ConflictError);
+  });
+});
+
+/** A JSON document as an older app stored it: YAML numbers and booleans kept as they were parsed, even in text fields. */
+function legacy(json: string): JobListDocument {
+  const value: unknown = JSON.parse(json);
+  return value as JobListDocument;
+}
+
+describe("documents an older app stored with numbers and booleans in text fields", () => {
+  function seeded() {
+    const { repo, store } = setup();
+    repo.rows.push({
+      version: 1, savedBy: "me", savedAt: new Date(), changeKind: "import", changeTarget: null, summary: "Imported 1 job",
+      document: legacy('{"jobs": [{"job_name": 2024, "max_gap_minutes": 60, "notes": true}, {"job_name": "orders_ingest", "max_gap_minutes": 60}], "dependencies": [{"job_name": 2024, "depends_on": "billing-api", "dependency_type": "service"}]}'),
+    });
+    return store;
+  }
+
+  it("reads them with those fields as the text the Python loader reads", async () => {
+    const store = seeded();
+    expect((await store.latest())?.document.jobs[0]).toEqual({ job_name: "2024", max_gap_minutes: 60, notes: "True" });
+    expect((await store.get(1))?.document.dependencies?.[0].job_name).toBe("2024");
+  });
+
+  it("lets a job whose name was stored as a number be edited by its name", async () => {
+    const store = seeded();
+    const change: Change = { kind: "upsert", target: job("2024"), value: { job_name: "2024", max_gap_minutes: 90, notes: "True" } };
+    const row = await store.saveChange({ baseVersion: 1, change, savedBy: "me" });
+    expect(row.document.jobs.map((j) => j.job_name)).toEqual(["2024", "orders_ingest"]);
+    expect(row.document.jobs[0]).toEqual({ job_name: "2024", max_gap_minutes: 90, notes: "True" });
+    expect(row.summary).toBe("Changed max_gap_minutes on 2024 from 60 to 90");
+  });
+
+  it("lets it be deleted by its name, with its link", async () => {
+    const store = seeded();
+    const row = await store.saveChange({ baseVersion: 1, change: { kind: "delete", target: job("2024") }, savedBy: "me" });
+    expect(row.document.jobs.map((j) => j.job_name)).toEqual(["orders_ingest"]);
+    expect(row.document.dependencies).toEqual([]);
+    expect(row.summary).toBe("Deleted job 2024 and 1 link");
+  });
+
+  it("restores an old version with its text fields as text", async () => {
+    const store = seeded();
+    const row = await store.restore({ version: 1, baseVersion: 1, savedBy: "me" });
+    expect(row.document.jobs[0]).toEqual({ job_name: "2024", max_gap_minutes: 60, notes: "True" });
+  });
+});
+
+describe("a change whose text fields hold numbers or booleans", () => {
+  it("is stored with them as the text the Python loader reads", async () => {
+    const { store } = setup();
+    const value: unknown = JSON.parse('{"job_name": 2024, "max_gap_minutes": 60, "owner": 0, "notes": true}');
+    const change: Change = { kind: "upsert", target: job("2024"), value: value as JobEntry };
+    const row = await store.saveChange({ baseVersion: null, change, savedBy: "me" });
+    expect(row.document.jobs).toEqual([{ job_name: "2024", max_gap_minutes: 60, owner: "", notes: "True" }]);
   });
 });

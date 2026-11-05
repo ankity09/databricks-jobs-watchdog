@@ -14,11 +14,15 @@
  *   IDs (job_ids, workspace_id) are strings of any length.
  * - A section that is not a list gets the issue "X must be a list". This wording differs from the Python
  *   loader on purpose: Python fails with an unrelated error there, and the form needs a message that names the section.
- * The rules accept the raw parse (integers as bigint, floats marked), so messages
- * print values the way Python does; normalizeDocument is for storage afterwards.
+ * - The YAML reader refuses a file with a duplicate key (PyYAML keeps the last one), so a
+ *   mistake is shown rather than dropped silently.
+ * - Environment labels that YAML reads as true, false or null become "true", "false" and ""
+ *   in JavaScript, where Python's str() gives "True", "False" and "None".
+ * The rules accept the raw parse (integers as bigint, floats and timestamps marked), so
+ * messages print values the way Python does; normalizeDocument is for storage afterwards.
  */
-import { PyFloat, pyRepr, pySorted, pyStr } from "./pyrepr";
-import type { RuleIssue } from "./types";
+import { PyFloat, pyRepr, pySorted, pyStr, pyStrip } from "./pyrepr";
+import type { Change, JobListDocument, RuleIssue } from "./types";
 
 type Obj = Record<string, unknown>;
 
@@ -37,8 +41,11 @@ const OVERRIDE_KEYS = [
   "min_attempt_minutes", "job_ids",
 ];
 
+/** A YAML mapping or a JSON object: a plain object, never an array or a marker such as PyFloat. */
 function isMap(value: unknown): value is Obj {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
 }
 
 function has(obj: Obj, key: string): boolean {
@@ -52,6 +59,7 @@ function get(obj: Obj, key: string): unknown {
 /** Python truthiness for the values a YAML document holds. */
 function truthy(value: unknown): boolean {
   if (value === null || value === undefined || value === false || value === 0 || value === 0n || value === "") return false;
+  if (value instanceof PyFloat) return value.value !== 0;
   if (Array.isArray(value)) return value.length > 0;
   if (isMap(value)) return Object.keys(value).length > 0;
   return true;
@@ -85,10 +93,103 @@ function convert(value: unknown, asId: boolean): unknown {
   return value;
 }
 
-/** Job and workspace IDs become strings; other big integers become numbers when safe, else strings. */
+/*
+ * Text fields, stored the way the Python loader reads them. The loader reads
+ * names, owners and notes with str(), so YAML that gives a number, a boolean
+ * or a date there is valid, and the app stores the text Python reads: the job
+ * name 20241105 is "20241105" and notes: true is "True". Each rule keeps
+ * config.py's own reading, its `or ""` included. A value the loader refuses
+ * is left alone: the rules report it, and nothing invalid is stored. These
+ * run on the raw parse, so floats and timestamps print as Python prints them.
+ */
+type TextRule = (value: unknown) => unknown;
+
+/** str(value or ""), for owner and notes, and a link's names. None stays None: it means the same. */
+const orEmpty: TextRule = (value) => value === null || value === undefined || typeof value === "string" ? value : truthy(value) ? pyStr(value) : "";
+/** str(value) unless it is None or "", for job_name_exclude_regex and workspace_name. */
+const unlessEmpty: TextRule = (value) => value === null || value === undefined || typeof value === "string" ? value : pyStr(value);
+/** str(value), for job_name and a workspace's environment, which must not be empty. */
+const whenSet: TextRule = (value) => typeof value === "string" || !truthy(value) ? value : pyStr(value);
+/** job_name_regex: any empty value means "^<name>$", so it is stored as "". Any other non-text value is refused. */
+const pattern: TextRule = (value) => typeof value === "string" || value === null || value === undefined || truthy(value) ? value : "";
+
+const JOB_TEXT: Record<string, TextRule> = {
+  job_name: whenSet, job_name_regex: pattern, job_name_exclude_regex: unlessEmpty, owner: orEmpty, notes: orEmpty,
+};
+const DEFAULTS_TEXT: Record<string, TextRule> = { job_name_exclude_regex: unlessEmpty, owner: orEmpty, notes: orEmpty };
+const OVERRIDE_TEXT: Record<string, TextRule> = { owner: orEmpty };
+const WORKSPACE_TEXT: Record<string, TextRule> = { workspace_name: unlessEmpty, environment: whenSet, notes: orEmpty };
+const DEPENDENCY_TEXT: Record<string, TextRule> = { job_name: orEmpty, depends_on: orEmpty, notes: orEmpty };
+
+function withText(entry: unknown, rules: Record<string, TextRule>): unknown {
+  if (!isMap(entry)) return entry;
+  const out: Obj = { ...entry };
+  for (const [key, rule] of Object.entries(rules)) if (has(out, key)) out[key] = rule(out[key]);
+  return out;
+}
+
+/** Python reads each job ID as str(value).strip() and keeps that text. */
+function jobIdsText(entry: unknown): unknown {
+  if (!isMap(entry) || !Array.isArray(entry.job_ids)) return entry;
+  return { ...entry, job_ids: entry.job_ids.map((id: unknown) => (typeof id === "string" ? pyStrip(id) : id)) };
+}
+
+function jobText(entry: unknown): unknown {
+  const out = jobIdsText(withText(entry, JOB_TEXT));
+  if (!isMap(out) || !isMap(out.environments)) return out;
+  const environments = Object.fromEntries(
+    Object.entries(out.environments).map(([label, values]) => [label, jobIdsText(withText(values, OVERRIDE_TEXT))]),
+  );
+  return { ...out, environments };
+}
+
+const ENTRY_TEXT: Record<string, (entry: unknown) => unknown> = {
+  job: jobText,
+  defaults: (entry) => withText(entry, DEFAULTS_TEXT),
+  workspace: (entry) => withText(entry, WORKSPACE_TEXT),
+  dependency: (entry) => withText(entry, DEPENDENCY_TEXT),
+};
+
+function sectionText(value: unknown, entry: (item: unknown) => unknown): unknown {
+  return Array.isArray(value) ? value.map(entry) : value;
+}
+
+/**
+ * The job list as it is stored: job and workspace IDs become strings, other big
+ * integers become numbers when safe, else strings, and text fields hold the text
+ * the Python loader reads. Running it twice changes nothing more.
+ */
 export function normalizeDocument(raw: Record<string, unknown>): Record<string, unknown> {
-  const out = convert(raw, false);
+  const text: Obj = { ...raw };
+  if (has(text, "defaults")) text.defaults = ENTRY_TEXT.defaults(text.defaults);
+  if (has(text, "workspaces")) text.workspaces = sectionText(text.workspaces, ENTRY_TEXT.workspace);
+  if (has(text, "jobs")) text.jobs = sectionText(text.jobs, ENTRY_TEXT.job);
+  if (has(text, "dependencies")) text.dependencies = sectionText(text.dependencies, ENTRY_TEXT.dependency);
+  const out = convert(text, false);
   return isMap(out) ? out : {};
+}
+
+/** The four sections of a normalized document, typed. The rules check the contents when the list is saved. */
+export function toJobListDocument(normalized: Record<string, unknown>): JobListDocument {
+  const { defaults, workspaces, jobs, dependencies } = normalized;
+  return {
+    ...(isMap(defaults) && Object.keys(defaults).length > 0 ? { defaults: defaults as JobListDocument["defaults"] } : {}),
+    ...(Array.isArray(workspaces) ? { workspaces: workspaces as JobListDocument["workspaces"] } : {}),
+    jobs: Array.isArray(jobs) ? (jobs as JobListDocument["jobs"]) : [],
+    ...(Array.isArray(dependencies) ? { dependencies: dependencies as JobListDocument["dependencies"] } : {}),
+  };
+}
+
+/** A stored job list in its stored form. Versions an older app saved may hold numbers or booleans in text fields. */
+export function storedDocument(doc: JobListDocument): JobListDocument {
+  return toJobListDocument(normalizeDocument({ ...doc }));
+}
+
+/** A change with its entry in the stored form, so a job named 2024 in the request is the job "2024". */
+export function storedChange(change: Change): Change {
+  if (change.kind === "delete") return change;
+  const value = convert(ENTRY_TEXT[change.target.type](change.value), false);
+  return { ...change, value: value as typeof change.value };
 }
 
 // ---------------------------------------------------------------------------

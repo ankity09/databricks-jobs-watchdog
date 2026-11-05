@@ -33,8 +33,26 @@ describe("parseJobListYaml", () => {
   });
   it("throws YamlError for a non-mapping top level and for duplicate keys", () => {
     expect(() => parseJobListYaml("- a\n- b\n")).toThrow(YamlError);
+    expect(() => parseJobListYaml("2024-11-05\n")).toThrow(new YamlError("the YAML file must contain a YAML mapping at the top level"));
     expect(() => parseJobListYaml("jobs: []\njobs: []\n")).toThrow(YamlError);
     expect(() => parseJobListYaml("jobs: [\n")).toThrow(YamlError);
+  });
+});
+
+describe("reading the file the way PyYAML does", () => {
+  it("y and n are text, not booleans", () => {
+    const doc = parseJobListYaml("jobs:\n  - job_name: y\n    max_gap_minutes: 5\n    notes: n\n");
+    expect(doc.jobs[0]).toEqual({ job_name: "y", max_gap_minutes: 5, notes: "n" });
+  });
+  it("an unknown tag stops the import, as PyYAML's safe loader has no constructor for it", () => {
+    expect(() => readJobListYaml("jobs: !!python/tuple [1, 2]\n")).toThrow(YamlError);
+    expect(() => readJobListYaml("jobs:\n  - job_name: !custom a\n")).toThrow(YamlError);
+  });
+  it("a plain = stops the import, as PyYAML reads it as a value tag it cannot build", () => {
+    expect(() => readJobListYaml("jobs:\n  - job_name: a\n    notes: =\n")).toThrow(YamlError);
+  });
+  it("an impossible date stops the import, as Python's ValueError stops the loader", () => {
+    expect(() => readJobListYaml("jobs:\n  - job_name: a\n    notes: 2023-02-29\n")).toThrow(YamlError);
   });
 });
 
@@ -55,6 +73,12 @@ describe("round trip", () => {
       expect(parseJobListYaml(toJobListYaml(doc, META))).toEqual(doc);
     });
   }
+  it("quotes text that PyYAML would read as something else, = among it", () => {
+    const doc = { jobs: [{ job_name: "a", max_gap_minutes: 5, notes: "=" }, { job_name: "20241105", max_gap_minutes: 5, notes: "1e3" }] };
+    const text = toJobListYaml(doc, META);
+    expect(parseJobListYaml(text)).toEqual(doc);
+    expect(text).not.toMatch(/notes: =\n/);
+  });
   it("keeps YAML 1.1 words and awkward strings as strings", () => {
     const doc = {
       jobs: [

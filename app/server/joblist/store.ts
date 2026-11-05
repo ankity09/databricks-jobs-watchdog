@@ -4,10 +4,14 @@
  * through unless someone else changed the same thing since: that is checked per
  * target, so edits to different jobs never collide. The repo runs each save in
  * one transaction under a lock, so two saves cannot both read the same latest.
+ *
+ * Text fields are stored as the text the Python loader reads (a job named 2024
+ * is the job "2024"). Versions an older app saved may hold numbers or booleans
+ * there, so every version is read through the same rule, and each change too.
  */
 import { applyChange, ChangeError, sameTargetValue } from "../../shared/joblist/apply";
 import { importSummary } from "../../shared/joblist/diff";
-import { validateDocument } from "../../shared/joblist/rules";
+import { storedChange, storedDocument, validateDocument } from "../../shared/joblist/rules";
 import { EMPTY_DOCUMENT, type Change, type ChangeKind, type JobListDocument, type RuleIssue } from "../../shared/joblist/types";
 
 export interface VersionRow {
@@ -74,18 +78,24 @@ function checkValid(document: JobListDocument): void {
   if (issues.length > 0) throw new InvalidError(issues);
 }
 
+/** A version with its document in the stored form. */
+function readable(row: VersionRow | null): VersionRow | null {
+  return row ? { ...row, document: storedDocument(row.document) } : null;
+}
+
 export function createJobListStore(repo: VersionRepo): JobListStore {
   return {
-    latest: () => repo.latest(),
-    get: (version) => repo.get(version),
-    list: (limit, before) => repo.list(limit, before),
+    latest: async () => readable(await repo.latest()),
+    get: async (version) => readable(await repo.get(version)),
+    list: async (limit, before) => (await repo.list(limit, before)).map((row) => ({ ...row, document: storedDocument(row.document) })),
 
-    saveChange: ({ baseVersion, change, savedBy }) =>
+    saveChange: ({ baseVersion, change: requested, savedBy }) =>
       repo.transaction(async (tx) => {
-        const latest = await tx.latest();
+        const change = storedChange(requested);
+        const latest = readable(await tx.latest());
         let base: JobListDocument = EMPTY_DOCUMENT;
         if (baseVersion !== null) {
-          const row = latest?.version === baseVersion ? latest : await tx.get(baseVersion);
+          const row = latest?.version === baseVersion ? latest : readable(await tx.get(baseVersion));
           if (!row) throw new NotFoundError(`Version ${baseVersion} does not exist.`);
           base = row.document;
         }
@@ -117,7 +127,7 @@ export function createJobListStore(repo: VersionRepo): JobListStore {
         checkValid(document);
         return tx.insert({
           version: (latest?.version ?? 0) + 1,
-          document,
+          document: storedDocument(document),
           savedBy,
           changeKind: "import",
           changeTarget: null,
@@ -127,7 +137,7 @@ export function createJobListStore(repo: VersionRepo): JobListStore {
 
     restore: ({ version, baseVersion, savedBy }) =>
       repo.transaction(async (tx) => {
-        const target = await tx.get(version);
+        const target = readable(await tx.get(version));
         if (!target) throw new NotFoundError(`Version ${version} does not exist.`);
         const latest = await tx.latest();
         if (latest && latest.version !== baseVersion) throw new ConflictError(latest.version);
