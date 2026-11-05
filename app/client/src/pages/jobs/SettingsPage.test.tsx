@@ -176,15 +176,17 @@ describe("SettingsPage", () => {
     await userEvent.type(retries, "-1");
     const exclude = within(defaults).getByLabelText("Exclude pattern");
     await userEvent.type(exclude, "(");
+    // On a slow machine a check can run between the two fields, so wait for the check that has both.
     await waitFor(
-      () =>
+      () => {
         expect(retries).toHaveAccessibleDescription(
           /max_retries must be a whole number of zero or more, got -1 \(used by orders_ingest and orders_enrich\)/,
-        ),
+        );
+        expect(exclude).toHaveAccessibleDescription(/job_name_exclude_regex does not compile/);
+      },
       { timeout: 3000 },
     );
     expect(within(defaults).getAllByText(/max_retries must be a whole number/)).toHaveLength(1);
-    expect(exclude).toHaveAccessibleDescription(/job_name_exclude_regex does not compile/);
     expect(within(defaults).getAllByText(/job_name_exclude_regex does not compile/)).toHaveLength(1);
     expect(within(defaults).queryByText(/This change breaks/)).not.toBeInTheDocument();
     expect(within(defaults).getByRole("button", { name: "Save defaults" })).toBeDisabled();

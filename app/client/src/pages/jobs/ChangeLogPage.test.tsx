@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -235,6 +235,44 @@ describe("ChangeLogPage", () => {
     const sheet = await screen.findByRole("dialog", { name: "Version 3" });
     expect(await within(sheet).findByRole("table", { name: "Workspace label 2024" })).toBeInTheDocument();
     expect(within(sheet).getByRole("table", { name: "Job 20241105" })).toBeInTheDocument();
+  });
+
+  it("shows the skeleton while Retry loads, and offers Retry when the newest versions do not load", async () => {
+    let answer: "fail" | "ok" | "hold" = "fail";
+    const held: Array<() => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = urlOf(input);
+        if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
+        if (url.startsWith("/api/job-list/versions?")) {
+          const ok = () => json(200, { versions: [V2, V1].map(summary) });
+          if (answer === "fail") return Promise.resolve(json(500, { error: "server", message: "The job list could not be read or saved. Try again." }));
+          if (answer === "ok") return Promise.resolve(ok());
+          return new Promise<Response>((resolve) => held.push(() => resolve(ok())));
+        }
+        if (url.startsWith("/api/analytics/query/")) {
+          return Promise.resolve(new Response('data: {"type":"result","data":[]}\n\n', { headers: { "Content-Type": "text/event-stream" } }));
+        }
+        return Promise.resolve(json(404, { error: "not_found", message: url }));
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText("The change log did not load. The job list could not be read or saved. Try again.")).toBeInTheDocument();
+    answer = "hold";
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByLabelText("Loading the change log")).toBeInTheDocument();
+    expect(screen.queryByText(/The change log did not load/)).not.toBeInTheDocument();
+    held.shift()?.();
+    expect(await screen.findByRole("button", { name: "Changed 2 settings on orders_ingest: max_gap_minutes, owner" })).toBeInTheDocument();
+
+    // A refresh that fails keeps the versions, says so, and offers Retry beside the message.
+    answer = "fail";
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    const line = await screen.findByText("The newest versions did not load. The job list could not be read or saved. Try again.");
+    answer = "ok";
+    await userEvent.click(within(line).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByText(/The newest versions did not load/)).not.toBeInTheDocument());
   });
 
   it("names the next step when nothing is saved yet", async () => {

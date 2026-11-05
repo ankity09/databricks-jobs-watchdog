@@ -438,4 +438,41 @@ describe("JobListPage", () => {
       change: { kind: "upsert", target: { type: "job", name: "20241105" }, value: { job_name: "20241105", max_gap_minutes: 90, notes: "True" } },
     });
   });
+
+  it("says why live status is missing as Monitoring does, names the grants, and offers Retry", async () => {
+    setClock("2026-11-05T22:30:00Z");
+    let liveCalls = 0;
+    let failLive = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = urlOf(input);
+        if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
+        if (url === "/api/job-list") return Promise.resolve(json(200, SAVED));
+        if (url.startsWith("/api/analytics/query/job_live_status")) {
+          liveCalls += 1;
+          // AppKit sends a failed statement as a generic message with the warehouse's code, as for a missing grant.
+          const event = failLive ? { type: "error", error: "Query execution failed", errorCode: "BAD_REQUEST" } : { type: "result", data: [{ job_name: "orders_ingest", status: "FAILED" }] };
+          return Promise.resolve(new Response(`data: ${JSON.stringify(event)}\n\n`, { headers: { "Content-Type": "text/event-stream" } }));
+        }
+        if (url.startsWith("/api/analytics/query/")) return Promise.resolve(sse([]));
+        return Promise.resolve(json(404, { error: "not_found", message: url }));
+      }),
+    );
+    renderPage();
+    const title = await screen.findByText("Live status is not available.");
+    const line = title.closest("[data-slot='query-problem']");
+    if (!(line instanceof HTMLElement)) throw new Error("no problem line");
+    expect(line).toHaveTextContent(
+      "Live status is not available. The query on main.watchdog failed. If no scan has run yet, click Scan now to create the tables. Otherwise, ask the owner of main.watchdog for USE CATALOG, USE SCHEMA and SELECT on it.",
+    );
+    expect(within(row("orders_ingest")).getByText("Not available")).toBeInTheDocument();
+
+    failLive = false;
+    const before = liveCalls;
+    await userEvent.click(within(line).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(liveCalls).toBeGreaterThan(before));
+    expect(await within(row("orders_ingest")).findByText("FAILED")).toBeInTheDocument();
+    expect(screen.queryByText("Live status is not available.")).not.toBeInTheDocument();
+  });
 });

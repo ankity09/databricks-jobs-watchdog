@@ -1,48 +1,41 @@
-import { sql } from "@databricks/appkit-ui/js";
 import { useAnalyticsQuery } from "@databricks/appkit-ui/react";
 import { useMemo } from "react";
 import { z } from "zod";
+import type { QueryProblem } from "../lib/queryProblem";
 import { type Status, toStatus } from "../lib/status";
-import { useAppConfig } from "./useAppConfig";
-import { useLastGood } from "./useLastGood";
-import { useRefreshKey } from "./useRefreshKey";
+import { useQueryRows, useWatchdogLocation } from "./useWatchdogRows";
 
-const LiveStatusRows = z.array(z.object({ job_name: z.string(), status: z.string().nullable() }));
+/** One row of job_live_status.obo.sql: a job's worst status in the newest scans. */
+const LiveStatusRow = z.object({ job_name: z.string(), status: z.string().nullable() });
 
 export interface LiveStatus {
   byJob: Map<string, Status>;
+  /** The current query has not answered yet. `byJob` keeps the last answer meanwhile. */
   loading: boolean;
-  error: string | null;
+  /** Why the current query has no answer, for describeProblem. `byJob` may still hold an older answer. */
+  problem: QueryProblem | null;
+  /** True when the query failed and `byJob` holds the answer from before. */
+  stale: boolean;
+  /** "catalog.schema" of the Watchdog tables, for the problem's text. */
+  location: string | null;
 }
 
 /**
  * Each job's worst status in the newest scans (job_live_status.obo.sql, run as
- * the signed-in person). While a newer query loads (after a refresh or bump()),
- * `loading` is true and `byJob` keeps the last result.
+ * the signed-in person), through the same query path as Monitoring: the idle
+ * snapshot rule, the last good answer during a refresh, and a row of an
+ * unexpected shape dropped instead of the whole answer.
  */
 export function useLiveStatus(): LiveStatus {
-  const { refresh } = useRefreshKey();
-  const { config, error: configError } = useAppConfig(refresh);
-  const ready = config !== null && config.catalog !== "";
-  const parameters = useMemo(
-    () => ({ catalog: sql.string(config?.catalog ?? ""), schema: sql.string(config?.schema ?? ""), refresh: sql.int(refresh) }),
-    [config, refresh],
-  );
-  const query = useAnalyticsQuery("job_live_status", parameters, { autoStart: ready });
-  // null until the current query answers (see useLastGood for why that includes an idle first render).
-  const parsed = useMemo(() => (query.data === null ? null : LiveStatusRows.safeParse(query.data)), [query.data]);
-  const fresh = useMemo(
-    () => (parsed?.success ? new Map(parsed.data.map((row) => [row.job_name, toStatus(row.status)] as const)) : null),
-    [parsed],
-  );
-  const empty = useMemo(() => new Map<string, Status>(), []);
-  const byJob = useLastGood(fresh) ?? empty;
-
-  if (configError) return { byJob, loading: false, error: configError.message };
-  if (config === null) return { byJob, loading: true, error: null };
-  if (!ready) return { byJob, loading: false, error: "The scan job has no catalog, so the app cannot find the Watchdog tables." };
-  if (query.error) return { byJob, loading: false, error: query.error };
-  if (parsed === null) return { byJob, loading: true, error: null };
-  if (!parsed.success) return { byJob, loading: false, error: "The live status rows had an unexpected shape." };
-  return { byJob, loading: false, error: null };
+  const where = useWatchdogLocation();
+  const query = useAnalyticsQuery("job_live_status", where.params, { autoStart: where.ready });
+  const result = useQueryRows(query, LiveStatusRow, where, "job_live_status");
+  const byJob = useMemo(() => new Map((result.rows ?? []).map((row) => [row.job_name, toStatus(row.status)] as const)), [result.rows]);
+  return {
+    byJob,
+    loading: result.loading,
+    problem: result.problem,
+    stale: result.problem !== null && result.rows !== null,
+    location: where.location,
+  };
 }

@@ -45,6 +45,8 @@ interface VersionsState {
   versions: VersionSummary[] | null;
   /** The newest page did not load. */
   error: ApiError | null;
+  /** The newest page is loading: at first, after Retry and after Refresh. */
+  loading: boolean;
   /** Older versions can exist past the oldest one shown. */
   more: boolean;
   older: { loading: boolean; error: ApiError | null };
@@ -64,22 +66,23 @@ function withNewest(current: VersionsState, page: VersionSummary[]): VersionsSta
   const newestShown = shown[0]?.version;
   const oldestNew = page[page.length - 1]?.version;
   if (newestShown === undefined || oldestNew === undefined || !moreAfter(page) || oldestNew > newestShown) {
-    return { versions: page, error: null, more: moreAfter(page), older: OLDER_IDLE };
+    return { versions: page, error: null, loading: false, more: moreAfter(page), older: OLDER_IDLE };
   }
   const byVersion = new Map(shown.map((v) => [v.version, v]));
   for (const v of page) byVersion.set(v.version, v);
-  return { ...current, versions: [...byVersion.values()].sort((a, b) => b.version - a.version), error: null };
+  return { ...current, versions: [...byVersion.values()].sort((a, b) => b.version - a.version), error: null, loading: false };
 }
 
 /** The saved versions, newest first, 50 at a time. A failed load keeps the versions already shown. */
 function useVersions() {
-  const [state, setState] = useState<VersionsState>({ versions: null, error: null, more: false, older: OLDER_IDLE });
+  const [state, setState] = useState<VersionsState>({ versions: null, error: null, loading: true, more: false, older: OLDER_IDLE });
   const reload = useCallback(async () => {
+    setState((current) => ({ ...current, loading: true }));
     try {
       const page = await listVersions(PAGE);
       setState((current) => withNewest(current, page));
     } catch (error) {
-      setState((current) => ({ ...current, error: toApiError(error) }));
+      setState((current) => ({ ...current, error: toApiError(error), loading: false }));
     }
   }, []);
   const loadOlder = useCallback(async (before: number) => {
@@ -104,7 +107,7 @@ function useVersions() {
 
 /** Every saved version of the job list: who saved it, when, and what changed. */
 export function ChangeLogPage() {
-  const { versions, error, more, older, reload, loadOlder } = useVersions();
+  const { versions, error, loading, more, older, reload, loadOlder } = useVersions();
   const [open, setOpen] = useState<VersionSummary | null>(null);
   // After older versions load, focus moves to the first of them (its index in the table).
   const table = useRef<HTMLDivElement>(null);
@@ -118,7 +121,7 @@ export function ChangeLogPage() {
 
   let body: ReactNode;
   if (versions === null) {
-    body = error ? <LoadError message={error.message} onRetry={() => void reload()} /> : <TableSkeleton />;
+    body = error && !loading ? <LoadError message={error.message} onRetry={() => void reload()} /> : <TableSkeleton />;
   } else if (versions.length === 0) {
     body = (
       <Empty className="flex-none border border-dashed border-border bg-muted/40 md:py-14">
@@ -139,10 +142,13 @@ export function ChangeLogPage() {
   } else {
     body = (
       <section className="flex flex-col gap-2" aria-label="Versions">
-        {error ? (
-          <p className="flex items-center gap-1.5 text-xs text-destructive">
+        {error && !loading ? (
+          <p role="status" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-destructive">
             <CircleAlert className="size-3.5" aria-hidden="true" />
             The newest versions did not load. {error.message}
+            <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => void reload()}>
+              Retry
+            </Button>
           </p>
         ) : null}
         <div ref={table} className="overflow-hidden rounded-md border border-border">
@@ -228,9 +234,9 @@ export function ChangeLogPage() {
         description="Every saved version of the job list: who saved it, when, and what changed. Click a version to see its changes."
         actions={
           versions !== null ? (
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void reload()}>
+            <Button variant="outline" size="sm" className="gap-1.5" disabled={loading} onClick={() => void reload()}>
               <RotateCw aria-hidden="true" />
-              Refresh
+              {loading ? "Refreshing..." : "Refresh"}
             </Button>
           ) : null
         }

@@ -29,7 +29,7 @@ import {
   useReactFlow,
   useStore,
 } from "@xyflow/react";
-import { Link2, Network, RotateCw, Server, X } from "lucide-react";
+import { CircleAlert, Link2, Network, RotateCw, Server, X } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import { impactOf } from "../../../../shared/joblist/impact";
@@ -44,6 +44,7 @@ import { cn } from "../../lib/utils";
 import { AddLinkDialog, AddServiceDialog } from "./AddLinkDialog";
 import { ConfigBanner } from "./ConfigBanner";
 import { JobNode, LinkEdge, MapLegend, MapMarkers, SectionNode, ServiceNode } from "./MapElements";
+import { QueryProblemLine } from "./QueryProblemLine";
 import { ReloadButton } from "./ReloadButton";
 import {
   type EdgeHighlight,
@@ -410,7 +411,7 @@ export function DependencyMapPage() {
   } else if (state === null) {
     body = (
       <Alert variant="destructive">
-        <AlertTitle>Could not load the job list.</AlertTitle>
+        <AlertTitle>The job list did not load.</AlertTitle>
         <AlertDescription className="flex flex-wrap items-center gap-3">
           <span>{error?.message}</span>
           <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={loading} onClick={() => void reload()}>
@@ -557,20 +558,24 @@ export function DependencyMapPage() {
           {notice}
         </p>
       ) : null}
-      {state !== null && error !== null ? (
-        <Alert variant="destructive">
-          <AlertTitle>Could not reload the job list.</AlertTitle>
-          <AlertDescription>{error.message} The map shows the version loaded before.</AlertDescription>
-        </Alert>
-      ) : null}
-      {live.error && graph ? (
-        <p className="-mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-          Live status is unavailable, so every job shows Unknown. {live.error}
-          <Button variant="ghost" size="sm" className="h-6 gap-1 px-1.5 text-xs" onClick={() => bump()}>
-            <RotateCw className="size-3" aria-hidden="true" />
+      {state !== null && error !== null && !loading ? (
+        // The map on screen loaded, but a later load did not: the same line as on the job list.
+        <p role="status" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-destructive">
+          <CircleAlert className="size-3.5" aria-hidden="true" />
+          The newest job list did not load. {error.message} The map shows the version loaded before.
+          <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => void reload()}>
             Retry
           </Button>
         </p>
+      ) : null}
+      {live.problem && graph ? (
+        <QueryProblemLine
+          title={live.stale ? "Live status did not refresh" : "Live status is not available"}
+          problem={live.problem}
+          location={live.location}
+          note={live.stale ? "The map shows the statuses from before." : "Every job shows Unknown until it loads."}
+          onRetry={bump}
+        />
       ) : null}
       {body}
       {document ? (

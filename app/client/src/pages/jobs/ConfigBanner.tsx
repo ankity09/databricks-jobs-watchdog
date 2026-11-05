@@ -1,12 +1,10 @@
-import { sql } from "@databricks/appkit-ui/js";
-import { Alert, AlertDescription, AlertTitle, Button, useAnalyticsQuery } from "@databricks/appkit-ui/react";
-import { CircleAlert, Info, RotateCw } from "lucide-react";
-import { useMemo } from "react";
+import { Alert, AlertDescription, AlertTitle, useAnalyticsQuery } from "@databricks/appkit-ui/react";
+import { CircleAlert, Info } from "lucide-react";
 import { z } from "zod";
-import { useAppConfig } from "../../hooks/useAppConfig";
-import { useLastGood } from "../../hooks/useLastGood";
 import { useRefreshKey } from "../../hooks/useRefreshKey";
+import { useQueryRows, useWatchdogLocation } from "../../hooks/useWatchdogRows";
 import { formatUtc } from "../../lib/time";
+import { QueryProblemLine } from "./QueryProblemLine";
 
 /** A whole number from the warehouse, which sends every value as a string. */
 function toVersion(value: string | number | null): number | null {
@@ -21,17 +19,16 @@ function toText(value: unknown): string | null {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
-const LoadRows = z.array(
-  z.object({
-    loaded_at: z.string(),
-    source: z.string(),
-    version: z.union([z.string(), z.number()]).nullable().transform(toVersion),
-    status: z.string(),
-    error: z.unknown().transform(toText),
-  }),
-);
+/** One row of config_load_latest.obo.sql, newest first. */
+const LoadRow = z.object({
+  loaded_at: z.string(),
+  source: z.string(),
+  version: z.union([z.string(), z.number()]).nullable().transform(toVersion),
+  status: z.string(),
+  error: z.unknown().transform(toText),
+});
 
-type Load = z.infer<typeof LoadRows>[number];
+type Load = z.infer<typeof LoadRow>;
 
 export interface ConfigBannerProps {
   /** The newest saved version of the job list: null when nothing is saved, undefined while the list loads. */
@@ -44,35 +41,28 @@ export interface ConfigBannerProps {
  * or a scan that is behind the saved version. Nothing shows when the scan is up
  * to date, or before any load is recorded. Only the newest row counts: a
  * retried task can write the same FAILED row more than once.
+ *
+ * The query goes through Monitoring's path (useWatchdogLocation and
+ * useQueryRows): while a refresh loads or after it fails, the last answer
+ * stays; with no answer, the problem says what to ask for, with Retry.
  */
 export function ConfigBanner({ savedVersion }: ConfigBannerProps) {
-  const { refresh, bump } = useRefreshKey();
-  const { config, error: configError } = useAppConfig(refresh);
-  const ready = config !== null && config.catalog !== "";
-  const parameters = useMemo(
-    () => ({ catalog: sql.string(config?.catalog ?? ""), schema: sql.string(config?.schema ?? ""), refresh: sql.int(refresh) }),
-    [config, refresh],
-  );
-  const query = useAnalyticsQuery("config_load_latest", parameters, { autoStart: ready });
-  // null until the current query answers (AppKit's first render for new parameters is idle, not loading).
-  const parsed = useMemo(() => (query.data === null ? null : LoadRows.safeParse(query.data)), [query.data]);
-  const answer = useMemo(() => (parsed?.success ? { newest: parsed.data[0] ?? null } : null), [parsed]);
-  // While a newer query loads, keep the last answer, so the banner does not blink on a refresh.
-  const shown = useLastGood(answer);
+  const { bump } = useRefreshKey();
+  const where = useWatchdogLocation();
+  const query = useAnalyticsQuery("config_load_latest", where.params, { autoStart: where.ready });
+  const loads = useQueryRows(query, LoadRow, where, "config_load_latest");
 
-  const failed = configError !== null || (config !== null && !ready) || query.error !== null || parsed?.success === false;
-  if (failed) {
-    return (
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
-        <p>{configError ? configError.message : "The app could not check which job-list version the scan uses."}</p>
-        <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2" onClick={() => bump()}>
-          <RotateCw className="size-3.5" aria-hidden="true" />
-          Retry
-        </Button>
-      </div>
-    );
+  if (loads.rows === null) {
+    return loads.problem ? (
+      <QueryProblemLine
+        title="Could not check which job-list version the scan uses"
+        problem={loads.problem}
+        location={where.location}
+        onRetry={bump}
+      />
+    ) : null;
   }
-  const newest = shown?.newest ?? null;
+  const newest = loads.rows[0] ?? null;
   if (newest === null) return null;
   return <LoadBanner load={newest} savedVersion={savedVersion} />;
 }

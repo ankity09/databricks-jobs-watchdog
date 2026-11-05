@@ -35,6 +35,7 @@ import { type ReactNode, useMemo, useState } from "react";
 import { type Change, dependencyKey, type JobEntry, type JobListDocument, type SaveResult } from "../../../../shared/joblist/types";
 import { type ReloadJobList, type SaveOutcome, useJobList, useOpenedVersion } from "../../hooks/useJobList";
 import { type LiveStatus, useLiveStatus } from "../../hooks/useLiveStatus";
+import { useRefreshKey } from "../../hooks/useRefreshKey";
 import { changeIssues, linksRemovedWith } from "../../lib/draft";
 import { inheritedSettings, type InheritedSettings, pyReEscape } from "../../lib/job-form";
 import { exportUrl } from "../../lib/joblist-api";
@@ -49,6 +50,7 @@ import { ConfigBanner } from "./ConfigBanner";
 import { ImportDialog } from "./ImportDialog";
 import { JobEditorSheet } from "./JobEditorSheet";
 import { PatternMatches } from "./PatternMatches";
+import { QueryProblemLine } from "./QueryProblemLine";
 import { ReloadButton } from "./ReloadButton";
 
 /** What an extra toolbar action can do on this page. */
@@ -119,6 +121,7 @@ function isActive(job: JobEntry, inherited: InheritedSettings): boolean {
 export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProps = {}) {
   const { state, loading, error, reload, save } = useJobList();
   const live = useLiveStatus();
+  const { bump } = useRefreshKey();
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<Editing | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -251,11 +254,14 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
             </p>
           ) : null}
         </div>
-        {live.error ? (
-          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <CircleAlert className="size-3.5" aria-hidden="true" />
-            Live status is not available: {live.error}
-          </p>
+        {live.problem ? (
+          <QueryProblemLine
+            title={live.stale ? "Live status did not refresh" : "Live status is not available"}
+            problem={live.problem}
+            location={live.location}
+            note={live.stale ? "The table shows the statuses from before." : undefined}
+            onRetry={bump}
+          />
         ) : null}
         <JobTable
           jobs={shown}
@@ -292,7 +298,7 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
           <CircleAlert className="size-3.5" aria-hidden="true" />
           The newest job list did not load. {error.message}
           <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => void reload()}>
-            Try again
+            Retry
           </Button>
         </p>
       ) : null}
@@ -529,7 +535,7 @@ function LiveStatusCell({ status, live, active }: { status: Status | undefined; 
     );
   }
   if (live.loading) return <Skeleton className="h-3.5 w-16" />;
-  if (live.error) return <span className="text-xs text-muted-foreground">Not available</span>;
+  if (live.problem) return <span className="text-xs text-muted-foreground">Not available</span>;
   return <span className="text-xs text-muted-foreground">{active ? "Not scanned yet" : "Off"}</span>;
 }
 
