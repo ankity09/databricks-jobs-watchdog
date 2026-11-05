@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -679,3 +680,11 @@ def test_example_region_files_ship_paused_until_the_job_list_is_imported(path):
     assert data["scan"]["config_source"] == "lakebase"
     assert data["scan"]["schedule_status"] == "PAUSED"
     assert "import" in path.read_text()
+
+
+def test_the_app_package_declares_the_repo_license():
+    # The repo is Apache 2.0 (LICENSE); npm and license scanners read the app's own package files.
+    assert "Apache License" in (repo_root() / "LICENSE").read_text()
+    package = json.loads((repo_root() / "app" / "package.json").read_text())
+    lock = json.loads((repo_root() / "app" / "package-lock.json").read_text())
+    assert package["license"] == lock["packages"][""]["license"] == "Apache-2.0"
