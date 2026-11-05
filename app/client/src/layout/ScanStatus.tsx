@@ -1,136 +1,240 @@
-import { sql } from "@databricks/appkit-ui/js";
-import {
-  Button,
-  Skeleton,
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-  useAnalyticsQuery,
-  useSidebar,
-} from "@databricks/appkit-ui/react";
-import { RotateCw } from "lucide-react";
-import { type JSX, useEffect, useMemo, useState } from "react";
-import { z } from "zod";
-import { useAppConfig } from "../hooks/useAppConfig";
-import { useLastGood } from "../hooks/useLastGood";
+import { Button, Skeleton, Tooltip, TooltipContent, TooltipTrigger, useAnalyticsQuery, useSidebar } from "@databricks/appkit-ui/react";
+import { ArrowUpRight, Hourglass, Play, RotateCw } from "lucide-react";
+import { type JSX, useState } from "react";
+import { useNow } from "../hooks/useNow";
 import { useRefreshKey } from "../hooks/useRefreshKey";
-import { cn } from "../lib/utils";
+import { type ScanState, scanResultLabel, useScanNow } from "../hooks/useScanNow";
+import { useQueryRows, useWatchdogLocation } from "../hooks/useWatchdogRows";
+import { describeProblem } from "../lib/queryProblem";
+import { FreshnessRow } from "../lib/rows";
 import { formatAgo, formatUtc, parseTime } from "../lib/time";
-
-const FreshnessRows = z.array(
-  z.object({ source: z.string(), last_observed_at: z.string().nullable(), scan_id: z.string().nullable() }),
-);
+import { cn } from "../lib/utils";
 
 const TWO_HOURS = 2 * 60 * 60 * 1000;
 
-/** The time, re-read every minute, so "12 min ago" stays true. */
-function useNow(): Date {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 60_000);
-    return () => window.clearInterval(timer);
-  }, []);
-  return now;
-}
-
 /** The newest last_observed_at over every scan source, or null when there is none. */
-function newestScan(rows: z.infer<typeof FreshnessRows>): string | null {
+function newestScan(rows: readonly FreshnessRow[]): string | null {
   let newest: string | null = null;
+  let newestMs = -Infinity;
   for (const row of rows) {
-    const time = row.last_observed_at === null ? null : parseTime(row.last_observed_at);
-    if (time !== null && (newest === null || time > (parseTime(newest) ?? 0))) newest = row.last_observed_at;
+    const ms = row.last_observed_at === null ? null : parseTime(row.last_observed_at);
+    if (ms !== null && ms > newestMs) {
+      newest = row.last_observed_at;
+      newestMs = ms;
+    }
   }
   return newest;
 }
 
+/** The line under Scan now, and the Scan now button's name when the nav is collapsed. */
+function stateLine(state: ScanState): string | null {
+  switch (state.kind) {
+    case "idle":
+      return null;
+    case "checking":
+      return "Starting.";
+    case "running":
+      return state.alreadyRunning ? "A scan is already running." : "Scan running.";
+    case "done":
+      return `Done: ${scanResultLabel(state.result)}.`;
+    case "error":
+      return state.message;
+  }
+}
+
+/** What a screen reader hears when Scan now changes. */
+function stateAnnouncement(state: ScanState): string | null {
+  switch (state.kind) {
+    case "idle":
+      return null;
+    case "checking":
+      return "Starting a scan.";
+    case "running":
+      return state.alreadyRunning ? "A scan is already running. Scan now did not start another." : "Scan started.";
+    case "done":
+      return `Scan done: ${scanResultLabel(state.result)}.`;
+    case "error":
+      return `Scan now failed. ${state.message}`;
+  }
+}
+
+/**
+ * The text of the live region. It changes only for real news: a newer scan
+ * than the one shown before (not the first one, and not the minutes going by),
+ * or a change of Scan now's state.
+ */
+function useAnnouncement(newest: string | null, scanText: string | null): string {
+  const [last, setLast] = useState({ newest, scanText, text: "" });
+  if (last.newest !== newest || last.scanText !== scanText) {
+    let text = last.text;
+    if (scanText !== last.scanText) {
+      if (scanText !== null) text = scanText;
+    } else if (last.newest !== null && newest !== null) {
+      text = `New scan results from ${formatUtc(newest)}.`;
+    }
+    // React's pattern for adjusting state while rendering: the guard stops it after one update.
+    setLast({ newest, scanText, text });
+  }
+  return last.text;
+}
+
 function LiveDot({ fresh }: { fresh: boolean }) {
   return (
-    <span className="relative flex size-2 shrink-0" aria-hidden="true">
-      {fresh ? (
-        <span className="absolute inline-flex size-full animate-ping rounded-full bg-success opacity-50 motion-reduce:animate-none" />
-      ) : null}
+    <span data-slot="live-dot" data-fresh={fresh} className="relative flex size-2 shrink-0" aria-hidden="true">
+      {fresh ? <span className="absolute inline-flex size-full animate-ping rounded-full bg-success opacity-50 motion-reduce:animate-none" /> : null}
       <span className={cn("relative inline-flex size-2 rounded-full", fresh ? "bg-success" : "bg-warning")} />
     </span>
   );
 }
 
+function RunLink({ url }: { url: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex shrink-0 items-center gap-0.5 rounded-sm font-medium text-foreground underline decoration-border underline-offset-2 outline-none hover:text-primary hover:decoration-primary focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      View run
+      <ArrowUpRight className="size-3" aria-hidden="true" />
+      <span className="sr-only">, opens in a new tab</span>
+    </a>
+  );
+}
+
 /**
- * When the newest scan ran (scan_freshness.obo.sql, run as the signed-in
- * person). Task 5 replaces this with the full version and a Scan now button.
+ * The bottom of the nav: when the newest scan ran, with a live dot (green when
+ * it is under 2 hours old), and Scan now. Scan now starts watchdog_scan, or
+ * shows the run that is already going; when the run ends, every query refreshes.
+ * Collapsed, it is the dot and a play button, each with a tooltip.
  */
 export function ScanStatus(): JSX.Element {
-  const { state } = useSidebar();
-  const collapsed = state === "collapsed";
-  const { config, error: configError } = useAppConfig();
-  const { refresh, bump } = useRefreshKey();
-  const ready = config !== null && config.catalog !== "";
-  const parameters = useMemo(
-    () => ({ catalog: sql.string(config?.catalog ?? ""), schema: sql.string(config?.schema ?? ""), refresh: sql.int(refresh) }),
-    [config, refresh],
-  );
-  const query = useAnalyticsQuery("scan_freshness", parameters, { autoStart: ready });
+  const { state: sidebar } = useSidebar();
+  const collapsed = sidebar === "collapsed";
+  const { bump } = useRefreshKey();
   const now = useNow();
+  const where = useWatchdogLocation();
+  const query = useAnalyticsQuery("scan_freshness", where.params, { autoStart: where.ready });
+  const freshness = useQueryRows(query, FreshnessRow, where, "scan_freshness");
+  const scan = useScanNow(bump);
 
-  // null until the current query answers; AppKit's first render for new parameters is idle, not loading.
-  const parsed = useMemo(() => (query.data === null ? null : FreshnessRows.safeParse(query.data)), [query.data]);
-  const answer = useMemo(() => (parsed?.success ? { newest: newestScan(parsed.data) } : null), [parsed]);
-  // While a newer query loads, keep showing the last answer.
-  const shown = useLastGood(answer);
-
-  const failed = configError !== null || (config !== null && !ready) || query.error !== null || parsed?.success === false;
-  const loading = !failed && shown === null;
-  const newest = failed ? null : (shown?.newest ?? null);
+  const loading = freshness.rows === null && freshness.problem === null;
+  const failed = freshness.rows === null && freshness.problem !== null;
+  const newest = freshness.rows === null ? null : newestScan(freshness.rows);
+  const fresh = newest !== null && now.getTime() - (parseTime(newest) ?? 0) < TWO_HOURS;
+  const busy = scan.state.kind === "checking" || scan.state.kind === "running";
+  const line = stateLine(scan.state);
+  const runUrl = scan.state.kind === "running" || scan.state.kind === "done" ? scan.state.url : null;
+  const announcement = useAnnouncement(newest, stateAnnouncement(scan.state));
 
   let label: string;
   let detail: string;
   if (loading) {
     label = "Checking the last scan";
     detail = label;
-  } else if (failed) {
+  } else if (failed && freshness.problem) {
     label = "Last scan unknown";
-    detail =
-      configError?.message ??
-      (ready ? (query.error ?? "The scan results had an unexpected shape.") : "The scan job has no catalog, so the app cannot find the scan results.");
+    detail = describeProblem(freshness.problem, where.location).detail;
   } else if (newest === null) {
     label = "No scans yet";
-    detail = "No scan results yet. Run the watchdog_scan job, or wait for its schedule.";
+    detail = "No scan results yet. Click Scan now, or wait for the next scheduled scan.";
   } else {
     label = `Last scan ${formatAgo(newest, now)}`;
-    detail = `Last scan ${formatUtc(newest)}`;
+    detail = `Last scan ${formatUtc(newest)}, ${formatAgo(newest, now)}`;
+    if (freshness.problem) detail += ". Could not refresh.";
   }
-  const fresh = newest !== null && now.getTime() - (parseTime(newest) ?? 0) < TWO_HOURS;
+
+  const startScan = () => {
+    if (!busy) void scan.start();
+  };
+  const buttonText = scan.state.kind === "checking" ? "Starting" : scan.state.kind === "running" ? "Running" : "Scan now";
+  const ButtonIcon = busy ? Hourglass : Play;
+
+  const live = (
+    <p role="status" className="sr-only">
+      {announcement}
+    </p>
+  );
 
   if (collapsed) {
+    const scanName = line ? `Scan now. ${line}` : "Scan now";
     return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span tabIndex={0} aria-label={detail} className="flex size-8 items-center justify-center self-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            {loading ? <Skeleton className="size-2 rounded-full" /> : <LiveDot fresh={fresh} />}
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="right">{detail}</TooltipContent>
-      </Tooltip>
+      <>
+        <div className="flex flex-col items-center gap-1">
+          {failed ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label="Retry loading the last scan" className="text-warning" onClick={bump}>
+                  <RotateCw aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">Last scan unknown. Retry.</TooltipContent>
+            </Tooltip>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span role="img" aria-label={detail} className="flex size-8 items-center justify-center">
+                  {loading ? <Skeleton className="motion-reduce:animate-none size-2 rounded-full" /> : <LiveDot fresh={fresh} />}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="right">{detail}</TooltipContent>
+            </Tooltip>
+          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label={scanName} aria-disabled={busy} onClick={startScan} className={cn(busy && "cursor-default opacity-70")}>
+                <ButtonIcon aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right" className="max-w-64">
+              {scanName}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+        {live}
+      </>
     );
   }
 
   return (
-    <div className="flex min-h-8 items-center gap-2 px-2 text-xs" role="status" aria-live="polite">
-      {loading ? (
-        <Skeleton className="h-3.5 w-36" />
-      ) : (
-        <>
-          <LiveDot fresh={fresh} />
-          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground" title={detail}>
-            {label}
-          </span>
+    <>
+      <div className="flex flex-col gap-1 px-2">
+        <div className="flex min-h-8 items-center gap-2">
+          {loading ? (
+            <Skeleton className="motion-reduce:animate-none h-3.5 flex-1" />
+          ) : (
+            <>
+              <LiveDot fresh={fresh} />
+              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground" title={detail}>
+                {label}
+              </span>
+            </>
+          )}
           {failed ? (
-            <Button variant="ghost" size="sm" className="h-6 gap-1 px-1.5 text-xs" onClick={() => bump()}>
+            <Button variant="ghost" size="sm" className="h-7 shrink-0 gap-1 px-1.5 text-xs" onClick={bump}>
               <RotateCw className="size-3" aria-hidden="true" />
               Retry
             </Button>
           ) : null}
-        </>
-      )}
-    </div>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-disabled={busy}
+            onClick={startScan}
+            className={cn("h-7 shrink-0 gap-1.5 bg-background px-2.5 text-xs", busy && "cursor-default text-muted-foreground hover:bg-background")}
+          >
+            <ButtonIcon className="size-3.5" aria-hidden="true" />
+            {buttonText}
+          </Button>
+        </div>
+        {line && scan.state.kind !== "checking" ? (
+          <p className={cn("flex min-w-0 flex-wrap items-center gap-x-1.5 pl-4 text-[11px] leading-4", scan.state.kind === "error" ? "text-destructive" : "text-muted-foreground")}>
+            <span className="min-w-0">{line}</span>
+            {runUrl ? <RunLink url={runUrl} /> : null}
+          </p>
+        ) : null}
+      </div>
+      {live}
+    </>
   );
 }

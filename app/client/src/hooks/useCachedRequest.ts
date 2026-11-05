@@ -34,7 +34,12 @@ export interface CachedRequestState<T> {
   error: ApiError | null;
 }
 
-export function useCachedRequest<T>(request: CachedRequest<T>): CachedRequestState<T> {
+/**
+ * `retryKey`: when it changes, a request that failed is made again (one that
+ * worked is not, since its answer is kept). Pass the refresh key, so Retry
+ * (bump()) also retries this request.
+ */
+export function useCachedRequest<T>(request: CachedRequest<T>, retryKey?: unknown): CachedRequestState<T> {
   const [state, setState] = useState<CachedRequestState<T>>(() => {
     const value = request.peek();
     return { value, loading: value === null, error: null };
@@ -52,6 +57,6 @@ export function useCachedRequest<T>(request: CachedRequest<T>): CachedRequestSta
     return () => {
       active = false;
     };
-  }, [request]);
+  }, [request, retryKey]);
   return state;
 }

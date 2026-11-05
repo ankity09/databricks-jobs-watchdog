@@ -8,7 +8,9 @@ import { registerJobListRoutes } from "./joblist/routes";
 await createApp({
   plugins: [
     server({}),
-    analytics({}),
+    // A query's rows go to the browser as one SSE event, capped at 5 MiB by default. The history strip's
+    // 7 days of hourly scans is about 183 bytes per job and scan, over 5 MiB at about 170 jobs, so allow 16 MiB.
+    analytics({ streamConfig: { maxEventSize: 16 * 1024 * 1024 } }),
     lakebase({ pool: { max: 10 } }),
     jobs({}),
     // The copilot's Genie space (the app's genie-space resource), under the alias "default".
