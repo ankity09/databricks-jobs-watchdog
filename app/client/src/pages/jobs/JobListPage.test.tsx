@@ -181,6 +181,37 @@ describe("JobListPage", () => {
     expect(screen.getByRole("switch", { name: "Check orders_ingest" })).not.toBeChecked();
   });
 
+  it("names the job when the switch conflicts, and keeps the alert until a reload works", async () => {
+    setClock("2026-11-05T12:45:00Z");
+    const conflict = {
+      error: "conflict",
+      message: "Someone else changed this since you opened it. Reload to see their change.",
+      latestVersion: 13,
+    };
+    const fetchMock = mockApi(SAVED, () => json(409, conflict));
+    renderPage();
+    const toggle = await screen.findByRole("switch", { name: "Check orders_ingest" });
+    // From here the next load of the job list fails once.
+    const answer = fetchMock.getMockImplementation();
+    let failLoad = true;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (urlOf(input) === "/api/job-list" && failLoad) {
+        failLoad = false;
+        return Promise.resolve(json(500, { error: "server", message: "The job list could not be read or saved. Try again." }));
+      }
+      return answer ? answer(input, init) : Promise.resolve(json(404, { error: "not_found", message: "" }));
+    });
+    await userEvent.click(toggle);
+    const message = "Someone else changed orders_ingest since you opened the list. Reload to see their change.";
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Reload" }));
+    expect(await screen.findByText("The job list did not reload. The job list could not be read or saved. Try again.")).toBeInTheDocument();
+    expect(screen.getByText(message)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(screen.queryByText(message)).not.toBeInTheDocument());
+    expect(screen.queryByText(/did not reload/)).not.toBeInTheDocument();
+  });
+
   it("asks before a delete, and names the links it also removes", async () => {
     setClock("2026-11-05T13:30:00Z");
     const posts: unknown[] = [];

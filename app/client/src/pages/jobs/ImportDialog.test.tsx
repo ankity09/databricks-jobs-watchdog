@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImportPreview, SaveResult } from "../../../../shared/joblist/types";
+import { ApiError } from "../../lib/api";
 import { ImportDialog } from "./ImportDialog";
 
 const YAML = "jobs:\n  - job_name: orders_ingest\n    max_gap_minutes: 60\n";
@@ -59,7 +60,7 @@ function callsTo(fetchMock: ReturnType<typeof mockApi>, path: string) {
 
 function renderDialog(props: Partial<Parameters<typeof ImportDialog>[0]> = {}) {
   const onImported = vi.fn<(result: SaveResult) => void>();
-  const onReload = vi.fn(() => Promise.resolve());
+  const onReload = vi.fn<() => Promise<ApiError | null>>(() => Promise.resolve(null));
   const onOpenChange = vi.fn<(open: boolean) => void>();
   render(<ImportDialog open onOpenChange={onOpenChange} baseVersion={7} onReload={onReload} onImported={onImported} {...props} />);
   return { onImported, onReload, onOpenChange };
@@ -132,6 +133,15 @@ describe("ImportDialog", () => {
     expect(screen.getByRole("button", { name: "Import" })).toBeEnabled();
   });
 
+  it("lists a repeated issue once", async () => {
+    const duplicate = { path: "jobs[orders_ingest]", message: "duplicate job_name 'orders_ingest' in the job list" };
+    mockApi({ ...PREVIEW, issues: [duplicate, duplicate] });
+    renderDialog();
+    await pasteAndPreview();
+    const issues = await screen.findByRole("region", { name: "Problems (1)" });
+    expect(within(issues).getAllByText("duplicate job_name 'orders_ingest' in the job list")).toHaveLength(1);
+  });
+
   it("lists every issue and blocks Import while there is one", async () => {
     mockApi({
       ...PREVIEW,
@@ -183,6 +193,21 @@ describe("ImportDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Preview again" }));
     await waitFor(() => expect(callsTo(fetchMock, "/api/job-list/import/preview")).toHaveLength(2));
     expect(onReload).toHaveBeenCalledTimes(1);
+  });
+
+  it("says when the reload before a new preview fails, and keeps the conflict", async () => {
+    const conflict = json(409, { error: "conflict", message: "Someone else changed this.", latestVersion: 9 });
+    const fetchMock = mockApi(PREVIEW, [conflict]);
+    const { onReload } = renderDialog({ baseVersion: 7 });
+    onReload.mockResolvedValueOnce(new ApiError(500, "server", "The job list could not be read or saved. Try again.", null));
+    await pasteAndPreview();
+    await userEvent.click(await screen.findByRole("button", { name: "Import" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Preview again" }));
+    expect(await screen.findByText("The job list did not reload. The job list could not be read or saved. Try again.")).toBeInTheDocument();
+    expect(
+      screen.getByText("The job list changed since you previewed this file. Preview again to see the newest differences."),
+    ).toBeInTheDocument();
+    expect(callsTo(fetchMock, "/api/job-list/import/preview")).toHaveLength(1);
   });
 
   it("says when the file matches the saved list, and does not offer an import", async () => {

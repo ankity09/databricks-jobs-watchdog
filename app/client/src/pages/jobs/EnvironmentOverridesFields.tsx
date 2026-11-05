@@ -132,7 +132,9 @@ function OverrideRow({ row, issues, job, onChange }: OverrideRowProps) {
         {issues && issues.label.length > 0 ? (
           <div className="mb-3 grid gap-0.5 text-xs text-destructive">
             {issues.label.map((message) => (
-              <p key={message}>{message}</p>
+              <p key={message} className="leading-4">
+                {message}
+              </p>
             ))}
           </div>
         ) : null}

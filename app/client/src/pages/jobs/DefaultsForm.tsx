@@ -13,13 +13,13 @@ import {
   SelectValue,
   Textarea,
 } from "@databricks/appkit-ui/react";
-import { RotateCw } from "lucide-react";
-import { type ReactNode, useCallback, useId, useMemo, useState } from "react";
+import { Info } from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { deepEqual } from "../../../../shared/joblist/apply";
 import type { Change, DefaultsEntry, JobEntry, JobListDocument, RuleIssue, SaveResult } from "../../../../shared/joblist/types";
 import { useDebouncedCheck } from "../../hooks/useDebouncedCheck";
-import type { SaveOutcome } from "../../hooks/useJobList";
-import { changeIssues } from "../../lib/draft";
+import type { ReloadJobList, SaveOutcome } from "../../hooks/useJobList";
+import { changeIssues, type DefaultIssue, defaultsIssues } from "../../lib/draft";
 import {
   INHERIT,
   type JobFormValues,
@@ -32,12 +32,13 @@ import {
   toFormValues,
 } from "../../lib/job-form";
 import { FormRow } from "./FormRow";
+import { ReloadButton } from "./ReloadButton";
 
 export interface DefaultsFormProps {
   document: JobListDocument;
   onSave: (change: Change) => Promise<SaveOutcome>;
   onSaved: (result: SaveResult) => void;
-  onReload: () => Promise<void>;
+  onReload: ReloadJobList;
 }
 
 /** The defaults as a job entry with no name, so the job form's conversions apply to them. */
@@ -57,6 +58,19 @@ function changeFor(saved: DefaultsEntry | undefined, next: DefaultsEntry): Chang
 }
 
 type Problem = { kind: "conflict" } | { kind: "error"; message: string };
+
+const RELOADED = "This form now shows the newest saved values. Make your change again.";
+
+/** "a", "a and b", "a, b and c", or "a, b and 6 more jobs". */
+function jobList(jobs: string[]): string {
+  if (jobs.length > 3) return `${jobs.slice(0, 2).join(", ")} and ${jobs.length - 2} more jobs`;
+  return jobs.length <= 1 ? jobs.join("") : `${jobs.slice(0, -1).join(", ")} and ${jobs[jobs.length - 1] ?? ""}`;
+}
+
+/** A default's message, with the jobs that take the default and so report it. */
+function fieldMessage({ message, jobs }: DefaultIssue): string {
+  return jobs.length > 0 ? `${message} (used by ${jobList(jobs)})` : message;
+}
 
 /** "Max gap" on screen; "Max gap (minutes)" for assistive tech. The description gives sighted readers the unit. */
 function minutes(text: string): ReactNode {
@@ -86,25 +100,39 @@ const NUMBER_LABELS: Record<NumberKey, { label: ReactNode; description: string }
 export function DefaultsForm({ document, onSave, onSaved, onReload }: DefaultsFormProps) {
   // Bumped after a save or a reload, so the form starts again from the newest saved defaults.
   const [revision, setRevision] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
   return (
     <DefaultsFields
       key={revision}
       document={document}
+      notice={notice}
       onSave={onSave}
       onSaved={(result) => {
         onSaved(result);
+        setNotice(null);
         setRevision((n) => n + 1);
       }}
-      onReload={async () => {
-        await onReload();
+      onReload={onReload}
+      onReloaded={() => {
+        setNotice(RELOADED);
         setRevision((n) => n + 1);
       }}
     />
   );
 }
 
-function DefaultsFields({ document, onSave, onSaved, onReload }: DefaultsFormProps) {
+interface DefaultsFieldsProps extends DefaultsFormProps {
+  notice: string | null;
+  onReloaded: () => void;
+}
+
+function DefaultsFields({ document, notice, onSave, onSaved, onReload, onReloaded }: DefaultsFieldsProps) {
   const headingId = useId();
+  // After a reload the form starts again, and focus moves to the notice that says so.
+  const noticeRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (notice) noticeRef.current?.focus();
+  }, [notice]);
   const [saved] = useState(document.defaults);
   const [base] = useState(() => asEntry(document.defaults));
   const [startValues] = useState(() => toFormValues(base, []));
@@ -118,9 +146,9 @@ function DefaultsFields({ document, onSave, onSaved, onReload }: DefaultsFormPro
   const [saving, setSaving] = useState(false);
 
   const issues = server !== null && server.change === change ? server.issues : checked.issues;
-  const fieldIssues = (key: string) => issues.filter((issue) => issue.path === `defaults.${key}`).map((issue) => issue.message);
-  const jobIssues = issues.filter((issue) => issue.path.startsWith("jobs[") || issue.path === "jobs");
-  const otherIssues = issues.filter((issue) => !issue.path.startsWith("jobs") && !issue.path.startsWith("defaults."));
+  // A bad default comes back once per job that takes it: it shows on its field, once, and the jobs count each job once.
+  const grouped = useMemo(() => defaultsIssues(document, issues), [document, issues]);
+  const fieldIssues = (key: string) => (grouped.fields[key] ?? []).map(fieldMessage);
   const dirty = !deepEqual(next, saved ?? {});
   const update = (patch: Partial<JobFormValues>) => {
     setValues((current) => ({ ...current, ...patch }));
@@ -151,6 +179,17 @@ function DefaultsFields({ document, onSave, onSaved, onReload }: DefaultsFormPro
         <CardDescription>The settings every job gets unless it sets its own. An empty field leaves the setting out.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4 px-5">
+        {notice ? (
+          <p
+            ref={noticeRef}
+            role="status"
+            tabIndex={-1}
+            className="flex items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Info className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            {notice}
+          </p>
+        ) : null}
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <FormRow
             label="Schedule type"
@@ -280,15 +319,17 @@ function DefaultsFields({ document, onSave, onSaved, onReload }: DefaultsFormPro
           </FormRow>
         </div>
 
-        {jobIssues.length > 0 || otherIssues.length > 0 ? (
+        {grouped.jobs.length > 0 || grouped.other.length > 0 ? (
           <div className="grid gap-1 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm">
-            {jobIssues.length > 0 ? (
-              <p className="font-medium text-destructive">
-                {jobIssues.length === 1 ? "This change breaks 1 job:" : `This change breaks ${jobIssues.length} jobs:`}
+            {grouped.jobs.length > 0 ? (
+              <p className="leading-5 font-medium text-destructive">
+                {grouped.jobs.length === 1 ? "This change breaks 1 job:" : `This change breaks ${grouped.jobs.length} jobs:`}
               </p>
             ) : null}
+            {/* defaultsIssues lists each message once, so these keys are unique. */}
             <ul className="grid gap-0.5 text-xs text-destructive">
-              {[...jobIssues, ...otherIssues].map((issue) => (
+              {grouped.jobs.flatMap((job) => job.messages.map((message) => <li key={`${job.name}|${message}`}>{message}</li>))}
+              {grouped.other.map((issue) => (
                 <li key={`${issue.path}|${issue.message}`}>{issue.message}</li>
               ))}
             </ul>
@@ -298,11 +339,8 @@ function DefaultsFields({ document, onSave, onSaved, onReload }: DefaultsFormPro
         <div className="flex flex-wrap items-center justify-end gap-3">
           {problem?.kind === "conflict" ? (
             <div role="alert" className="mr-auto flex flex-wrap items-center gap-2 text-sm text-destructive">
-              <p>Someone else changed the job list since you opened this page.</p>
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void onReload()}>
-                <RotateCw aria-hidden="true" />
-                Reload
-              </Button>
+              <p className="leading-5">Someone else changed the defaults since you opened this page.</p>
+              <ReloadButton onReload={onReload} onReloaded={onReloaded} />
             </div>
           ) : problem?.kind === "error" ? (
             <p role="alert" className="mr-auto text-sm text-destructive">

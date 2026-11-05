@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { JobEntry, JobListDocument } from "../../../shared/joblist/types";
-import { environmentLabels, INHERIT, toEntry, toFormValues } from "./job-form";
+import { effectivePatterns, environmentLabels, INHERIT, inheritedSettings, toEntry, toFormValues } from "./job-form";
 
 const DOC: JobListDocument = {
   workspaces: [
@@ -90,5 +90,18 @@ describe("job form values", () => {
       lower: { enabled: false, max_gap_minutes: 4500 },
     });
     expect(toEntry(values, { job_name: "a" })).not.toHaveProperty("environments");
+  });
+});
+
+describe("effectivePatterns", () => {
+  const inherited = inheritedSettings({ defaults: { job_name_exclude_regex: "_test(_|$)" }, jobs: [] });
+
+  it("builds ^<name>$ for a job with no pattern, as the loader does", () => {
+    expect(effectivePatterns({ job_name: "orders.ingest" }, inherited)).toEqual({ pattern: "^orders\\.ingest$", exclude: "_test(_|$)" });
+  });
+
+  it("passes no pattern while a new job has no name yet", () => {
+    expect(effectivePatterns({ job_name: "" }, inherited)).toEqual({ pattern: "", exclude: "_test(_|$)" });
+    expect(effectivePatterns({ job_name: "  " }, inherited)).toEqual({ pattern: "", exclude: "_test(_|$)" });
   });
 });

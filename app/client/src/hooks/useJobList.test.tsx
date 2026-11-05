@@ -83,6 +83,41 @@ describe("useJobList", () => {
     expect(result.current.state).toEqual(saved);
   });
 
+  it("resolves a reload with its error and keeps the list, then with null once a load works", async () => {
+    const fetchMock = mockApi(saved);
+    const { result } = await loaded();
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve(json(500, { error: "server", message: "The job list could not be read or saved. Try again." })),
+    );
+    let failure: unknown;
+    await act(async () => {
+      failure = await result.current.reload();
+    });
+    expect(failure).toMatchObject({ status: 500, message: "The job list could not be read or saved. Try again." });
+    expect(result.current.error?.message).toBe("The job list could not be read or saved. Try again.");
+    expect(result.current.state).toEqual(saved);
+    await act(async () => {
+      failure = await result.current.reload();
+    });
+    expect(failure).toBeNull();
+    expect(result.current.error).toBeNull();
+  });
+
+  it("clears a load error once a save goes through", async () => {
+    const document = { jobs: [...saved.document.jobs, { job_name: "daily_revenue_report", severity: "CRITICAL" }] };
+    const fetchMock = mockApi(saved, json(201, { version: 4, summary: "Added daily_revenue_report", document }));
+    const { result } = await loaded();
+    fetchMock.mockImplementationOnce(() => Promise.resolve(json(500, { error: "server", message: "Try again." })));
+    await act(async () => {
+      await result.current.reload();
+    });
+    expect(result.current.error).not.toBeNull();
+    await act(async () => {
+      await result.current.save(change);
+    });
+    expect(result.current.error).toBeNull();
+  });
+
   it("returns the rule issues of an invalid change", async () => {
     const issues = [{ path: "jobs[1].max_gap_minutes", message: "must be a whole number above 0" }];
     mockApi(saved, json(422, { error: "invalid", message: "The change breaks 1 rule.", issues }));

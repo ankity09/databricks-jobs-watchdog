@@ -29,11 +29,12 @@ import {
   Switch,
   Textarea,
 } from "@databricks/appkit-ui/react";
-import { CircleAlert, Info, RotateCw } from "lucide-react";
+import { CircleAlert, Info } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { deepEqual } from "../../../../shared/joblist/apply";
 import type { JobEntry, JobListDocument, RuleIssue } from "../../../../shared/joblist/types";
 import { useDebouncedCheck } from "../../hooks/useDebouncedCheck";
-import type { SaveOutcome } from "../../hooks/useJobList";
+import type { ReloadJobList, SaveOutcome } from "../../hooks/useJobList";
 import { toApiError } from "../../lib/api";
 import { draftIssues, jobIssues } from "../../lib/draft";
 import {
@@ -55,6 +56,7 @@ import {
 import { EnvironmentOverridesFields } from "./EnvironmentOverridesFields";
 import { FormRow } from "./FormRow";
 import { JobIdsInput } from "./JobIdsInput";
+import { ReloadButton } from "./ReloadButton";
 
 export interface JobEditorSheetProps {
   open: boolean;
@@ -67,8 +69,12 @@ export interface JobEditorSheetProps {
   onSave: (entry: JobEntry) => Promise<SaveOutcome>;
   /** Rendered under the pattern fields with the patterns the scan would use (Task 7 shows the matching jobs here). */
   renderPatternPreview?: (pattern: string, exclude: string) => ReactNode;
-  /** Reloads the job list after a conflict. In edit mode the form then starts again from the newest saved job. */
-  onReload?: () => Promise<void>;
+  /**
+   * Reloads the job list after a conflict. In edit mode the form then starts
+   * again from the newest saved job. Without it there is no Reload button, and
+   * a conflict asks to close the form and open the job again.
+   */
+  onReload?: ReloadJobList;
 }
 
 /**
@@ -164,7 +170,7 @@ interface EditorFormProps {
   document: JobListDocument;
   onSave: (entry: JobEntry) => Promise<SaveOutcome>;
   renderPatternPreview?: (pattern: string, exclude: string) => ReactNode;
-  onReload?: () => Promise<void>;
+  onReload?: ReloadJobList;
   onReloaded: () => void;
   notice: string | null;
   onDirtyChange: (dirty: boolean) => void;
@@ -226,9 +232,10 @@ function EditorForm({
   const [server, setServer] = useState<{ entry: JobEntry; issues: RuleIssue[] } | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [saving, setSaving] = useState(false);
-  const [reloading, setReloading] = useState(false);
 
   const dirty = useMemo(() => JSON.stringify(values) !== JSON.stringify(startValues), [values, startValues]);
+  // An edit that would save the job as it is stays off: the store would write an empty version.
+  const changed = useMemo(() => mode === "create" || !deepEqual(entry, base), [mode, entry, base]);
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
 
   const shownIssues = server !== null && server.entry === entry ? server.issues : checked.issues;
@@ -277,18 +284,7 @@ function EditorForm({
     }
   };
 
-  const reload = async () => {
-    setReloading(true);
-    try {
-      await onReload?.();
-    } finally {
-      setReloading(false);
-    }
-    setProblem(null);
-    onReloaded();
-  };
-
-  const blocked = shownIssues.length > 0 || saving || problem?.kind === "conflict";
+  const blocked = !changed || shownIssues.length > 0 || saving || problem?.kind === "conflict";
   const gapDescription =
     scheduleType === "scheduled"
       ? "The longest allowed time between run starts, in minutes. A scheduled job needs one."
@@ -319,6 +315,7 @@ function EditorForm({
               <AlertDescription>
                 <p className="font-medium">The job list has other problems, so it cannot be saved yet:</p>
                 <ul className="grid gap-1">
+                  {/* jobIssues lists each issue once, so path and message make a unique key. */}
                   {grouped.other.map((issue) => (
                     <li key={`${issue.path}|${issue.message}`}>{issue.message}</li>
                   ))}
@@ -537,7 +534,14 @@ function EditorForm({
       </div>
 
       <SheetFooter className="flex-row flex-wrap items-center justify-between gap-3 border-t border-border px-6 py-3">
-        <FooterProblem problem={problem} reloading={reloading} onReload={() => void reload()} />
+        <FooterProblem
+          problem={problem}
+          onReload={onReload}
+          onReloaded={() => {
+            setProblem(null);
+            onReloaded();
+          }}
+        />
         <div className="ml-auto flex gap-2">
           <Button variant="outline" onClick={onCancel}>
             Cancel
@@ -608,15 +612,26 @@ function NumberRow({ name, description, values, errors, placeholder, update }: N
   );
 }
 
-function FooterProblem({ problem, reloading, onReload }: { problem: Problem | null; reloading: boolean; onReload: () => void }) {
+interface FooterProblemProps {
+  problem: Problem | null;
+  onReload?: ReloadJobList;
+  onReloaded: () => void;
+}
+
+function FooterProblem({ problem, onReload, onReloaded }: FooterProblemProps) {
   if (problem?.kind === "conflict") {
     return (
       <div role="alert" className="flex min-w-0 flex-wrap items-center gap-2 text-sm text-destructive">
-        <p>Someone else changed this job since you opened it.</p>
-        <Button variant="outline" size="sm" className="gap-1.5" disabled={reloading} onClick={onReload}>
-          <RotateCw aria-hidden="true" />
-          Reload
-        </Button>
+        {onReload ? (
+          <>
+            <p className="leading-5">Someone else changed this job since you opened it.</p>
+            <ReloadButton onReload={onReload} onReloaded={onReloaded} />
+          </>
+        ) : (
+          <p className="leading-5">
+            Someone else changed this job since you opened it. Close this form and open the job again to see their change.
+          </p>
+        )}
       </div>
     );
   }

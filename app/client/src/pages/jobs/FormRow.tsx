@@ -30,7 +30,9 @@ export function FormRow({ label, yamlKey, description, errors = [], className, c
   const id = useId();
   const descriptionId = `${id}-description`;
   const errorId = `${id}-error`;
-  const invalid = errors.length > 0;
+  // Each message once, so the list can key on it.
+  const messages = [...new Set(errors)];
+  const invalid = messages.length > 0;
   const describedBy = [description ? descriptionId : null, invalid ? errorId : null].filter((part) => part !== null).join(" ") || undefined;
   return (
     <Field className={cn("gap-1.5", className)}>
@@ -52,8 +54,10 @@ export function FormRow({ label, yamlKey, description, errors = [], className, c
       ) : null}
       {invalid ? (
         <div id={errorId} className="grid gap-0.5 text-xs leading-4 text-destructive">
-          {errors.map((message) => (
-            <p key={message}>{message}</p>
+          {messages.map((message) => (
+            <p key={message} className="leading-4">
+              {message}
+            </p>
           ))}
         </div>
       ) : null}

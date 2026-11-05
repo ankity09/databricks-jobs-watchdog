@@ -223,10 +223,15 @@ export function pyReEscape(text: string): string {
   return text.replace(/[()[\]{}?*+\-|^$\\.&~# \t\n\r\v\f]/g, "\\$&");
 }
 
-/** The name pattern and the exclusion the scan uses for an entry: its own, or the ones it inherits. */
+/**
+ * The name pattern and the exclusion the scan uses for an entry: its own, or
+ * the ones it inherits. An entry with no pattern and no name yet has no
+ * pattern (""), not ^$.
+ */
 export function effectivePatterns(entry: JobEntry, inherited: InheritedSettings): { pattern: string; exclude: string } {
   const own = typeof entry.job_name_regex === "string" && entry.job_name_regex !== "" ? entry.job_name_regex : null;
-  const pattern = own ?? `^${pyReEscape(typeof entry.job_name === "string" ? entry.job_name : "")}$`;
+  const name = typeof entry.job_name === "string" ? entry.job_name : "";
+  const pattern = own ?? (name.trim() === "" ? "" : `^${pyReEscape(name)}$`);
   const exclude =
     "job_name_exclude_regex" in entry
       ? typeof entry.job_name_exclude_regex === "string"

@@ -33,7 +33,7 @@ import {
 import { CircleAlert, CircleCheck, Download, ListChecks, Pencil, Plus, RotateCw, Search, Trash2, Upload, X } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { type Change, dependencyKey, type JobEntry, type JobListDocument, type SaveResult } from "../../../../shared/joblist/types";
-import { type SaveOutcome, useJobList } from "../../hooks/useJobList";
+import { type ReloadJobList, type SaveOutcome, useJobList } from "../../hooks/useJobList";
 import { type LiveStatus, useLiveStatus } from "../../hooks/useLiveStatus";
 import { changeIssues, linksRemovedWith } from "../../lib/draft";
 import { inheritedSettings, type InheritedSettings, pyReEscape } from "../../lib/job-form";
@@ -46,6 +46,7 @@ import { PageHeader } from "../../layout/PageHeader";
 import { ConfigBanner } from "./ConfigBanner";
 import { ImportDialog } from "./ImportDialog";
 import { JobEditorSheet } from "./JobEditorSheet";
+import { ReloadButton } from "./ReloadButton";
 
 /** What an extra toolbar action can do on this page. */
 export interface JobListActions {
@@ -123,7 +124,10 @@ export function JobListPage({ extraActions }: JobListPageProps = {}) {
     setToggling(({ [job.job_name]: _done, ...rest }) => rest);
     if (outcome.ok) return;
     if (outcome.conflict)
-      setProblem({ conflict: true, message: "Someone else changed the job list since you opened it. Reload to see their change." });
+      setProblem({
+        conflict: true,
+        message: `Someone else changed ${job.job_name} since you opened the list. Reload to see their change.`,
+      });
     else setProblem({ conflict: false, message: outcome.issues[0]?.message ?? outcome.message });
   };
 
@@ -249,7 +253,16 @@ export function JobListPage({ extraActions }: JobListPageProps = {}) {
         />
       ) : null}
       {problem ? (
-        <ProblemAlert problem={problem} onReload={() => void reload().then(() => setProblem(null))} onDismiss={() => setProblem(null)} />
+        <ProblemAlert problem={problem} onReload={reload} onReloaded={() => setProblem(null)} onDismiss={() => setProblem(null)} />
+      ) : state !== null && error !== null && !loading ? (
+        // The list on screen loaded, but a later load did not: say so, as the change log does.
+        <p role="status" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-destructive">
+          <CircleAlert className="size-3.5" aria-hidden="true" />
+          The newest job list did not load. {error.message}
+          <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => void reload()}>
+            Try again
+          </Button>
+        </p>
       ) : null}
       {body}
 
@@ -306,7 +319,7 @@ function Notice({ text, tone = "success", onDismiss }: { text: string; tone?: "s
       )}
     >
       <CircleCheck className={cn("size-4 shrink-0", tone === "success" ? "text-success" : "text-warning")} aria-hidden="true" />
-      <p className="min-w-0 flex-1">{text}</p>
+      <p className="min-w-0 flex-1 leading-5">{text}</p>
       <Button variant="ghost" size="icon-sm" className="size-7" aria-label="Dismiss" onClick={onDismiss}>
         <X aria-hidden="true" />
       </Button>
@@ -314,17 +327,21 @@ function Notice({ text, tone = "success", onDismiss }: { text: string; tone?: "s
   );
 }
 
-function ProblemAlert({ problem, onReload, onDismiss }: { problem: Problem; onReload: () => void; onDismiss: () => void }) {
+interface ProblemAlertProps {
+  problem: Problem;
+  onReload: ReloadJobList;
+  onReloaded: () => void;
+  onDismiss: () => void;
+}
+
+function ProblemAlert({ problem, onReload, onReloaded, onDismiss }: ProblemAlertProps) {
   return (
     <Alert variant="destructive" className="border-destructive/40">
       <CircleAlert aria-hidden="true" />
       <AlertDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <p>{problem.message}</p>
         {problem.conflict ? (
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={onReload}>
-            <RotateCw aria-hidden="true" />
-            Reload
-          </Button>
+          <ReloadButton onReload={onReload} onReloaded={onReloaded} />
         ) : (
           <Button variant="ghost" size="sm" onClick={onDismiss}>
             Dismiss
@@ -631,7 +648,7 @@ interface DeleteJobDialogProps {
   document: JobListDocument;
   onCancel: () => void;
   onDelete: () => Promise<SaveOutcome>;
-  onReload: () => Promise<void>;
+  onReload: ReloadJobList;
 }
 
 /** Confirms a delete, and names the links that go with it. */
@@ -684,11 +701,8 @@ function DeleteJobDialog({ name, document, onCancel, onDelete, onReload }: Delet
         ) : null}
         {conflict ? (
           <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-destructive">
-            <p>Someone else changed this job since you opened it.</p>
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void onReload().then(() => setOutcome(null))}>
-              <RotateCw aria-hidden="true" />
-              Reload
-            </Button>
+            <p className="leading-5">Someone else changed this job since you opened it.</p>
+            <ReloadButton onReload={onReload} onReloaded={() => setOutcome(null)} />
           </div>
         ) : null}
         {message ? (

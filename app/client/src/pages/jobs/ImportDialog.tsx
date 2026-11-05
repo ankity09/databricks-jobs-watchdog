@@ -17,10 +17,13 @@ import {
 import { CircleAlert, FileUp, RotateCw } from "lucide-react";
 import { type ChangeEvent, type DragEvent, type ReactNode, useId, useRef, useState } from "react";
 import type { DiffEntry, ImportPreview, JobListDocument, RuleIssue, SaveResult } from "../../../../shared/joblist/types";
+import type { ReloadJobList } from "../../hooks/useJobList";
 import { toApiError } from "../../lib/api";
+import { uniqueIssues } from "../../lib/draft";
 import { ConflictBodySchema, InvalidBodySchema, importYaml, previewImport } from "../../lib/joblist-api";
 import { describeTarget } from "../../lib/targets";
 import { cn } from "../../lib/utils";
+import { ReloadButton } from "./ReloadButton";
 
 const MAX_BYTES = 1024 * 1024;
 
@@ -30,7 +33,7 @@ export interface ImportDialogProps {
   /** The version the person has open. The server refuses the import (409) when someone saved a newer one. */
   baseVersion: number | null;
   /** Reloads the job list, so the next preview and import start from the newest version. */
-  onReload: () => Promise<void>;
+  onReload: ReloadJobList;
   /** After a successful import, with the version it saved. */
   onImported: (result: SaveResult) => void;
 }
@@ -76,7 +79,7 @@ type ImportState =
 
 interface ImportFormProps {
   baseVersion: number | null;
-  onReload: () => Promise<void>;
+  onReload: ReloadJobList;
   onImported: (result: SaveResult) => void;
   onClose: () => void;
 }
@@ -148,7 +151,8 @@ function ImportForm({ baseVersion, onReload, onImported, onClose }: ImportFormPr
   };
 
   const ready = preview.kind === "ready" ? preview : null;
-  const issues = saving.kind === "invalid" ? saving.issues : (ready?.preview.issues ?? []);
+  // The rules can report one issue twice (a name listed three times): each shows once.
+  const issues = uniqueIssues(saving.kind === "invalid" ? saving.issues : (ready?.preview.issues ?? []));
   const stale = ready !== null && ready.yaml !== yaml;
   const canImport =
     ready !== null &&
@@ -178,12 +182,6 @@ function ImportForm({ baseVersion, onReload, onImported, onClose }: ImportFormPr
       }
       setSaving({ kind: "error", message: error.message });
     }
-  };
-
-  const previewAgain = async () => {
-    setSaving({ kind: "idle" });
-    await onReload();
-    await runPreview(yaml);
   };
 
   return (
@@ -245,7 +243,7 @@ function ImportForm({ baseVersion, onReload, onImported, onClose }: ImportFormPr
       </div>
 
       <DialogFooter className="items-center gap-3 sm:justify-between">
-        <ImportStatus state={saving} onPreviewAgain={() => void previewAgain()} />
+        <ImportStatus state={saving} onReload={onReload} onReloaded={() => void runPreview(yaml)} />
         <div className="flex flex-col-reverse gap-2 sm:flex-row">
           <Button variant="outline" onClick={onClose}>
             Cancel
@@ -261,15 +259,21 @@ function ImportForm({ baseVersion, onReload, onImported, onClose }: ImportFormPr
   );
 }
 
-function ImportStatus({ state, onPreviewAgain }: { state: ImportState; onPreviewAgain: () => void }) {
+interface ImportStatusProps {
+  state: ImportState;
+  onReload: ReloadJobList;
+  /** Previews the file again, once the newest list has loaded. */
+  onReloaded: () => void;
+}
+
+function ImportStatus({ state, onReload, onReloaded }: ImportStatusProps) {
   if (state.kind === "conflict") {
     return (
       <div className="flex flex-wrap items-center gap-2 text-sm text-destructive" role="alert">
-        <p>The job list changed since you previewed this file. Preview again to see the newest differences.</p>
-        <Button variant="outline" size="sm" className="gap-1.5" onClick={onPreviewAgain}>
-          <RotateCw aria-hidden="true" />
+        <p className="leading-5">The job list changed since you previewed this file. Preview again to see the newest differences.</p>
+        <ReloadButton onReload={onReload} onReloaded={onReloaded}>
           Preview again
-        </Button>
+        </ReloadButton>
       </div>
     );
   }

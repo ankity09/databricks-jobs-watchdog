@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { JobListDocument } from "../../../shared/joblist/types";
-import { changeIssues, draftIssues, jobIssues, linksRemovedWith, workspaceIssues } from "./draft";
+import { changeIssues, defaultsIssues, draftIssues, jobIssues, linksRemovedWith, uniqueIssues, workspaceIssues } from "./draft";
 
 const DOC: JobListDocument = {
   defaults: { owner: "platform-team", job_name_exclude_regex: "_test(_|$)" },
@@ -116,6 +116,68 @@ describe("jobIssues", () => {
   it("asks for a name when the draft has none", () => {
     const grouped = jobIssues([{ path: "jobs[3]", message: "every job needs a job_name, got {'job_name': ''}" }], "", 3);
     expect(grouped.fields).toEqual({ job_name: ["Enter a job name."] });
+  });
+});
+
+describe("uniqueIssues and jobIssues", () => {
+  it("list a repeated issue once", () => {
+    const duplicate = { path: "jobs[orders_enrich]", message: "duplicate job_name 'orders_enrich' in the job list" };
+    const other = { path: "dependencies[a->b:job]", message: "dependency a -> b: b is not a configured job" };
+    expect(uniqueIssues([duplicate, other, duplicate, other])).toEqual([duplicate, other]);
+    const grouped = jobIssues([duplicate, duplicate, other, other], "orders_enrich", 1);
+    expect(grouped.fields.job_name).toEqual(["duplicate job_name 'orders_enrich' in the job list"]);
+    expect(grouped.other).toEqual([other]);
+  });
+});
+
+describe("defaultsIssues", () => {
+  const doc: JobListDocument = {
+    defaults: { max_gap_minutes: 60 },
+    jobs: [
+      { job_name: "orders_ingest" },
+      { job_name: "orders_enrich", max_gap_minutes: 90, max_retries: 2 },
+      { job_name: "daily_revenue_export", schedule_type: "triggered" },
+    ],
+  };
+  const defaults = (value: Record<string, unknown>) => changeIssues(doc, { kind: "upsert", target: { type: "defaults" }, value });
+
+  it("puts a bad default on its field once, with the jobs that take it from there", () => {
+    const grouped = defaultsIssues(doc, defaults({ max_gap_minutes: 60, max_retries: -1, job_name_exclude_regex: "(" }));
+    expect(grouped.fields.max_retries).toEqual([
+      { message: "max_retries must be a whole number of zero or more, got -1", jobs: ["orders_ingest", "daily_revenue_export"] },
+    ]);
+    const exclude = grouped.fields.job_name_exclude_regex ?? [];
+    expect(exclude).toHaveLength(1);
+    expect(exclude[0]?.message).toMatch(/^job_name_exclude_regex does not compile: /);
+    expect(exclude[0]?.jobs).toEqual(["orders_ingest", "orders_enrich", "daily_revenue_export"]);
+    expect(grouped.jobs).toEqual([]);
+    expect(grouped.other).toEqual([]);
+  });
+
+  it("puts a cleared default that jobs need on its field", () => {
+    const grouped = defaultsIssues(doc, defaults({}));
+    expect(grouped.fields.max_gap_minutes).toEqual([{ message: "scheduled jobs need max_gap_minutes", jobs: ["orders_ingest"] }]);
+    expect(grouped.jobs).toEqual([]);
+  });
+
+  it("keeps on the job what its own settings break, and counts each job once", () => {
+    const grouped = defaultsIssues(doc, [
+      ...defaults({ max_gap_minutes: 60, schedule_type: "triggered" }),
+      { path: "jobs[orders_enrich].max_retries", message: "job orders_enrich: max_retries is too large" },
+      { path: "jobs[orders_enrich].max_retries", message: "job orders_enrich: max_retries is too large" },
+      { path: "workspaces[0]", message: "workspace example-prod is listed twice in the job list" },
+    ]);
+    expect(grouped.jobs).toEqual([
+      {
+        name: "orders_enrich",
+        messages: [
+          "job orders_enrich: triggered jobs have no schedule check, so remove max_gap_minutes",
+          "job orders_enrich: max_retries is too large",
+        ],
+      },
+    ]);
+    expect(grouped.fields).toEqual({});
+    expect(grouped.other).toEqual([{ path: "workspaces[0]", message: "workspace example-prod is listed twice in the job list" }]);
   });
 });
 

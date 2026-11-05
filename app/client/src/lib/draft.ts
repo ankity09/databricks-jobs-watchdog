@@ -28,6 +28,17 @@ export function changeIssues(document: JobListDocument, change: Change): RuleIss
   return validateDocument(next);
 }
 
+/** The issues with every repeat (same path and message) left out: the rules can report one twice, for example a name listed three times. */
+export function uniqueIssues(issues: RuleIssue[]): RuleIssue[] {
+  const seen = new Set<string>();
+  return issues.filter((issue) => {
+    const key = `${issue.path}\u0000${issue.message}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export interface EnvironmentIssues {
   /** About the label itself: not defined in the workspaces section, unknown keys, not a mapping. */
   label: string[];
@@ -46,7 +57,8 @@ export interface JobIssues {
 }
 
 function push(map: Record<string, string[]>, key: string, message: string): void {
-  (map[key] ??= []).push(message);
+  const messages = (map[key] ??= []);
+  if (!messages.includes(message)) messages.push(message);
 }
 
 /**
@@ -60,7 +72,7 @@ export function jobIssues(issues: RuleIssue[], jobName: string, index: number): 
   const base = `jobs[${jobName}]`;
   const prefix = `job ${jobName}: `;
   const env = (label: string): EnvironmentIssues => (grouped.environments[label] ??= { label: [], fields: {} });
-  for (const issue of issues) {
+  for (const issue of uniqueIssues(issues)) {
     const message = issue.message.startsWith(prefix) ? issue.message.slice(prefix.length) : issue.message;
     if (issue.path === `jobs[${index}]`) {
       push(grouped.fields, "job_name", jobName.trim() === "" ? "Enter a job name." : message);
@@ -69,13 +81,102 @@ export function jobIssues(issues: RuleIssue[], jobName: string, index: number): 
     } else if (jobName !== "" && issue.path.startsWith(`${base}.environments.`)) {
       const rest = issue.path.slice(`${base}.environments.`.length);
       const dot = rest.indexOf(".");
-      if (dot < 0) env(rest).label.push(message);
-      else push(env(rest.slice(0, dot)).fields, rest.slice(dot + 1), message);
+      if (dot < 0) {
+        const label = env(rest).label;
+        if (!label.includes(message)) label.push(message);
+      } else push(env(rest.slice(0, dot)).fields, rest.slice(dot + 1), message);
     } else if (jobName !== "" && issue.path.startsWith(`${base}.`)) {
       push(grouped.fields, issue.path.slice(base.length + 1), message);
     } else {
       grouped.other.push(issue);
     }
+  }
+  return grouped;
+}
+
+/** The keys the defaults form edits. */
+const DEFAULT_FIELDS: readonly string[] = [
+  "schedule_type",
+  "severity",
+  "max_gap_minutes",
+  "max_runtime_minutes",
+  "max_retries",
+  "min_attempt_minutes",
+  "owner",
+  "enabled",
+  "job_name_exclude_regex",
+  "notes",
+];
+
+/** One message for a default field, and the jobs that take the default and so report it. */
+export interface DefaultIssue {
+  message: string;
+  jobs: string[];
+}
+
+/** The issues of a change to the defaults, sorted for the defaults form. */
+export interface DefaultsIssues {
+  /** By default key: each message once, without the "job <name>: " prefix. */
+  fields: Record<string, DefaultIssue[]>;
+  /** The jobs the change breaks through their own settings, each once, with the rules' messages. */
+  jobs: { name: string; messages: string[] }[];
+  /** Issues about anything else in the list, as the rules wrote them. */
+  other: RuleIssue[];
+}
+
+/** The job an issue path such as `jobs[orders_ingest].max_retries` is about. The longest name wins, for names that hold "]" or ".". */
+function jobAt(document: JobListDocument, path: string): JobEntry | undefined {
+  let found: JobEntry | undefined;
+  for (const job of document.jobs) {
+    const base = `jobs[${job.job_name}]`;
+    if ((path === base || path.startsWith(`${base}.`)) && (found === undefined || job.job_name.length > found.job_name.length)) found = job;
+  }
+  return found;
+}
+
+/**
+ * Sorts the issues of a defaults change. The rules check a default only on
+ * each job that takes it, so a bad default comes back once per job, as
+ * `jobs[<name>].<key>`. When the job does not set that key itself, the issue
+ * is about the default: it goes on the default's field, once. An issue the
+ * job's own setting causes (a gap on a job that the new default makes
+ * triggered) stays with the job.
+ */
+export function defaultsIssues(document: JobListDocument, issues: RuleIssue[]): DefaultsIssues {
+  const grouped: DefaultsIssues = { fields: {}, jobs: [], other: [] };
+  const onField = (key: string, message: string, job: string | null) => {
+    const list = (grouped.fields[key] ??= []);
+    let entry = list.find((item) => item.message === message);
+    if (entry === undefined) {
+      entry = { message, jobs: [] };
+      list.push(entry);
+    }
+    if (job !== null && !entry.jobs.includes(job)) entry.jobs.push(job);
+  };
+  for (const issue of uniqueIssues(issues)) {
+    const defaultKey = issue.path.startsWith("defaults.") ? issue.path.slice("defaults.".length) : null;
+    if (defaultKey !== null && DEFAULT_FIELDS.includes(defaultKey)) {
+      onField(defaultKey, issue.message, null);
+      continue;
+    }
+    const job = jobAt(document, issue.path);
+    if (job === undefined) {
+      grouped.other.push(issue);
+      continue;
+    }
+    const base = `jobs[${job.job_name}]`;
+    const key = issue.path.startsWith(`${base}.`) ? issue.path.slice(base.length + 1) : "";
+    const prefix = `job ${job.job_name}: `;
+    if (DEFAULT_FIELDS.includes(key) && !Object.prototype.hasOwnProperty.call(job, key)) {
+      onField(key, issue.message.startsWith(prefix) ? issue.message.slice(prefix.length) : issue.message, job.job_name);
+      continue;
+    }
+    let broken = grouped.jobs.find((item) => item.name === job.job_name);
+    if (broken === undefined) {
+      broken = { name: job.job_name, messages: [] };
+      grouped.jobs.push(broken);
+    }
+    if (!broken.messages.includes(issue.message)) broken.messages.push(issue.message);
   }
   return grouped;
 }

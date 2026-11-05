@@ -31,9 +31,10 @@ import {
   TableRow,
   useAnalyticsQuery,
 } from "@databricks/appkit-ui/react";
-import { Pencil, Plus, RotateCw, Trash2 } from "lucide-react";
+import { CircleAlert, Pencil, Plus, RotateCw, Trash2, X } from "lucide-react";
 import { useCallback, useId, useMemo, useState } from "react";
 import { z } from "zod";
+import { deepEqual } from "../../../../shared/joblist/apply";
 import {
   type Change,
   type JobListDocument,
@@ -43,17 +44,18 @@ import {
   workspaceKey,
 } from "../../../../shared/joblist/types";
 import { useDebouncedCheck } from "../../hooks/useDebouncedCheck";
-import type { SaveOutcome } from "../../hooks/useJobList";
+import type { ReloadJobList, SaveOutcome } from "../../hooks/useJobList";
 import { useLastGood } from "../../hooks/useLastGood";
 import { useRefreshKey } from "../../hooks/useRefreshKey";
-import { changeIssues, workspaceIssues } from "../../lib/draft";
+import { changeIssues, uniqueIssues, workspaceIssues } from "../../lib/draft";
 import { FormRow } from "./FormRow";
+import { ReloadButton } from "./ReloadButton";
 
 export interface WorkspaceLabelsProps {
   document: JobListDocument;
   onSave: (change: Change) => Promise<SaveOutcome>;
   onSaved: (result: SaveResult) => void;
-  onReload: () => Promise<void>;
+  onReload: ReloadJobList;
 }
 
 const WorkspaceRows = z.array(z.object({ workspace_id: z.string(), workspace_name: z.string().nullable(), status: z.string().nullable() }));
@@ -66,7 +68,14 @@ interface Suggestions {
   retry: () => void;
 }
 
-/** The region's workspaces from system.access.workspaces_latest (workspaces.obo.sql, run as the person). */
+/** An edit keeps the workspace ID and name, so it offers no suggestions. */
+const NO_SUGGESTIONS: Suggestions = { rows: [], loading: false, failed: false, retry: () => undefined };
+
+/**
+ * The region's workspaces from system.access.workspaces_latest
+ * (workspaces.obo.sql, run as the person). Only the add form calls it, so the
+ * query runs while that form is open, not on every load of the page.
+ */
 function useWorkspaceSuggestions(): Suggestions {
   const { refresh, bump } = useRefreshKey();
   const parameters = useMemo(() => ({ refresh: sql.int(refresh) }), [refresh]);
@@ -96,17 +105,38 @@ function nameOf(workspace: WorkspaceEntry): string {
   return workspace.workspace_name ?? workspace.workspace_id ?? "";
 }
 
-type Editing = { mode: "create" } | { mode: "edit"; key: string };
+type Editing = { mode: "create" } | { mode: "edit"; key: string; name: string };
+
+const RELOADED = "This form now shows the newest saved values. Make your change again.";
 
 /** The environment label of each workspace: add, edit and remove them, one change at a time. */
 export function WorkspaceLabels({ document, onSave, onSaved, onReload }: WorkspaceLabelsProps) {
   const headingId = useId();
-  const suggestions = useWorkspaceSuggestions();
   const [editing, setEditing] = useState<Editing | null>(null);
+  // Bumped after a reload in edit mode, so the form starts again from the newest saved label.
+  const [revision, setRevision] = useState(0);
+  const [formNotice, setFormNotice] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
   const workspaces = document.workspaces ?? [];
   const editingEntry = editing?.mode === "edit" ? workspaces.find((w) => workspaceKey(w) === editing.key) : undefined;
+  // A label someone else removed while its form was open: the form closes and the card says so.
+  const vanished = editing?.mode === "edit" && editingEntry === undefined ? editing.name : null;
   const removingEntry = removing === null ? undefined : workspaces.find((w) => workspaceKey(w) === removing);
+  const edit = (next: Editing | null) => {
+    setFormNotice(null);
+    setEditing(next);
+  };
+  const formProps = {
+    document,
+    notice: formNotice,
+    onSave,
+    onSaved: (result: SaveResult) => {
+      edit(null);
+      onSaved(result);
+    },
+    onReload,
+    onCancel: () => edit(null),
+  };
 
   return (
     <Card className="gap-4 py-5" role="region" aria-labelledby={headingId}>
@@ -119,13 +149,27 @@ export function WorkspaceLabels({ document, onSave, onSaved, onReload }: Workspa
           for one label.
         </CardDescription>
         <CardAction>
-          <Button size="sm" variant="outline" onClick={() => setEditing({ mode: "create" })}>
+          <Button size="sm" variant="outline" onClick={() => edit({ mode: "create" })}>
             <Plus aria-hidden="true" />
             Add label
           </Button>
         </CardAction>
       </CardHeader>
-      <CardContent className="px-5">
+      <CardContent className="grid gap-3 px-5">
+        {vanished ? (
+          <div
+            role="status"
+            className="flex items-center gap-2 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-foreground"
+          >
+            <CircleAlert className="size-4 shrink-0 text-warning" aria-hidden="true" />
+            <p className="min-w-0 flex-1 leading-5">
+              The label for {vanished} is no longer in the list. Someone removed it while you were editing.
+            </p>
+            <Button variant="ghost" size="icon-sm" className="size-7" aria-label="Dismiss" onClick={() => edit(null)}>
+              <X aria-hidden="true" />
+            </Button>
+          </div>
+        ) : null}
         {workspaces.length === 0 ? (
           <p className="rounded-md border border-dashed border-border bg-muted/40 px-3 py-6 text-center text-sm text-muted-foreground">
             No labels yet. Add one to label a workspace production or lower.
@@ -171,7 +215,7 @@ export function WorkspaceLabels({ document, onSave, onSaved, onReload }: Workspa
                             size="icon-sm"
                             className="size-7 text-muted-foreground hover:text-foreground"
                             aria-label={`Edit the label for ${name}`}
-                            onClick={() => setEditing({ mode: "edit", key })}
+                            onClick={() => edit({ mode: "edit", key, name })}
                           >
                             <Pencil aria-hidden="true" />
                           </Button>
@@ -198,24 +242,24 @@ export function WorkspaceLabels({ document, onSave, onSaved, onReload }: Workspa
       <Dialog
         open={editing !== null && (editing.mode === "create" || editingEntry !== undefined)}
         onOpenChange={(open) => {
-          if (!open) setEditing(null);
+          if (!open) edit(null);
         }}
       >
         <DialogContent className="sm:max-w-lg">
-          {editing ? (
+          {editing?.mode === "create" ? (
+            // A new label keeps what was typed after a reload: the check then shows whether someone added it meanwhile.
+            <CreateLabelForm {...formProps} onReloaded={() => undefined} />
+          ) : editing && editingEntry ? (
             <LabelForm
-              key={editing.mode === "edit" ? editing.key : "new"}
-              mode={editing.mode}
-              initial={editingEntry ?? { environment: "" }}
-              document={document}
-              suggestions={suggestions}
-              onSave={onSave}
-              onSaved={(result) => {
-                setEditing(null);
-                onSaved(result);
+              key={`${editing.key}|${revision}`}
+              {...formProps}
+              mode="edit"
+              initial={editingEntry}
+              suggestions={NO_SUGGESTIONS}
+              onReloaded={() => {
+                setFormNotice(RELOADED);
+                setRevision((n) => n + 1);
               }}
-              onReload={onReload}
-              onCancel={() => setEditing(null)}
             />
           ) : null}
         </DialogContent>
@@ -246,10 +290,22 @@ interface LabelFormProps {
   initial: WorkspaceEntry;
   document: JobListDocument;
   suggestions: Suggestions;
+  /** Shown at the top of the form, such as after a reload. */
+  notice: string | null;
   onSave: (change: Change) => Promise<SaveOutcome>;
   onSaved: (result: SaveResult) => void;
-  onReload: () => Promise<void>;
+  onReload: ReloadJobList;
+  /** After a conflict's reload worked. */
+  onReloaded: () => void;
   onCancel: () => void;
+}
+
+const NEW_LABEL: WorkspaceEntry = { environment: "" };
+
+/** The add form, with suggestions from the region's workspaces, which it reads while it is open. */
+function CreateLabelForm(props: Omit<LabelFormProps, "mode" | "initial" | "suggestions">) {
+  const suggestions = useWorkspaceSuggestions();
+  return <LabelForm {...props} mode="create" initial={NEW_LABEL} suggestions={suggestions} />;
 }
 
 type Problem = { kind: "conflict" } | { kind: "error"; message: string };
@@ -263,7 +319,7 @@ function entryFrom(id: string, name: string, environment: string, notes: string)
   };
 }
 
-function LabelForm({ mode, initial, document, suggestions, onSave, onSaved, onReload, onCancel }: LabelFormProps) {
+function LabelForm({ mode, initial, document, suggestions, notice, onSave, onSaved, onReload, onReloaded, onCancel }: LabelFormProps) {
   const idsList = useId();
   const namesList = useId();
   const labelsList = useId();
@@ -283,8 +339,10 @@ function LabelForm({ mode, initial, document, suggestions, onSave, onSaved, onRe
   const issues = server !== null && server.entry === entry ? server.issues : checked.issues;
   const at = `workspaces[${index >= 0 ? index : workspaces.length}]`;
   const fieldIssues = (key: string) => issues.filter((issue) => issue.path === `${at}.${key}`).map((issue) => issue.message);
-  const entryIssues = issues.filter((issue) => issue.path === at || issue.path === "");
-  const jobIssues = issues.filter((issue) => issue.path.startsWith("jobs["));
+  // Each issue once: the rules can report one twice, and the list keys on path and message.
+  const listed = uniqueIssues(issues.filter((issue) => issue.path === at || issue.path === "" || issue.path.startsWith("jobs[")));
+  // An edit that would save the label as it is stays off: the store would write an empty version.
+  const changed = mode === "create" || !deepEqual(entry, initial);
   const labels = useMemo(
     () => [...new Set(workspaces.map((w) => w.environment).filter((label) => typeof label === "string" && label !== ""))],
     [workspaces],
@@ -333,9 +391,14 @@ function LabelForm({ mode, initial, document, suggestions, onSave, onSaved, onRe
         </DialogDescription>
       </DialogHeader>
       <div className="grid gap-4">
+        {notice ? (
+          <p role="status" className="rounded-md border border-border bg-muted/50 px-3 py-2 text-sm text-foreground">
+            {notice}
+          </p>
+        ) : null}
         {suggestions.failed ? (
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-            <p className="min-w-0 flex-1">
+            <p className="min-w-0 flex-1 leading-4">
               No suggestions: the app could not read system.access.workspaces_latest, often because you have no SELECT on it. You can still
               type a workspace ID or name.
             </p>
@@ -356,7 +419,7 @@ function LabelForm({ mode, initial, document, suggestions, onSave, onSaved, onRe
                 list={readOnly ? undefined : idsList}
                 spellCheck={false}
                 className={readOnly ? "bg-muted font-mono text-muted-foreground" : "font-mono"}
-                placeholder={suggestions.loading ? "Loading suggestions" : "1111111111111111"}
+                placeholder={readOnly ? "Not set" : suggestions.loading ? "Loading suggestions" : "1111111111111111"}
                 onChange={(event) => setId(event.target.value)}
               />
             )}
@@ -370,7 +433,7 @@ function LabelForm({ mode, initial, document, suggestions, onSave, onSaved, onRe
                 list={readOnly ? undefined : namesList}
                 spellCheck={false}
                 className={readOnly ? "bg-muted text-muted-foreground" : undefined}
-                placeholder="example-prod"
+                placeholder={readOnly ? "Not set" : "example-prod"}
                 onChange={(event) => setName(event.target.value)}
               />
             )}
@@ -417,42 +480,37 @@ function LabelForm({ mode, initial, document, suggestions, onSave, onSaved, onRe
             <option key={label} value={label} />
           ))}
         </datalist>
-        {entryIssues.length > 0 || jobIssues.length > 0 ? (
+        {listed.length > 0 ? (
           <ul className="grid gap-0.5 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-            {[...entryIssues, ...jobIssues].map((issue) => (
+            {listed.map((issue) => (
               <li key={`${issue.path}|${issue.message}`}>{issue.message}</li>
             ))}
           </ul>
         ) : null}
       </div>
-      <DialogFooter className="items-center gap-2 sm:justify-between">
+      <DialogFooter className="items-center gap-2 sm:flex-wrap sm:justify-between">
+        {/* A problem takes its own row above the buttons. */}
         {problem?.kind === "conflict" ? (
-          <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-destructive">
-            <p>Someone else changed the job list since you opened this.</p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              onClick={() => {
-                void onReload().then(() => setProblem(null));
+          <div role="alert" className="flex basis-full flex-wrap items-center gap-2 text-sm text-destructive">
+            <p className="leading-5">Someone else changed this label since you opened it.</p>
+            <ReloadButton
+              onReload={onReload}
+              onReloaded={() => {
+                setProblem(null);
+                onReloaded();
               }}
-            >
-              <RotateCw aria-hidden="true" />
-              Reload
-            </Button>
+            />
           </div>
         ) : problem?.kind === "error" ? (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="basis-full text-sm text-destructive">
             Could not save: {problem.message}
           </p>
-        ) : (
-          <span />
-        )}
-        <div className="flex gap-2">
+        ) : null}
+        <div className="flex gap-2 sm:ml-auto">
           <Button variant="outline" onClick={onCancel}>
             Cancel
           </Button>
-          <Button disabled={issues.length > 0 || saving || problem?.kind === "conflict"} onClick={() => void save()}>
+          <Button disabled={!changed || issues.length > 0 || saving || problem?.kind === "conflict"} onClick={() => void save()}>
             {saving ? "Saving..." : mode === "edit" ? "Save label" : "Add label"}
           </Button>
         </div>
@@ -466,7 +524,7 @@ interface RemoveLabelDialogProps {
   document: JobListDocument;
   onCancel: () => void;
   onRemove: () => Promise<SaveOutcome>;
-  onReload: () => Promise<void>;
+  onReload: ReloadJobList;
 }
 
 const OVERRIDE_PATH = /^jobs\[(.+)\]\.environments\.([^.]+)$/;
@@ -491,7 +549,8 @@ function blockerSentences(issues: RuleIssue[]): string[] {
       ? `${listOf(jobs)} sets settings for ${label}. Remove them from the job first, or keep another workspace labeled ${label}.`
       : `${listOf(jobs)} set settings for ${label}. Remove them from the jobs first, or keep another workspace labeled ${label}.`,
   );
-  return [...sentences, ...other];
+  // Each sentence once, so the list can key on it.
+  return [...new Set([...sentences, ...other])];
 }
 
 /** Confirms a label removal. A label that a job still sets settings for cannot go while no other workspace has it. */
@@ -532,11 +591,8 @@ function RemoveLabelDialog({ workspace, document, onCancel, onRemove, onReload }
         ) : null}
         {failure?.conflict ? (
           <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-destructive">
-            <p>Someone else changed the job list since you opened this.</p>
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void onReload().then(() => setFailure(null))}>
-              <RotateCw aria-hidden="true" />
-              Reload
-            </Button>
+            <p className="leading-5">Someone else changed this label since you opened it.</p>
+            <ReloadButton onReload={onReload} onReloaded={() => setFailure(null)} />
           </div>
         ) : failure ? (
           <p role="alert" className="text-sm text-destructive">

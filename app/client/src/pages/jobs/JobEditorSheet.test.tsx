@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JobEntry, JobListDocument } from "../../../../shared/joblist/types";
 import type { SaveOutcome } from "../../hooks/useJobList";
+import { ApiError } from "../../lib/api";
 import { JobEditorSheet, type JobEditorSheetProps } from "./JobEditorSheet";
 
 const ORDERS_ENRICH: JobEntry = {
@@ -35,7 +36,7 @@ const SAVED: SaveOutcome = {
 function renderSheet(props: Partial<JobEditorSheetProps> = {}) {
   const onSave = vi.fn<(entry: JobEntry) => Promise<SaveOutcome>>(() => Promise.resolve(SAVED));
   const onOpenChange = vi.fn<(open: boolean) => void>();
-  const onReload = vi.fn(() => Promise.resolve());
+  const onReload = vi.fn<() => Promise<ApiError | null>>(() => Promise.resolve(null));
   render(
     <JobEditorSheet
       open
@@ -120,10 +121,14 @@ describe("JobEditorSheet", () => {
     expect(field("Max retries")).toHaveAccessibleDescription(/max_retries must be a whole number of zero or more, got -1/);
   });
 
-  it("keeps Save disabled while there are issues", async () => {
+  it("keeps Save off until something changes, and while there are issues", async () => {
     renderSheet();
     const save = screen.getByRole("button", { name: "Save changes" });
-    expect(save).toBeEnabled();
+    expect(save).toBeDisabled();
+    await userEvent.type(field("Owner"), "-eu");
+    await vi.waitFor(() => expect(save).toBeEnabled());
+    await userEvent.type(field("Owner"), "{Backspace}{Backspace}{Backspace}");
+    await vi.waitFor(() => expect(save).toBeDisabled());
     await userEvent.clear(field("Max gap (minutes)"));
     await vi.waitFor(() => expect(save).toBeDisabled());
     await userEvent.type(field("Max gap (minutes)"), "120");
@@ -159,6 +164,33 @@ describe("JobEditorSheet", () => {
     await vi.waitFor(() => expect(onReload).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("This form now shows the newest saved values. Make your change again.")).toBeInTheDocument();
     expect(field("Owner")).toHaveValue("ingestion-team");
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  });
+
+  it("says when the reload fails, and keeps the conflict", async () => {
+    const { onSave, onReload } = renderSheet();
+    onSave.mockResolvedValueOnce({ ok: false, conflict: true, latestVersion: 14 });
+    onReload.mockResolvedValueOnce(new ApiError(500, "server", "The job list could not be read or saved. Try again.", null));
+    await userEvent.type(field("Owner"), "-eu");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+    expect(await screen.findByText("The job list did not reload. The job list could not be read or saved. Try again.")).toBeInTheDocument();
+    expect(screen.getByText("Someone else changed this job since you opened it.")).toBeInTheDocument();
+    expect(screen.queryByText(/This form now shows the newest saved values/)).not.toBeInTheDocument();
+    expect(field("Owner")).toHaveValue("ingestion-team-eu");
+  });
+
+  it("asks to open the job again on a 409 when it cannot reload", async () => {
+    const { onSave } = renderSheet({ onReload: undefined });
+    onSave.mockResolvedValueOnce({ ok: false, conflict: true, latestVersion: 14 });
+    await userEvent.type(field("Owner"), "-eu");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(
+      await screen.findByText(
+        "Someone else changed this job since you opened it. Close this form and open the job again to see their change.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reload" })).not.toBeInTheDocument();
   });
 
   it("shows the server's issues of a 422 on their fields", async () => {
@@ -188,6 +220,12 @@ describe("JobEditorSheet", () => {
     await userEvent.type(field("Job name"), "orders_ingest");
     await vi.waitFor(() => expect(field("Job name")).toHaveAccessibleDescription(/duplicate job_name 'orders_ingest' in the job list/));
     expect(screen.getByRole("button", { name: "Add job" })).toBeDisabled();
+  });
+
+  it("passes no pattern to the pattern preview while a new job has no name", async () => {
+    const renderPatternPreview = vi.fn((pattern: string) => <p>preview of [{pattern}]</p>);
+    renderSheet({ mode: "create", initial: { job_name: "" }, renderPatternPreview });
+    expect(await screen.findByText("preview of []")).toBeInTheDocument();
   });
 
   it("passes the patterns the scan would use to the pattern preview", async () => {
