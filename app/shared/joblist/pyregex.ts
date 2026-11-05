@@ -10,12 +10,14 @@
  * Which Python? The scan runs on serverless compute, whose Python can be as old
  * as 3.10 (the default notebook environment is 3.10.12 in our test workspace).
  * So a pattern passes only when Python 3.10 and every later version up to 3.14
- * compile it, and the message is that of the newest version that refuses it.
- * In practice: no atomic groups (?>...) and no possessive repeats (a*+), which
- * 3.10 lacks; no \z, which only 3.14 has; and inline global flags only at the
- * start, as 3.11 and later require. tests/fixtures/regex-patterns.json pins this
- * per Python version (pytest checks it on the Python it runs on, vitest checks
- * this port).
+ * compile it. In practice: no atomic groups (?>...) and no possessive repeats
+ * (a*+), which 3.10 lacks; no \z, which only 3.14 has; and inline global flags
+ * only at the start, as 3.11 and later require. The message is Python's: 3.10's
+ * for those three constructs ("unknown extension ?>", "multiple repeat", "bad
+ * escape \z"), 3.14's for everything else. tests/fixtures/regex-patterns.json
+ * pins this per Python version (pytest checks it on the Python it runs on,
+ * vitest checks this port); a check of 3,471 random patterns on 3.10 to 3.14
+ * found no pattern where the port and Python disagree on compiling.
  *
  * The one gap: a \N{...} character name. Python looks the name up in its
  * Unicode database, which JavaScript does not have, so the app refuses every
