@@ -7,11 +7,11 @@ import { withRetry } from "./retry";
  * the only table is the job list's version history.
  *
  * After a plain teardown and a new deploy, the app has a new service principal
- * and the kept schema belongs to another role: the identity that ran the
- * teardown, as Databricks describes deleting an app (a full teardown and
- * redeploy has not been run yet; docs/multi-region.md says how to check one).
- * So the check below is refused (42501) until the watchdog_app_access job grants
- * the new service principal access (jobs_watchdog/app_access.py).
+ * and the kept schema belongs to another role: the teardown removes the old
+ * app's Postgres role and gives everything it owned to the identity that ran
+ * the teardown (a full teardown and redeploy showed this on 2026-11-05). So the
+ * check below is refused (42501) until the watchdog_app_access job grants the
+ * new service principal access (jobs_watchdog/app_access.py).
  */
 const SCHEMA_DDL = `
 CREATE SCHEMA IF NOT EXISTS watchdog_app;
@@ -56,7 +56,8 @@ export function isPermissionDenied(error: unknown): boolean {
 /** What the job list answers while the app cannot use its schema. */
 export const NO_ACCESS_MESSAGE =
   "The app has no access to its job list in Lakebase. After a teardown and a new deploy, the person or service " +
-  "principal that deployed runs the watchdog_app_access job (databricks bundle run watchdog_app_access). Then try again.";
+  "principal that deployed runs the watchdog_app_access job (databricks bundle run watchdog_app_access -t <target>). " +
+  "Then try again.";
 
 /** The startup log line for a failed schema check. */
 export function schemaErrorLog(error: unknown): string {
