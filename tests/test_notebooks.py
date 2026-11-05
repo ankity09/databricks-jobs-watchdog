@@ -65,3 +65,10 @@ def test_cleanup_notebook_runs_the_delete_file_after_checking_the_tables():
     assert text.index("require_current_tables(spark") < text.index("run_sql(spark, \"sql/maintenance/50_delete_old_findings.sql\"")
     assert "if s.retention_days == 0:" in text
     assert "Oldest observed_at left" in text
+
+
+def test_notebook_02_installs_psycopg_before_the_setup_and_reads_the_config_source():
+    text = (NOTEBOOKS / "02_load_config.py").read_text()
+    pip = '# MAGIC %pip install --quiet "psycopg[binary]>=3.2,<4"'
+    assert pip in text and text.index(pip) < text.index("# MAGIC %run ./_setup")
+    assert "config_source" in text and "config_loads" in text

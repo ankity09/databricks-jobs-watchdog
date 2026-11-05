@@ -117,3 +117,23 @@ def test_retention_days_is_a_whole_number_and_zero_keeps_everything(tmp_path, da
 def test_bad_retention_days_says_what_to_fix(tmp_path, days):
     with pytest.raises(ValueError, match="retention_days"):
         read_settings({"retention_days": days}, tmp_path)
+
+
+def test_config_source_defaults_to_yaml_and_is_checked(tmp_path):
+    assert widget_defaults(tmp_path)["config_source"] == "yaml"
+    assert read_settings({"config_source": "lakebase"}, tmp_path).config_source == "lakebase"
+    with pytest.raises(ValueError, match="lakebase.*yaml"):
+        read_settings({"config_source": "lake"}, tmp_path)
+
+
+def test_lakebase_widgets_have_defaults_and_are_checked(tmp_path):
+    defaults = widget_defaults(tmp_path)
+    assert (defaults["lakebase_project_id"], defaults["lakebase_branch"], defaults["lakebase_database"]) == (
+        "jobs-watchdog", "production", "watchdog")
+    with pytest.raises(ValueError, match="lakebase_project_id"):
+        read_settings({"lakebase_project_id": "Jobs_Watchdog"}, tmp_path)
+    with pytest.raises(ValueError, match="lakebase_branch"):
+        read_settings({"lakebase_branch": "Prod"}, tmp_path)
+    with pytest.raises(ValueError, match="lakebase_database"):
+        read_settings({"lakebase_database": "my db"}, tmp_path)
+    assert read_settings({"lakebase_database": "watchdog"}, tmp_path).lakebase_database == "watchdog"

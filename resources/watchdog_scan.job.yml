@@ -47,6 +47,14 @@ resources:
           default: ${var.code_version_tag}
         - name: pipeline_url_parameter
           default: ${var.pipeline_url_parameter}
+        - name: config_source
+          default: ${var.config_source}
+        - name: lakebase_project_id
+          default: ${var.lakebase_project_id}
+        - name: lakebase_branch
+          default: ${var.lakebase_branch}
+        - name: lakebase_database
+          default: ${var.lakebase_database}
       tasks:
         - task_key: create_tables
           notebook_task:
