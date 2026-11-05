@@ -22,6 +22,22 @@ export function pySorted(items: Iterable<string>): string[] {
   return Array.from(items).sort(comparePy);
 }
 
+/**
+ * A float that has no fraction, such as 60.0. After parsing, 60.0 and 60 are the
+ * same JavaScript number, but Python keeps them apart, so the YAML parse marks
+ * these floats and the rules reject them where Python wants a whole number.
+ */
+export class PyFloat {
+  readonly value: number;
+  constructor(value: number) {
+    this.value = value;
+  }
+  toString(): string {
+    const text = String(this.value);
+    return /^-?\d+$/.test(text) ? `${text}.0` : text;
+  }
+}
+
 function reprString(s: string): string {
   const quote = s.includes("'") && !s.includes('"') ? '"' : "'";
   let out = quote;
@@ -43,6 +59,7 @@ export function pyRepr(value: unknown): string {
   if (typeof value === "string") return reprString(value);
   if (typeof value === "number") return Number.isNaN(value) ? "nan" : String(value);
   if (typeof value === "bigint") return value.toString();
+  if (value instanceof PyFloat) return value.toString();
   if (Array.isArray(value)) return `[${value.map(pyRepr).join(", ")}]`;
   if (typeof value === "object") {
     const parts = Object.entries(value).map(([k, v]) => `${reprString(k)}: ${pyRepr(v)}`);

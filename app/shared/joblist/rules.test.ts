@@ -2,7 +2,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
+import { PyFloat } from "./pyrepr";
 import { normalizeDocument, validateDocument } from "./rules";
+import { pythonYamlOptions } from "./yamlOptions";
 
 const CORPUS = join(__dirname, "../../../tests/fixtures/job-lists");
 type Expectation = { ok: true } | { ok: false; error_contains: string };
@@ -14,8 +16,9 @@ describe("rules match the Python corpus", () => {
   });
   for (const [file, want] of Object.entries(expected)) {
     it(file, () => {
-      const raw = parse(readFileSync(join(CORPUS, file), "utf8"), { version: "1.1", merge: true, intAsBigInt: true }) as Record<string, unknown>;
-      const issues = validateDocument(normalizeDocument(raw));
+      const raw = parse(readFileSync(join(CORPUS, file), "utf8"), pythonYamlOptions) as Record<string, unknown>;
+      const issues = validateDocument(raw);
+      if (want.ok) expect(validateDocument(normalizeDocument(raw))).toEqual([]);
       if (want.ok) expect(issues).toEqual([]);
       else expect(issues[0]?.message ?? "").toContain(want.error_contains);
     });
@@ -66,5 +69,27 @@ describe("normalizeDocument", () => {
   it("an unsafe big number outside IDs becomes a string, which the rules reject", () => {
     const out = normalizeDocument({ jobs: [{ job_name: "a", max_gap_minutes: 9007199254740993n }] });
     expect(validateDocument(out)[0].message).toContain("max_gap_minutes must be a whole number");
+  });
+});
+
+describe("raw parse messages", () => {
+  const gap = (v: unknown) => validateDocument({ jobs: [{ job_name: "a", max_gap_minutes: v }] });
+  it("prints a marked float like Python", () => {
+    expect(gap(new PyFloat(60))[0].message).toBe("job a: max_gap_minutes must be a whole number of zero or more, got 60.0");
+  });
+  it("accepts bigint integers, including unsafe ones", () => {
+    expect(gap(9007199254740993n)).toEqual([]);
+    expect(gap(-5n)[0].message).toContain("got -5");
+  });
+  it("job IDs print as numbers and float IDs are rejected", () => {
+    const ids = (v: unknown[]) => validateDocument({ jobs: [{ job_name: "a", max_gap_minutes: 1, job_ids: v }] });
+    expect(ids([123n, "456"])).toEqual([]);
+    expect(ids([new PyFloat(123)])[0].message).toBe("job a: job_ids must be whole numbers, got 123.0");
+    expect(ids([true])[0].message).toContain("got True");
+    expect(ids([1n, 1n])[0].message).toBe("job a: job ID 1 is listed twice");
+  });
+  it("a float workspace_id is not digits", () => {
+    const issues = validateDocument({ workspaces: [{ workspace_id: new PyFloat(12), environment: "p" }], jobs: [{ job_name: "a", max_gap_minutes: 1 }] });
+    expect(issues[0].message).toBe("workspace 12.0: workspace_id must be digits, got '12.0'");
   });
 });

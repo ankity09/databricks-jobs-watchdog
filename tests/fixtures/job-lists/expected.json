@@ -7,6 +7,10 @@
     "ok": false,
     "error_contains": "a job can have only one parent"
   },
+  "invalid_defaults_not_mapping.yml": {
+    "ok": false,
+    "error_contains": "defaults must be a mapping of job settings, got ['a']"
+  },
   "invalid_defaults_sets_a_pattern.yml": {
     "ok": false,
     "error_contains": "defaults cannot set job_name_regex"
@@ -34,6 +38,14 @@
   "invalid_environment_unknown_key.yml": {
     "ok": false,
     "error_contains": "has unknown keys ['notes']"
+  },
+  "invalid_float_gap.yml": {
+    "ok": false,
+    "error_contains": "max_gap_minutes must be a whole number of zero or more, got 60.0"
+  },
+  "invalid_float_job_id.yml": {
+    "ok": false,
+    "error_contains": "job_ids must be whole numbers, got 123.0"
   },
   "invalid_job_ids_not_digits.yml": {
     "ok": false,
@@ -86,6 +98,10 @@
   "invalid_workspace_listed_twice.yml": {
     "ok": false,
     "error_contains": "workspace 222 is listed twice"
+  },
+  "invalid_workspace_name_twice.yml": {
+    "ok": false,
+    "error_contains": "workspace example-prod is listed twice"
   },
   "invalid_workspace_without_environment.yml": {
     "ok": false,

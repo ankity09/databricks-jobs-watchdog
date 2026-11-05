@@ -7,10 +7,13 @@
  * Differences that cannot be avoided in JavaScript:
  * - Regexes are checked with `new RegExp`, so a Python-only pattern such as
  *   `(?P<x>...)` is reported as not compiling.
- * - Once a value is a plain number, 60.0 and 60 are the same value, so a float
- *   with no fraction is accepted where Python rejects it.
+ * - A float with no fraction (60.0) is told apart from 60 only if the YAML was
+ *   parsed with pythonYamlOptions, which marks it with PyFloat; the rules reject the marker.
+ * - A section that is not a list gets the issue "... must be a list"; Python fails differently.
+ * The rules accept the raw parse (integers as bigint, floats marked), so messages
+ * print values the way Python does; normalizeDocument is for storage afterwards.
  */
-import { pyRepr, pySorted, pyStr } from "./pyrepr";
+import { PyFloat, pyRepr, pySorted, pyStr } from "./pyrepr";
 import type { RuleIssue } from "./types";
 
 type Obj = Record<string, unknown>;
@@ -44,14 +47,15 @@ function get(obj: Obj, key: string): unknown {
 
 /** Python truthiness for the values a YAML document holds. */
 function truthy(value: unknown): boolean {
-  if (value === null || value === undefined || value === false || value === 0 || value === "") return false;
+  if (value === null || value === undefined || value === false || value === 0 || value === 0n || value === "") return false;
   if (Array.isArray(value)) return value.length > 0;
   if (isMap(value)) return Object.keys(value).length > 0;
   return true;
 }
 
-function isWholeNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value);
+/** Python's int: a whole number or a bigint, never a boolean or a marked float. */
+function isWholeNumber(value: unknown): value is number | bigint {
+  return typeof value === "bigint" || (typeof value === "number" && Number.isInteger(value));
 }
 
 function isDigits(text: string): boolean {
@@ -66,7 +70,8 @@ function convert(value: unknown, asId: boolean): unknown {
     if (asId) return value.toString();
     return value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString();
   }
-  if (asId && isWholeNumber(value)) return String(value);
+  if (value instanceof PyFloat) return value.value;
+  if (asId && typeof value === "number" && Number.isInteger(value)) return String(value);
   if (Array.isArray(value)) return value.map((item) => convert(item, asId));
   if (isMap(value)) {
     return Object.fromEntries(
@@ -115,7 +120,7 @@ function checkJobIds(c: Collector, path: string, raw: unknown, where: string): v
   }
   const seen: string[] = [];
   for (const value of raw) {
-    if (typeof value === "boolean" || (typeof value !== "number" && typeof value !== "string") || (typeof value === "number" && !isWholeNumber(value))) {
+    if (typeof value === "boolean" || (typeof value !== "string" && !isWholeNumber(value))) {
       c.add(path, `${where}: job_ids must be whole numbers, got ${pyRepr(value)}`);
       return;
     }
