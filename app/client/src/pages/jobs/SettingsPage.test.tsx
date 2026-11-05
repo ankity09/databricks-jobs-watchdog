@@ -6,6 +6,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JobListDocument, JobListState } from "../../../../shared/joblist/types";
 import { RefreshProvider } from "../../hooks/useRefreshKey";
+import { jobListServer, type SaveBody } from "../../test/jobListServer";
 import { SettingsPage } from "./SettingsPage";
 
 const CONFIG = { catalog: "main", schema: "watchdog", region: "us-east-2", appName: "watchdog-app", lakebaseProject: "jobs-watchdog" };
@@ -91,6 +92,41 @@ function mockApi(options: MockOptions = {}) {
 
 const STAGING = { workspace_id: "1111111111111111", workspace_name: "example-staging", environment: "lower", notes: "Development" };
 const asksForWorkspaces = (asked: string[]) => asked.some((url) => url.startsWith("/api/analytics/query/workspaces"));
+
+/**
+ * The page against a fake server that checks every save per target, like the real store. `hold()` keeps the
+ * next save's answer back until the returned function is called.
+ */
+function mockServer(server: ReturnType<typeof jobListServer>) {
+  let held: ((release: () => void) => void) | null = null;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = urlOf(input);
+      if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
+      if (url === "/api/job-list") return Promise.resolve(json(200, server.state()));
+      if (url.startsWith("/api/analytics/query/")) {
+        return Promise.resolve(new Response(`data: ${JSON.stringify({ type: "result", data: WORKSPACES })}\n\n`, { headers: { "Content-Type": "text/event-stream" } }));
+      }
+      if (url === "/api/job-list/changes") {
+        const body = JSON.parse(typeof init?.body === "string" ? init.body : "null") as SaveBody;
+        const hold = held;
+        held = null;
+        if (!hold) return Promise.resolve(server.answer(body));
+        return new Promise<Response>((resolve) => hold(() => resolve(server.answer(body))));
+      }
+      return Promise.resolve(json(404, { error: "not_found", message: url }));
+    }),
+  );
+  return {
+    /** Holds the next save's answer; resolves with the function that sends it. */
+    hold(): Promise<() => void> {
+      return new Promise((resolve) => {
+        held = resolve;
+      });
+    },
+  };
+}
 
 /** Each test gets its own clock, so AppKit's query store does not share the workspace rows between tests. */
 function setClock(iso: string) {
@@ -325,5 +361,101 @@ describe("SettingsPage", () => {
       ),
     ).toBeInTheDocument();
     expect(within(dialog).getByLabelText("Workspace ID")).toBeEnabled();
+  });
+});
+
+describe("SettingsPage saves from the version each form opened at", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  /** Someone else changes the default owner after the page loaded: the page still shows version 4. */
+  const ownerChange = { kind: "upsert", target: { type: "defaults" }, value: { owner: "data-platform", max_gap_minutes: 60 } } as const;
+
+  /** Edits the notes of the label for 1111111111111111 and saves it. */
+  async function saveLabelNotes(text: string) {
+    const labels = screen.getByRole("region", { name: "Workspace labels" });
+    await userEvent.click(within(labels).getByRole("button", { name: "Edit the label for 1111111111111111" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit the label for 1111111111111111" });
+    await userEvent.clear(within(dialog).getByLabelText("Notes"));
+    await userEvent.type(within(dialog).getByLabelText("Notes"), text);
+    const save = within(dialog).getByRole("button", { name: "Save label" });
+    await waitFor(() => expect(save).toBeEnabled(), { timeout: 3000 });
+    await userEvent.click(save);
+  }
+
+  it("refuses a defaults save that a label save overtook, so the newer default owner stays", async () => {
+    setClock("2026-11-05T18:30:00Z");
+    const server = jobListServer(DOC, 4);
+    mockServer(server);
+    renderPage();
+    const defaults = await screen.findByRole("region", { name: "Defaults" });
+    server.saveAsSomeoneElse(ownerChange);
+
+    const gap = within(defaults).getByLabelText("Max gap (minutes)");
+    await userEvent.clear(gap);
+    await userEvent.type(gap, "90");
+    // The label save goes through (the label did not change), and its answer brings the newer defaults.
+    await saveLabelNotes("Dev team");
+    expect(await screen.findByText("Saved version 6: Changed notes on workspace 1111111111111111.")).toBeInTheDocument();
+
+    const save = within(defaults).getByRole("button", { name: "Save defaults" });
+    await waitFor(() => expect(save).toBeEnabled(), { timeout: 3000 });
+    await userEvent.click(save);
+    expect(await within(defaults).findByText("Someone else changed the defaults since you opened this page.")).toBeInTheDocument();
+    expect(server.saves.map((body) => body.baseVersion)).toEqual([4, 4]);
+    expect(server.state().document.defaults).toEqual({ owner: "data-platform", max_gap_minutes: 60 });
+  });
+
+  it("starts a defaults form with no edits again when a newer version changed the defaults", async () => {
+    setClock("2026-11-05T19:30:00Z");
+    const server = jobListServer(DOC, 4);
+    mockServer(server);
+    renderPage();
+    await screen.findByRole("region", { name: "Defaults" });
+    server.saveAsSomeoneElse(ownerChange);
+    await saveLabelNotes("Dev team");
+    await screen.findByText("Saved version 6: Changed notes on workspace 1111111111111111.");
+
+    const defaults = screen.getByRole("region", { name: "Defaults" });
+    await waitFor(() => expect(within(defaults).getByLabelText("Owner")).toHaveValue("data-platform"));
+    const gap = within(defaults).getByLabelText("Max gap (minutes)");
+    await userEvent.clear(gap);
+    await userEvent.type(gap, "90");
+    const save = within(defaults).getByRole("button", { name: "Save defaults" });
+    await waitFor(() => expect(save).toBeEnabled(), { timeout: 3000 });
+    await userEvent.click(save);
+    expect(await screen.findByText("Saved version 7: Changed default max_gap_minutes from 60 to 90.")).toBeInTheDocument();
+    expect(server.saves.at(-1)?.baseVersion).toBe(6);
+    expect(server.state().document.defaults).toEqual({ owner: "data-platform", max_gap_minutes: 90 });
+  });
+
+  it("saves a label from the version its form opened at, even when another save lands meanwhile", async () => {
+    setClock("2026-11-05T20:30:00Z");
+    const server = jobListServer(DOC, 4);
+    const api = mockServer(server);
+    renderPage();
+    const defaults = await screen.findByRole("region", { name: "Defaults" });
+    await userEvent.type(within(defaults).getByLabelText("Owner"), "-eu");
+    const next = api.hold();
+    await userEvent.click(within(defaults).getByRole("button", { name: "Save defaults" }));
+    const release = await next;
+
+    // The label form opens at version 4, while the defaults save is still on its way.
+    const labels = screen.getByRole("region", { name: "Workspace labels" });
+    await userEvent.click(within(labels).getByRole("button", { name: "Edit the label for 1111111111111111" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit the label for 1111111111111111" });
+    release();
+    expect(await screen.findByText("Saved version 5: Changed default owner from platform-team to platform-team-eu.")).toBeInTheDocument();
+
+    await userEvent.clear(within(dialog).getByLabelText("Notes"));
+    await userEvent.type(within(dialog).getByLabelText("Notes"), "Dev team");
+    const save = within(dialog).getByRole("button", { name: "Save label" });
+    await waitFor(() => expect(save).toBeEnabled(), { timeout: 3000 });
+    await userEvent.click(save);
+    await waitFor(() => expect(server.saves).toHaveLength(2));
+    expect(server.saves[1]?.baseVersion).toBe(4);
+    expect(await screen.findByText("Saved version 6: Changed notes on workspace 1111111111111111.")).toBeInTheDocument();
   });
 });

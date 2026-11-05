@@ -33,7 +33,7 @@ import {
 import { CircleAlert, CircleCheck, Download, ListChecks, Pencil, Plus, RotateCw, ScanSearch, Search, Trash2, Upload, X } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { type Change, dependencyKey, type JobEntry, type JobListDocument, type SaveResult } from "../../../../shared/joblist/types";
-import { type ReloadJobList, type SaveOutcome, useJobList } from "../../hooks/useJobList";
+import { type ReloadJobList, type SaveOutcome, useJobList, useOpenedVersion } from "../../hooks/useJobList";
 import { type LiveStatus, useLiveStatus } from "../../hooks/useLiveStatus";
 import { changeIssues, linksRemovedWith } from "../../lib/draft";
 import { inheritedSettings, type InheritedSettings, pyReEscape } from "../../lib/job-form";
@@ -140,15 +140,19 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
     setProblem(null);
     setNotice(`Saved version ${result.version}: ${result.summary}.`);
   };
-  const apply = async (change: Change): Promise<SaveOutcome> => {
-    const outcome = await save(change);
+  const apply = async (change: Change, baseVersion: number | null): Promise<SaveOutcome> => {
+    const outcome = await save(change, baseVersion);
     if (outcome.ok) saved(outcome.result);
     return outcome;
   };
 
-  const toggle = async (job: JobEntry, next: boolean) => {
+  // The switch saves the job as this version shows it, so it sends this version.
+  const toggle = async (job: JobEntry, next: boolean, baseVersion: number | null) => {
     setToggling((current) => ({ ...current, [job.job_name]: next }));
-    const outcome = await apply({ kind: "upsert", target: { type: "job", name: job.job_name }, value: { ...job, enabled: next } });
+    const outcome = await apply(
+      { kind: "upsert", target: { type: "job", name: job.job_name }, value: { ...job, enabled: next } },
+      baseVersion,
+    );
     setToggling(({ [job.job_name]: _done, ...rest }) => rest);
     if (outcome.ok) return;
     if (outcome.conflict)
@@ -262,7 +266,7 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
           onClearSearch={() => setSearch("")}
           onEdit={(name) => setEditing({ mode: "edit", name })}
           onDelete={setDeleting}
-          onToggle={(job, next) => void toggle(job, next)}
+          onToggle={(job, next) => void toggle(job, next, state.version)}
         />
       </section>
     );
@@ -303,7 +307,8 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
           mode={editing?.mode ?? "create"}
           initial={editing?.mode === "create" ? editing.draft : (editingJob ?? { job_name: "" })}
           document={state.document}
-          onSave={(entry) => apply({ kind: "upsert", target: { type: "job", name: entry.job_name }, value: entry })}
+          version={state.version}
+          onSave={(entry, baseVersion) => apply({ kind: "upsert", target: { type: "job", name: entry.job_name }, value: entry }, baseVersion)}
           renderPatternPreview={patternPreview}
           onReload={reload}
         />
@@ -313,9 +318,10 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
         <DeleteJobDialog
           name={deleting}
           document={state.document}
+          version={state.version}
           onCancel={() => setDeleting(null)}
-          onDelete={async () => {
-            const outcome = await apply({ kind: "delete", target: { type: "job", name: deleting } });
+          onDelete={async (baseVersion) => {
+            const outcome = await apply({ kind: "delete", target: { type: "job", name: deleting } }, baseVersion);
             if (outcome.ok) setDeleting(null);
             return outcome;
           }}
@@ -675,21 +681,26 @@ function JobRow({ job, inherited, live, pending, onEdit, onDelete, onToggle }: J
 interface DeleteJobDialogProps {
   name: string;
   document: JobListDocument;
+  /** The version `document` is. */
+  version: number | null;
   onCancel: () => void;
-  onDelete: () => Promise<SaveOutcome>;
+  /** Deletes the job; `baseVersion` is the version the dialog opened at. */
+  onDelete: (baseVersion: number | null) => Promise<SaveOutcome>;
   onReload: ReloadJobList;
 }
 
 /** Confirms a delete, and names the links that go with it. */
-function DeleteJobDialog({ name, document, onCancel, onDelete, onReload }: DeleteJobDialogProps) {
+function DeleteJobDialog({ name, document, version, onCancel, onDelete, onReload }: DeleteJobDialogProps) {
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<SaveOutcome | null>(null);
+  // The version the dialog opened at, until a reload after a conflict shows a newer one.
+  const [openedAt, takeNewest] = useOpenedVersion(version);
   const links = useMemo(() => linksRemovedWith(document, name), [document, name]);
   const blockers = useMemo(() => changeIssues(document, { kind: "delete", target: { type: "job", name } }), [document, name]);
 
   const confirm = async () => {
     setBusy(true);
-    const result = await onDelete();
+    const result = await onDelete(openedAt);
     setBusy(false);
     if (!result.ok) setOutcome(result);
   };
@@ -731,7 +742,13 @@ function DeleteJobDialog({ name, document, onCancel, onDelete, onReload }: Delet
         {conflict ? (
           <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-destructive">
             <p className="leading-5">Someone else changed this job since you opened it.</p>
-            <ReloadButton onReload={onReload} onReloaded={() => setOutcome(null)} />
+            <ReloadButton
+              onReload={onReload}
+              onReloaded={() => {
+                setOutcome(null);
+                takeNewest();
+              }}
+            />
           </div>
         ) : null}
         {message ? (

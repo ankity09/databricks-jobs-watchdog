@@ -34,7 +34,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { deepEqual } from "../../../../shared/joblist/apply";
 import type { JobEntry, JobListDocument, RuleIssue } from "../../../../shared/joblist/types";
 import { useDebouncedCheck } from "../../hooks/useDebouncedCheck";
-import type { ReloadJobList, SaveOutcome } from "../../hooks/useJobList";
+import { type ReloadJobList, type SaveOutcome, useOpenedVersion } from "../../hooks/useJobList";
 import { toApiError } from "../../lib/api";
 import { draftIssues, jobIssues } from "../../lib/draft";
 import {
@@ -67,7 +67,10 @@ export interface JobEditorSheetProps {
   initial: JobEntry;
   /** The saved job list the draft is checked against. */
   document: JobListDocument;
-  onSave: (entry: JobEntry) => Promise<SaveOutcome>;
+  /** The version `document` is; null when nothing is saved yet. */
+  version: number | null;
+  /** Saves the entry. `baseVersion` is the version the form opened at, so the server refuses the save when the job changed since. */
+  onSave: (entry: JobEntry, baseVersion: number | null) => Promise<SaveOutcome>;
   /**
    * Rendered under the pattern fields with the patterns the scan would use, and
    * the entry's job IDs, which the scan uses instead where they apply (Task 7
@@ -93,6 +96,7 @@ export function JobEditorSheet({
   mode,
   initial,
   document,
+  version,
   onSave,
   renderPatternPreview,
   onReload,
@@ -140,6 +144,7 @@ export function JobEditorSheet({
           mode={mode}
           initial={initial}
           document={document}
+          version={version}
           onSave={onSave}
           renderPatternPreview={renderPatternPreview}
           onReload={onReload}
@@ -173,7 +178,8 @@ interface EditorFormProps {
   mode: "create" | "edit";
   initial: JobEntry;
   document: JobListDocument;
-  onSave: (entry: JobEntry) => Promise<SaveOutcome>;
+  version: number | null;
+  onSave: (entry: JobEntry, baseVersion: number | null) => Promise<SaveOutcome>;
   renderPatternPreview?: (pattern: string, exclude: string, jobIds: EntryJobIds) => ReactNode;
   onReload?: ReloadJobList;
   onReloaded: () => void;
@@ -212,6 +218,7 @@ function EditorForm({
   mode,
   initial,
   document,
+  version,
   onSave,
   renderPatternPreview,
   onReload,
@@ -221,8 +228,11 @@ function EditorForm({
   onCancel,
   onDone,
 }: EditorFormProps) {
-  // The entry and labels the form opened with. A reload remounts the form, so they are read once.
+  // The entry, labels and version the form opened with. A reload remounts the form, so they are read once.
+  // The save sends that version: when the job changed since (a switch saved after the form opened), the server
+  // refuses it instead of saving the old values over the change.
   const [base] = useState(initial);
+  const [openedAt] = useOpenedVersion(version);
   const [labels] = useState(() => environmentLabels(document, initial));
   const [startValues] = useState(() => toFormValues(initial, labels));
   const [values, setValues] = useState<JobFormValues>(startValues);
@@ -274,7 +284,7 @@ function EditorForm({
     setProblem(null);
     let outcome: SaveOutcome;
     try {
-      outcome = await onSave(entry);
+      outcome = await onSave(entry, openedAt);
     } catch (error) {
       outcome = { ok: false, conflict: false, issues: [], message: toApiError(error).message };
     }

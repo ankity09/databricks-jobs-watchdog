@@ -44,7 +44,7 @@ import {
   workspaceKey,
 } from "../../../../shared/joblist/types";
 import { useDebouncedCheck } from "../../hooks/useDebouncedCheck";
-import type { ReloadJobList, SaveOutcome } from "../../hooks/useJobList";
+import { type ReloadJobList, type SaveOutcome, useOpenedVersion } from "../../hooks/useJobList";
 import { useLastGood } from "../../hooks/useLastGood";
 import { useRefreshKey } from "../../hooks/useRefreshKey";
 import { changeIssues, uniqueIssues, workspaceIssues } from "../../lib/draft";
@@ -53,7 +53,10 @@ import { ReloadButton } from "./ReloadButton";
 
 export interface WorkspaceLabelsProps {
   document: JobListDocument;
-  onSave: (change: Change) => Promise<SaveOutcome>;
+  /** The version `document` is. */
+  version: number | null;
+  /** Saves a change; `baseVersion` is the version the form or dialog opened at. */
+  onSave: (change: Change, baseVersion: number | null) => Promise<SaveOutcome>;
   onSaved: (result: SaveResult) => void;
   onReload: ReloadJobList;
 }
@@ -110,7 +113,7 @@ type Editing = { mode: "create" } | { mode: "edit"; key: string; name: string };
 const RELOADED = "This form now shows the newest saved values. Make your change again.";
 
 /** The environment label of each workspace: add, edit and remove them, one change at a time. */
-export function WorkspaceLabels({ document, onSave, onSaved, onReload }: WorkspaceLabelsProps) {
+export function WorkspaceLabels({ document, version, onSave, onSaved, onReload }: WorkspaceLabelsProps) {
   const headingId = useId();
   const [editing, setEditing] = useState<Editing | null>(null);
   // Bumped after a reload in edit mode, so the form starts again from the newest saved label.
@@ -128,6 +131,7 @@ export function WorkspaceLabels({ document, onSave, onSaved, onReload }: Workspa
   };
   const formProps = {
     document,
+    version,
     notice: formNotice,
     onSave,
     onSaved: (result: SaveResult) => {
@@ -269,9 +273,10 @@ export function WorkspaceLabels({ document, onSave, onSaved, onReload }: Workspa
         <RemoveLabelDialog
           workspace={removingEntry}
           document={document}
+          version={version}
           onCancel={() => setRemoving(null)}
-          onRemove={async () => {
-            const outcome = await onSave({ kind: "delete", target: { type: "workspace", key: workspaceKey(removingEntry) } });
+          onRemove={async (baseVersion) => {
+            const outcome = await onSave({ kind: "delete", target: { type: "workspace", key: workspaceKey(removingEntry) } }, baseVersion);
             if (outcome.ok) {
               setRemoving(null);
               onSaved(outcome.result);
@@ -289,10 +294,12 @@ interface LabelFormProps {
   mode: "create" | "edit";
   initial: WorkspaceEntry;
   document: JobListDocument;
+  /** The version `document` is. */
+  version: number | null;
   suggestions: Suggestions;
   /** Shown at the top of the form, such as after a reload. */
   notice: string | null;
-  onSave: (change: Change) => Promise<SaveOutcome>;
+  onSave: (change: Change, baseVersion: number | null) => Promise<SaveOutcome>;
   onSaved: (result: SaveResult) => void;
   onReload: ReloadJobList;
   /** After a conflict's reload worked. */
@@ -319,7 +326,9 @@ function entryFrom(id: string, name: string, environment: string, notes: string)
   };
 }
 
-function LabelForm({ mode, initial, document, suggestions, notice, onSave, onSaved, onReload, onReloaded, onCancel }: LabelFormProps) {
+function LabelForm({ mode, initial, document, version, suggestions, notice, onSave, onSaved, onReload, onReloaded, onCancel }: LabelFormProps) {
+  // The save sends the version the form opened at (a reload starts the form again).
+  const [openedAt] = useOpenedVersion(version);
   const idsList = useId();
   const namesList = useId();
   const labelsList = useId();
@@ -367,11 +376,10 @@ function LabelForm({ mode, initial, document, suggestions, notice, onSave, onSav
     if (now.length > 0) return;
     setSaving(true);
     setProblem(null);
-    const outcome = await onSave({
-      kind: "upsert",
-      target: { type: "workspace", key: workspaceKey(mode === "edit" ? initial : entry) },
-      value: entry,
-    });
+    const outcome = await onSave(
+      { kind: "upsert", target: { type: "workspace", key: workspaceKey(mode === "edit" ? initial : entry) }, value: entry },
+      openedAt,
+    );
     setSaving(false);
     if (outcome.ok) onSaved(outcome.result);
     else if (outcome.conflict) setProblem({ kind: "conflict" });
@@ -522,8 +530,11 @@ function LabelForm({ mode, initial, document, suggestions, notice, onSave, onSav
 interface RemoveLabelDialogProps {
   workspace: WorkspaceEntry;
   document: JobListDocument;
+  /** The version `document` is. */
+  version: number | null;
   onCancel: () => void;
-  onRemove: () => Promise<SaveOutcome>;
+  /** Removes the label; `baseVersion` is the version the dialog opened at. */
+  onRemove: (baseVersion: number | null) => Promise<SaveOutcome>;
   onReload: ReloadJobList;
 }
 
@@ -554,7 +565,7 @@ function blockerSentences(issues: RuleIssue[]): string[] {
 }
 
 /** Confirms a label removal. A label that a job still sets settings for cannot go while no other workspace has it. */
-function RemoveLabelDialog({ workspace, document, onCancel, onRemove, onReload }: RemoveLabelDialogProps) {
+function RemoveLabelDialog({ workspace, document, version, onCancel, onRemove, onReload }: RemoveLabelDialogProps) {
   const name = nameOf(workspace);
   const blockers = useMemo(
     () => changeIssues(document, { kind: "delete", target: { type: "workspace", key: workspaceKey(workspace) } }),
@@ -562,10 +573,12 @@ function RemoveLabelDialog({ workspace, document, onCancel, onRemove, onReload }
   );
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<Exclude<SaveOutcome, { ok: true }> | null>(null);
+  // The version the dialog opened at, until a reload after a conflict shows a newer one.
+  const [openedAt, takeNewest] = useOpenedVersion(version);
 
   const confirm = async () => {
     setBusy(true);
-    const outcome = await onRemove();
+    const outcome = await onRemove(openedAt);
     setBusy(false);
     if (!outcome.ok) setFailure(outcome);
   };
@@ -592,7 +605,13 @@ function RemoveLabelDialog({ workspace, document, onCancel, onRemove, onReload }
         {failure?.conflict ? (
           <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-destructive">
             <p className="leading-5">Someone else changed this label since you opened it.</p>
-            <ReloadButton onReload={onReload} onReloaded={() => setFailure(null)} />
+            <ReloadButton
+              onReload={onReload}
+              onReloaded={() => {
+                setFailure(null);
+                takeNewest();
+              }}
+            />
           </div>
         ) : failure ? (
           <p role="alert" className="text-sm text-destructive">

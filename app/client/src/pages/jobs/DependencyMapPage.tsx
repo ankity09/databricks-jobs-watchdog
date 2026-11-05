@@ -222,6 +222,8 @@ export function DependencyMapPage() {
   const live = useLiveStatus();
   const { bump } = useRefreshKey();
   const document = state?.document ?? null;
+  // The version on screen: a change made on the map is made from it.
+  const version = state?.version ?? null;
   const graph = useMemo(() => (document ? buildGraph(document, live.byJob) : null), [document, live.byJob]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -257,12 +259,13 @@ export function DependencyMapPage() {
     return () => window.cancelAnimationFrame(frame);
   }, [refocus]);
 
+  /** Saves one change made on the map; `baseVersion` is the version on screen when it was made. */
   const runSave = useCallback(
-    async (change: Change): Promise<boolean> => {
+    async (change: Change, baseVersion: number | null): Promise<boolean> => {
       setSaving(true);
       setProblem(null);
       setNotice(null);
-      const outcome = await save(change);
+      const outcome = await save(change, baseVersion);
       setSaving(false);
       if (outcome.ok) {
         setNotice(`Saved version ${outcome.result.version}: ${outcome.result.summary}.`);
@@ -368,7 +371,7 @@ export function DependencyMapPage() {
   const removeLink = (edgeId: string, from: "menu" | "panel") => {
     const panelStays = from === "panel" && graph !== null && selected !== null && staysWithout(graph, edgeId, selected.id);
     const after: FocusTarget = panelStays ? { kind: "panel" } : graph ? focusAfterRemoving(graph, edgeId) : { kind: "map" };
-    void runSave(unlinkChange(edgeId)).then((saved) => {
+    void runSave(unlinkChange(edgeId), version).then((saved) => {
       setMenuEdge(null);
       // When the save fails, the link is still there: focus goes back to where the removal started.
       setRefocus(saved ? after : from === "menu" ? { kind: "link", id: edgeId } : { kind: "panel" });
@@ -582,7 +585,7 @@ export function DependencyMapPage() {
             document={document}
             saving={saving}
             returnFocus={addLinkRef}
-            onSave={(change) => void runSave(change).then(() => setLink({ step: "off" }))}
+            onSave={(change) => void runSave(change, version).then(() => setLink({ step: "off" }))}
           />
           <AddServiceDialog
             open={serviceOpen}
@@ -593,7 +596,7 @@ export function DependencyMapPage() {
             defaultJob={selected?.kind === "job" ? selected.name : null}
             saving={saving}
             returnFocus={addServiceRef}
-            onSave={(change) => void runSave(change).then(() => setServiceOpen(false))}
+            onSave={(change) => void runSave(change, version).then(() => setServiceOpen(false))}
           />
         </>
       ) : null}

@@ -6,6 +6,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JobListDocument, JobListState } from "../../../../shared/joblist/types";
 import { RefreshProvider } from "../../hooks/useRefreshKey";
+import { jobListServer, type SaveBody } from "../../test/jobListServer";
 import { JobListPage, type JobListPageProps } from "./JobListPage";
 
 const CONFIG = { catalog: "main", schema: "watchdog", region: "us-east-2", appName: "watchdog-app", lakebaseProject: "jobs-watchdog" };
@@ -78,6 +79,39 @@ function mockApi(state: JobListState, post?: (body: unknown) => Response, querie
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+/**
+ * The page against a fake server that checks every save per target, like the real store. `hold()` keeps the
+ * next save's answer back until the function it resolves with is called.
+ */
+function mockServer(server: ReturnType<typeof jobListServer>, live: unknown[] = []) {
+  let held: ((release: () => void) => void) | null = null;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = urlOf(input);
+      if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
+      if (url === "/api/job-list") return Promise.resolve(json(200, server.state()));
+      if (url.startsWith("/api/analytics/query/job_live_status")) return Promise.resolve(sse(live));
+      if (url.startsWith("/api/analytics/query/")) return Promise.resolve(sse([]));
+      if (url === "/api/job-list/changes") {
+        const body = JSON.parse(typeof init?.body === "string" ? init.body : "null") as SaveBody;
+        const hold = held;
+        held = null;
+        if (!hold) return Promise.resolve(server.answer(body));
+        return new Promise<Response>((resolve) => hold(() => resolve(server.answer(body))));
+      }
+      return Promise.resolve(json(404, { error: "not_found", message: url }));
+    }),
+  );
+  return {
+    hold(): Promise<() => void> {
+      return new Promise((resolve) => {
+        held = resolve;
+      });
+    },
+  };
 }
 
 /** Each test gets its own clock, so AppKit's query store does not share live status rows between tests. */
@@ -346,5 +380,30 @@ describe("JobListPage", () => {
     expect(await screen.findByText("Matches 2 jobs", {}, { timeout: 3000 })).toBeInTheDocument();
     expect(screen.getByText("orders_ingest_eu_prod")).toHaveClass("font-mono");
     expect(screen.getByText("orders_ingest_us_prod")).toBeInTheDocument();
+  });
+
+  it("refuses an editor save that would undo the Enabled switch saved after the editor opened", async () => {
+    setClock("2026-11-05T20:30:00Z");
+    const server = jobListServer(DOC, 12);
+    const api = mockServer(server);
+    renderPage();
+    const toggle = await screen.findByRole("switch", { name: "Check orders_ingest" });
+    const next = api.hold();
+    await userEvent.click(toggle);
+    const release = await next;
+
+    // The editor opens from version 12 while the switch's save is on its way, then the save lands as version 13.
+    await userEvent.click(screen.getByRole("button", { name: "Edit orders_ingest" }));
+    const owner = await screen.findByLabelText("Owner");
+    release();
+    expect(await screen.findByText("Saved version 13: Changed enabled on orders_ingest from unset to false.")).toBeInTheDocument();
+
+    await userEvent.type(owner, "-eu");
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
+    expect(await screen.findByText("Someone else changed this job since you opened it.")).toBeInTheDocument();
+    expect(server.saves.map((body) => body.baseVersion)).toEqual([12, 12]);
+    expect(server.state().document.jobs.find((job) => job.job_name === "orders_ingest")?.enabled).toBe(false);
   });
 });

@@ -35,22 +35,25 @@ const SAVED: SaveOutcome = {
 };
 
 function renderSheet(props: Partial<JobEditorSheetProps> = {}) {
-  const onSave = vi.fn<(entry: JobEntry) => Promise<SaveOutcome>>(() => Promise.resolve(SAVED));
+  const onSave = vi.fn<(entry: JobEntry, baseVersion: number | null) => Promise<SaveOutcome>>(() => Promise.resolve(SAVED));
   const onOpenChange = vi.fn<(open: boolean) => void>();
   const onReload = vi.fn<() => Promise<ApiError | null>>(() => Promise.resolve(null));
-  render(
+  const sheet = (more: Partial<JobEditorSheetProps>) => (
     <JobEditorSheet
       open
       onOpenChange={onOpenChange}
       mode="edit"
       initial={ORDERS_ENRICH}
       document={DOC}
+      version={12}
       onSave={onSave}
       onReload={onReload}
       {...props}
-    />,
+      {...more}
+    />
   );
-  return { onSave, onOpenChange, onReload };
+  const view = render(sheet({}));
+  return { onSave, onOpenChange, onReload, rerender: (more: Partial<JobEditorSheetProps>) => view.rerender(sheet(more)) };
 }
 
 const field = (label: string) => screen.getByLabelText(label);
@@ -168,11 +171,24 @@ describe("JobEditorSheet", () => {
     await userEvent.clear(field("Max retries"));
     await userEvent.clear(field("Max gap (minutes)"));
     await userEvent.type(field("Max gap (minutes)"), "120");
-    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    // On a slow machine the check can run while the gap is empty; Save turns on again once it checks 120.
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await vi.waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
     await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     const { max_retries: _gone, ...rest } = ORDERS_ENRICH;
-    expect(onSave).toHaveBeenCalledWith({ ...rest, max_gap_minutes: 120 });
+    expect(onSave).toHaveBeenCalledWith({ ...rest, max_gap_minutes: 120 }, 12);
     await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  it("saves from the version it opened at while newer versions arrive, so a changed job gets a conflict", async () => {
+    const { onSave, rerender } = renderSheet();
+    // Another save of this page lands while the form is open: the list moves on to version 13.
+    rerender({ version: 13, document: { ...DOC, jobs: [DOC.jobs[0], { ...ORDERS_ENRICH, enabled: false }] } });
+    await userEvent.type(field("Owner"), "-eu");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]?.[1]).toBe(12);
   });
 
   it("says someone else changed the job on a 409, and reloads on Reload", async () => {

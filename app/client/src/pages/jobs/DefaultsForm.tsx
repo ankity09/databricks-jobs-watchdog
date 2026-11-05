@@ -18,7 +18,7 @@ import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useStat
 import { deepEqual } from "../../../../shared/joblist/apply";
 import type { Change, DefaultsEntry, JobEntry, JobListDocument, RuleIssue, SaveResult } from "../../../../shared/joblist/types";
 import { useDebouncedCheck } from "../../hooks/useDebouncedCheck";
-import type { ReloadJobList, SaveOutcome } from "../../hooks/useJobList";
+import { type ReloadJobList, type SaveOutcome, useOpenedVersion } from "../../hooks/useJobList";
 import { changeIssues, type DefaultIssue, defaultsIssues } from "../../lib/draft";
 import {
   INHERIT,
@@ -36,7 +36,10 @@ import { ReloadButton } from "./ReloadButton";
 
 export interface DefaultsFormProps {
   document: JobListDocument;
-  onSave: (change: Change) => Promise<SaveOutcome>;
+  /** The version `document` is. */
+  version: number | null;
+  /** Saves a change; `baseVersion` is the version the form opened at. */
+  onSave: (change: Change, baseVersion: number | null) => Promise<SaveOutcome>;
   onSaved: (result: SaveResult) => void;
   onReload: ReloadJobList;
 }
@@ -97,26 +100,32 @@ const NUMBER_LABELS: Record<NumberKey, { label: ReactNode; description: string }
  * A change is checked against the whole list as you type, so a default that
  * would break a job is caught before it is saved.
  */
-export function DefaultsForm({ document, onSave, onSaved, onReload }: DefaultsFormProps) {
-  // Bumped after a save or a reload, so the form starts again from the newest saved defaults.
+export function DefaultsForm({ document, version, onSave, onSaved, onReload }: DefaultsFormProps) {
+  // Bumped after a save or a reload, and when a newer version changed the defaults while the form has no edits,
+  // so the form starts again from the newest saved defaults.
   const [revision, setRevision] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+  const restart = useCallback(() => {
+    setNotice(null);
+    setRevision((n) => n + 1);
+  }, []);
   return (
     <DefaultsFields
       key={revision}
       document={document}
+      version={version}
       notice={notice}
       onSave={onSave}
       onSaved={(result) => {
         onSaved(result);
-        setNotice(null);
-        setRevision((n) => n + 1);
+        restart();
       }}
       onReload={onReload}
       onReloaded={() => {
         setNotice(RELOADED);
         setRevision((n) => n + 1);
       }}
+      onOutdated={restart}
     />
   );
 }
@@ -124,16 +133,22 @@ export function DefaultsForm({ document, onSave, onSaved, onReload }: DefaultsFo
 interface DefaultsFieldsProps extends DefaultsFormProps {
   notice: string | null;
   onReloaded: () => void;
+  /** A newer version has other defaults, and the form has no edits: it starts again from them. */
+  onOutdated: () => void;
 }
 
-function DefaultsFields({ document, notice, onSave, onSaved, onReload, onReloaded }: DefaultsFieldsProps) {
+function DefaultsFields({ document, version, notice, onSave, onSaved, onReload, onReloaded, onOutdated }: DefaultsFieldsProps) {
   const headingId = useId();
   // After a reload the form starts again, and focus moves to the notice that says so.
   const noticeRef = useRef<HTMLParagraphElement>(null);
   useEffect(() => {
     if (notice) noticeRef.current?.focus();
   }, [notice]);
+  // The defaults and the version the form opened at. A save sends that version, so when someone changed the
+  // defaults since (a label save on this page brought their change), the server refuses it instead of saving
+  // these values over theirs.
   const [saved] = useState(document.defaults);
+  const [openedAt] = useOpenedVersion(version);
   const [base] = useState(() => asEntry(document.defaults));
   const [startValues] = useState(() => toFormValues(base, []));
   const [values, setValues] = useState<JobFormValues>(startValues);
@@ -150,6 +165,11 @@ function DefaultsFields({ document, notice, onSave, onSaved, onReload, onReloade
   const grouped = useMemo(() => defaultsIssues(document, issues), [document, issues]);
   const fieldIssues = (key: string) => (grouped.fields[key] ?? []).map(fieldMessage);
   const dirty = !deepEqual(next, saved ?? {});
+  // Edits stay until they are saved or undone; without edits, the form shows the newest defaults.
+  const outdated = !dirty && !deepEqual(document.defaults ?? {}, saved ?? {});
+  useEffect(() => {
+    if (outdated) onOutdated();
+  }, [outdated, onOutdated]);
   const update = (patch: Partial<JobFormValues>) => {
     setValues((current) => ({ ...current, ...patch }));
     if (problem?.kind === "error") setProblem(null);
@@ -162,7 +182,7 @@ function DefaultsFields({ document, notice, onSave, onSaved, onReload, onReloade
     if (now.length > 0) return;
     setSaving(true);
     setProblem(null);
-    const outcome = await onSave(change);
+    const outcome = await onSave(change, openedAt);
     setSaving(false);
     if (outcome.ok) onSaved(outcome.result);
     else if (outcome.conflict) setProblem({ kind: "conflict" });
