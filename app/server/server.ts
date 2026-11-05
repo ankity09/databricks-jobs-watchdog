@@ -1,10 +1,14 @@
-import { analytics, createApp, genie, jobs, lakebase, server } from "@databricks/appkit";
+import { analytics, createApp, genie, lakebase, server } from "@databricks/appkit";
 import { registerAppConfigRoute } from "./app-config";
-import { genieConversations, registerCopilotRoutes } from "./copilot/routes";
+import { genieConversations, registerCopilotNotSetUp, registerCopilotRoutes } from "./copilot/routes";
 import { schemaErrorLog, schemaGate } from "./db/schema";
 import { registerIdentityRoutes } from "./identity";
 import { registerJobListRoutes } from "./joblist/routes";
+import { scanNowJobs } from "./scan/jobs-plugin";
 import { registerScanRoutes } from "./scan/routes";
+
+/** The copilot's Genie space (the app's genie-space resource). Without it the app starts with the copilot off. */
+const genieSpaceId = process.env.DATABRICKS_GENIE_SPACE_ID?.trim() || undefined;
 
 await createApp({
   plugins: [
@@ -13,9 +17,10 @@ await createApp({
     // 7 days of hourly scans is about 183 bytes per job and scan, over 5 MiB at about 170 jobs, so allow 16 MiB.
     analytics({ streamConfig: { maxEventSize: 16 * 1024 * 1024 } }),
     lakebase({ pool: { max: 10 } }),
-    jobs({}),
-    // The copilot's Genie space (the app's genie-space resource), under the alias "default".
-    genie({ spaces: { default: process.env.DATABRICKS_GENIE_SPACE_ID } }),
+    // AppKit's jobs plugin with Scan now's route only: its routes that read or cancel runs would run as the service principal.
+    scanNowJobs({}),
+    // The copilot's Genie space, under the alias "default". The plugin refuses to load without one.
+    ...(genieSpaceId ? [genie({ spaces: { default: genieSpaceId } })] : []),
   ],
   async onPluginsReady(appkit) {
     const schema = schemaGate(appkit.lakebase.pool);
@@ -29,7 +34,8 @@ await createApp({
       registerIdentityRoutes(app);
       registerAppConfigRoute(app, appkit);
       registerJobListRoutes(app, { pool: appkit.lakebase.pool, ready: () => schema.ready() });
-      registerCopilotRoutes(app, { conversations: genieConversations(appkit) });
+      if (genieSpaceId) registerCopilotRoutes(app, { conversations: genieConversations(appkit, genieSpaceId) });
+      else registerCopilotNotSetUp(app);
       registerScanRoutes(app);
     });
   },

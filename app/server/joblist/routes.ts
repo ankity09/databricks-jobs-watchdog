@@ -75,21 +75,28 @@ export interface JobListRouterOptions {
   ready?: () => Promise<void>;
 }
 
+/**
+ * A body that is not JSON, or one over the limit, as JSON answers. In the
+ * deployed app AppKit's server parses JSON for every route first, with a 1 MB
+ * limit, so its errors never reach the router: mountJobList also adds this at
+ * the app level for /api/job-list.
+ */
+export function jobListBodyErrors(error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction): void {
+  const type = typeof error === "object" && error !== null && "type" in error ? error.type : undefined;
+  if (type === "entity.too.large") {
+    res.status(413).json({ error: "too_large", message: "The request is larger than 1 MB." });
+  } else if (type === "entity.parse.failed") {
+    res.status(400).json({ error: "bad_request", message: "The request body is not valid JSON." });
+  } else {
+    next(error);
+  }
+}
+
 export function createJobListRouter(store: JobListStore, options: JobListRouterOptions = {}): express.Router {
   const router = express.Router();
-  router.use(express.json({ limit: "2mb" }));
-
-  // express.json fails before any handler runs: a body that is not JSON, or one over the limit.
-  router.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction): void => {
-    const type = typeof error === "object" && error !== null && "type" in error ? error.type : undefined;
-    if (type === "entity.too.large") {
-      res.status(413).json({ error: "too_large", message: "The request is larger than 2 MB." });
-    } else if (type === "entity.parse.failed") {
-      res.status(400).json({ error: "bad_request", message: "The request body is not valid JSON." });
-    } else {
-      next(error);
-    }
-  });
+  // AppKit's server already parsed the body (1 MB); this parser serves a router mounted on its own, as in the tests.
+  router.use(express.json({ limit: "1mb" }));
+  router.use(jobListBodyErrors);
 
   const { ready } = options;
   if (ready) {
@@ -199,7 +206,13 @@ export function createJobListRouter(store: JobListStore, options: JobListRouterO
   return router;
 }
 
+/** Mounts the job list router under /api/job-list, with the body errors of an app-level JSON parser. */
+export function mountJobList(app: express.Application, router: express.Router): void {
+  app.use("/api/job-list", router);
+  app.use("/api/job-list", jobListBodyErrors);
+}
+
 /** The job list routes under /api/job-list (see the route contract). With ready, each request waits for the schema. */
 export function registerJobListRoutes(app: express.Application, ctx: { pool: LakebasePool; ready?: () => Promise<void> }): void {
-  app.use("/api/job-list", createJobListRouter(createJobListStore(createPgVersionRepo(ctx.pool)), { ready: ctx.ready }));
+  mountJobList(app, createJobListRouter(createJobListStore(createPgVersionRepo(ctx.pool)), { ready: ctx.ready }));
 }

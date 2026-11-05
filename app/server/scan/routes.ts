@@ -145,6 +145,11 @@ export function registerScanRoutes(app: express.Application, options: ScanRouteO
   const jobsApi = options.jobsApi ?? servicePrincipalJobs;
   const scanJobId = options.jobId ?? jobIdFromEnv;
 
+  // The jobs plugin's routes that read or cancel runs are not registered (jobs-plugin.ts); say so plainly.
+  app.all(["/api/jobs/:jobKey/runs", "/api/jobs/:jobKey/runs/:runId", "/api/jobs/:jobKey/status"], (_req, res) => {
+    res.status(404).json({ error: "not_found", message: "Not found." });
+  });
+
   app.get("/api/scan/latest-run", async (_req, res) => {
     res.set("Cache-Control", "no-store");
     const jobId = scanJobId();
