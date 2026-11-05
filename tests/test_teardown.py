@@ -266,10 +266,15 @@ FAKE_ENV_DATABRICKS = FAKE_DATABRICKS.replace(
     'echo "$*" >> "$FAKE_LOG"', 'echo "$* | host=${DATABRICKS_HOST:-} profile=${DATABRICKS_CONFIG_PROFILE:-}" >> "$FAKE_LOG"')
 
 
-def region_run(sandbox, *args, answers="", region=REGION, **env_extra):
+CLI_CONFIG = "[eu]\nhost = https://prod-eu.example.com\n\n[us]\nhost = https://prod-us.example.com/\n"
+# The CLI reads these; Python's configparser refuses a key twice in a section, and a key before the first section.
+CONFIG_PYTHON_REFUSES = [CLI_CONFIG + "host = https://prod-us.example.com/\n", "host = https://prod-eu.example.com\n" + CLI_CONFIG]
+
+
+def region_run(sandbox, *args, answers="", region=REGION, config=CLI_CONFIG, **env_extra):
     (sandbox / "accelerator.prod-eu.yaml").write_text(region)
     (sandbox / "bin" / "databricks").write_text(FAKE_ENV_DATABRICKS)
-    (sandbox / "databrickscfg").write_text("[eu]\nhost = https://prod-eu.example.com\n\n[us]\nhost = https://prod-us.example.com/\n")
+    (sandbox / "databrickscfg").write_text(config)
     log = sandbox / "calls.log"
     log.unlink(missing_ok=True)
     env = {key: value for key, value in os.environ.items() if not key.startswith("DATABRICKS_")}
@@ -331,6 +336,34 @@ def test_the_region_file_s_own_profile_is_used_and_checked(sandbox):
 def test_an_unknown_profile_refuses(sandbox):
     result, calls = region_run(sandbox, "-y", "-p", "nope")
     assert result.returncode == 2 and "nope" in result.stderr and calls == []
+
+
+@pytest.mark.parametrize("config", CONFIG_PYTHON_REFUSES)
+def test_a_region_file_without_a_profile_never_reads_the_cli_config(sandbox, config):
+    result, calls = region_run(sandbox, "-y", config=config)
+    assert result.returncode == 0, result.stderr
+    assert calls and all("host=https://prod-eu.example.com profile=" in call for call in calls)
+
+
+@pytest.mark.parametrize("config", CONFIG_PYTHON_REFUSES)
+def test_a_profile_in_a_cli_config_python_cannot_read_refuses_with_a_message(sandbox, config):
+    result, calls = region_run(sandbox, "-y", "-p", "eu", config=config)
+    assert result.returncode == 2 and calls == []
+    assert "Traceback" not in result.stderr
+    assert str(sandbox / "databrickscfg") in result.stderr and "profile eu" in result.stderr
+    assert "Nothing was changed" in result.stderr
+
+
+@pytest.mark.parametrize("config", CONFIG_PYTHON_REFUSES)
+def test_a_cli_config_python_cannot_read_does_not_stop_a_teardown_without_a_region_file(sandbox, config):
+    (sandbox / "databrickscfg").write_text(config)
+    log = sandbox / "calls.log"
+    env = {key: value for key, value in os.environ.items() if not key.startswith("DATABRICKS_")}
+    env.update(PATH=f"{sandbox / 'bin'}:{os.environ['PATH']}", FAKE_LOG=str(log), DATABRICKS_CONFIG_FILE=str(sandbox / "databrickscfg"))
+    result = subprocess.run(["bash", str(sandbox / "teardown.sh"), "-y"], capture_output=True, text=True, env=env)
+    assert result.returncode == 0, result.stderr
+    assert "Traceback" not in result.stderr
+    assert any(call.startswith("bundle destroy") for call in log.read_text().splitlines())
 
 
 # the bind hint, whatever happens after the unbind

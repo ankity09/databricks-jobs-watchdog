@@ -17,6 +17,7 @@ scripts/deploy_regions.py runs them.
 
 import configparser
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -214,11 +215,27 @@ def normal_host(host):
     return f"https://{host}" if host and "://" not in host else host
 
 
+def cli_config_path(env):
+    """The CLI's config file: DATABRICKS_CONFIG_FILE, else ~/.databrickscfg."""
+    return Path(env.get("DATABRICKS_CONFIG_FILE") or Path.home() / ".databrickscfg")
+
+
 def profile_hosts(env):
-    """(profile name -> host, config path) from the CLI's config file (DATABRICKS_CONFIG_FILE, else ~/.databrickscfg)."""
-    path = Path(env.get("DATABRICKS_CONFIG_FILE") or Path.home() / ".databrickscfg")
+    """(profile name -> host, config path) from the CLI's config file.
+
+    Raises ConfigError when Python's configparser cannot read the file, which the
+    CLI itself may still read (a key twice in a section, a key before the first
+    section).
+    """
+    path = cli_config_path(env)
     parser = configparser.ConfigParser(default_section="__no_default__", interpolation=None)
-    parser.read(path)
+    try:
+        parser.read(path)
+    except configparser.Error as err:
+        # configparser starts some messages with "While reading from <path> [line  6]: " and adds lines of detail
+        reason = re.sub(r"^While reading from .*?\[line\s*\d+\]: ", "", str(err).splitlines()[0]).strip().rstrip(".")
+        line = getattr(err, "lineno", None)
+        raise ConfigError(f"Python cannot read {path}{f' at line {line}' if line else ''} ({reason})") from err
     return {name: normal_host(parser[name].get("host")) for name in parser.sections()}, path
 
 
@@ -227,6 +244,7 @@ class TeardownTarget:
     host: str  # the workspace the teardown goes to, or "" when unknown
     profile: str  # the profile every CLI call gets with --profile, or "" to use DATABRICKS_HOST
     checked: bool  # True when an accelerator file named the host and the shell was checked against it
+    note: str = ""  # why the host is unknown, when the CLI's config file could not be read
 
 
 def teardown_target(path, profile, env):
@@ -235,20 +253,31 @@ def teardown_target(path, profile, env):
     With an accelerator file that has deploy.workspace_host (a region file), the
     teardown goes to that host and nowhere else: a DATABRICKS_HOST, a profile
     (-p, the file's deploy.profile, or DATABRICKS_CONFIG_PROFILE) that points at
-    another workspace raises ConfigError before anything runs. Without one, it
-    only reports the host the CLI will use, as far as it can tell.
+    another workspace raises ConfigError before anything runs. Only a profile
+    needs the CLI's config file, and when Python cannot read it, that is a
+    ConfigError too. Without a region file nothing is checked: it only reports
+    the host the CLI will use, as far as it can tell, so a config file Python
+    cannot read leaves the host unknown, with a note.
     """
     deploy = (load_accelerator(path).get("deploy") or {}) if path else {}
-    hosts, config = profile_hosts(env)
     host = normal_host(deploy.get("workspace_host"))
     chosen = profile or str(deploy.get("profile") or "").strip() or str(env.get("DATABRICKS_CONFIG_PROFILE") or "").strip()
-    if not host:
-        shown = hosts.get(chosen or "DEFAULT", "") if chosen or not env.get("DATABRICKS_HOST") else ""
-        return TeardownTarget(normal_host(env.get("DATABRICKS_HOST")) or shown, profile, False)
     shell_host = normal_host(env.get("DATABRICKS_HOST"))
+    if not host:
+        if shell_host:
+            return TeardownTarget(shell_host, profile, False)
+        try:
+            hosts, _ = profile_hosts(env)
+        except ConfigError as err:
+            return TeardownTarget("", profile, False, f"{err}, so the prompts cannot name the workspace")
+        return TeardownTarget(hosts.get(chosen or "DEFAULT", ""), profile, False)
     if shell_host and shell_host != host:
         raise ConfigError(f"DATABRICKS_HOST points at {shell_host}, but {path} is the Watchdog in {host}")
     if chosen:
+        try:
+            hosts, config = profile_hosts(env)
+        except ConfigError as err:
+            raise ConfigError(f"{err}, so the profile {chosen} cannot be checked against {host}") from err
         if chosen not in hosts:
             raise ConfigError(f"the profile {chosen} is not in {config}")
         if hosts[chosen] != host:

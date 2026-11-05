@@ -6,8 +6,9 @@ Usage:
 With a region file (an accelerator file with deploy.workspace_host), every call
 goes to that workspace: it prints the profile to use, or exports
 DATABRICKS_HOST and unsets DATABRICKS_CONFIG_PROFILE. If DATABRICKS_HOST or a
-profile points at another workspace, it says so and exits 2, before teardown.sh
-calls anything. It always prints teardown_host, for the prompts.
+profile points at another workspace, or a profile must be checked in a CLI
+config file Python cannot read, it says so and exits 2, before teardown.sh calls
+anything. It always prints teardown_host, for the prompts.
 """
 
 import argparse
@@ -33,6 +34,8 @@ def main(argv=None):
     except ConfigError as err:
         print(f"teardown.sh: {err}. Nothing was changed.", file=sys.stderr)
         return 2
+    if target.note:
+        print(f"teardown.sh: {target.note}.", file=sys.stderr)
     lines = [f"teardown_host={shlex.quote(target.host)}", f"teardown_profile={shlex.quote(target.profile)}"]
     if target.checked and not target.profile:
         lines += [f"export DATABRICKS_HOST={shlex.quote(target.host)}", "unset DATABRICKS_CONFIG_PROFILE"]

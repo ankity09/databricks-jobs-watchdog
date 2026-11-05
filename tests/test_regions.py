@@ -3,7 +3,15 @@ import json
 import pytest
 
 from jobs_watchdog.config import ConfigError
-from jobs_watchdog.regions import RegionDeploy, deploy_steps, load_regions, normal_host, region_env, teardown_target
+from jobs_watchdog.regions import (
+    RegionDeploy,
+    TeardownTarget,
+    deploy_steps,
+    load_regions,
+    normal_host,
+    region_env,
+    teardown_target,
+)
 from jobs_watchdog.sqlfiles import load_sql, repo_root
 from jobs_watchdog.upgrade import VIEW_TEMPLATES, render_view, view_names
 
@@ -300,6 +308,21 @@ def test_without_a_region_host_nothing_is_checked_and_the_shell_host_is_shown(tm
     env = {"DATABRICKS_CONFIG_FILE": str(tmp_path / "none"), "DATABRICKS_HOST": "https://a.example.com/"}
     target = teardown_target(None, "", env)
     assert (target.host, target.profile, target.checked) == ("https://a.example.com", "", False)
+
+
+def test_a_cli_config_python_cannot_read_is_read_only_when_a_region_file_and_a_profile_need_it(tmp_path):
+    config = tmp_path / "databrickscfg"
+    config.write_text("host = https://prod-eu.example.com\n[eu]\nhost = https://prod-eu.example.com\n")
+    env = {"DATABRICKS_CONFIG_FILE": str(config)}
+    region_file = write(tmp_path, "accelerator.prod-eu.yaml", REGION_FILE.replace("example-eu.example.com", "prod-eu.example.com"))
+    # a region file with no profile checks only the host, and never reads the file
+    assert teardown_target(region_file, "", env) == TeardownTarget("https://prod-eu.example.com", "", True)
+    # without a region file nothing is checked, so the file only names the workspace, when it can
+    plain = teardown_target(None, "eu", env)
+    assert (plain.host, plain.checked) == ("", False) and str(config) in plain.note
+    # a profile to check against the region's host needs the file
+    with pytest.raises(ConfigError, match=r"cannot read .*databrickscfg.* so the profile eu cannot be checked"):
+        teardown_target(region_file, "eu", env)
 
 
 def test_the_view_check_ignores_case_as_information_schema_stores_names_in_lower_case():
