@@ -282,7 +282,7 @@ Open each notebook in `notebooks/`, attach it to serverless compute, run its fir
 | `lakebase_branch` | `production` | the project's branch |
 | `lakebase_database` | `watchdog` | the Postgres database in that branch |
 
-The three Lakebase boxes matter only when `config_source` is `lakebase`. In that mode the notebook connects as the identity that runs it, so that identity needs access to the app's Lakebase schema (the identity that deployed the bundle has it), and it installs the `psycopg` package from PyPI or your package mirror if the compute lacks it. A list that is empty, breaks a rule, or cannot be read fails the load. The failure is a `FAILED` row in `config_loads`, the config tables keep their last good rows, and the scans go on with those. The scheduled `watchdog_scan` takes `config_source` and the project from `accelerator.local.yaml` (`scan.config_source` and `app.lakebase_project_id`), and the branch and database from the bundle's defaults.
+The three Lakebase boxes matter only when `config_source` is `lakebase`. In that mode the notebook connects as the identity that runs it, so that identity needs access to the app's Lakebase schema (the identity that deployed the bundle has it), and it installs `pg8000`, a pure-Python Postgres driver, from PyPI or your package mirror if the compute lacks it. Its TLS checks the Lakebase server's certificate and host name against the compute's CA certificates. A list that is empty, breaks a rule, or cannot be read fails the load. The failure is a `FAILED` row in `config_loads`, the config tables keep their last good rows, and the scans go on with those. The scheduled `watchdog_scan` takes `config_source` and the project from `accelerator.local.yaml` (`scan.config_source` and `app.lakebase_project_id`), and the branch and database from the bundle's defaults.
 
 Two read-only notebooks in `notebooks/explore` show the raw data behind a finding. They are not part of the main path, and no job runs them; run them by hand when you want to look:
 
@@ -493,7 +493,7 @@ The Jobs API scan calls each workspace's public API from serverless compute in t
 ./teardown.sh -t dev --drop-schema --profile <profile>   # also the schema, its tables and the view
 ```
 
-A plain teardown keeps the Lakebase project with the app's job list, and prints how to deploy again with it ([Deploy again after a teardown](multi-region.md#deploy-again-after-a-teardown)); `--drop-lakebase` deletes it. `--drop-schema` asks you to type the schema name first. Without it, the schema and its history stay.
+A plain teardown keeps the Lakebase project with the app's job list, and prints how to deploy again with it ([Deploy again after a teardown](multi-region.md#deploy-again-after-a-teardown)); `--drop-lakebase` deletes it, and Lakebase keeps the deleted project for 7 days (`databricks postgres undelete-project` brings it back; `delete-project --purge` deletes it for good). `--drop-schema` asks you to type the schema name first. Without it, the schema and its history stay.
 
 It drops the six Watchdog tables and the `findings_latest` view. If the schema holds any other table or view, the script stops before changing anything. If the script refuses, check that the schema holds only Watchdog objects, then drop it by hand in the SQL editor. This deletes the findings history:
 

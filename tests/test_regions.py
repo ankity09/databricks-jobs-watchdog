@@ -332,14 +332,15 @@ def test_the_view_check_ignores_case_as_information_schema_stores_names_in_lower
     assert "lower(:schema)" in body["statement"] and "lower(:view)" in body["statement"]
 
 
-def test_the_redeploy_handover_is_not_stated_as_fact_and_the_docs_say_how_to_check_it():
-    # A full teardown and redeploy has not been run; the handover rests on how Databricks describes deleting an app.
-    guide = (repo_root() / "docs" / "multi-region.md").read_text()
-    assert "A full teardown and redeploy has not been run yet" in guide and "checked, on Lakebase branches" in guide
+def test_the_docs_say_what_the_teardown_and_redeploy_test_showed_and_how_to_check_one():
+    # A full teardown and redeploy ran on 2026-11-05. The teardown gave the old app's objects to the identity that ran
+    # it, and the new app answered no_access until the access job ran, then worked with no restart.
+    guide = " ".join((repo_root() / "docs" / "multi-region.md").read_text().split())
+    assert "2026-11-05" in guide and "503 `no_access`" in guide and "no restart" in guide
+    assert "gives everything it owned to the identity that ran the teardown" in guide
     steps = guide[guide.index("### Check the handover after a redeploy"):]
     assert "has_schema_privilege" in steps and "pg_namespace" in steps and "Job list" in steps
-    for name in ("docs/multi-region.md", "notebooks/11_grant_app_access.py", "jobs_watchdog/app_access.py",
-                 "app/server/db/schema.ts", "resources/watchdog_app_access.job.yml"):
+    for name in ("DEPLOY.md", "CHANGELOG.md", "docs/multi-region.md", "docs/app.md", "notebooks/11_grant_app_access.py",
+                 "jobs_watchdog/app_access.py", "app/server/db/schema.ts", "resources/watchdog_app_access.job.yml"):
         text = " ".join((repo_root() / name).read_text().split())
-        assert "Lakebase hands" not in text and "Lakebase then hands" not in text, name
-        assert "belongs to the identity that ran the teardown" not in text, name
+        assert "has not been run" not in text and "as Databricks describes" not in text, name

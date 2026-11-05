@@ -69,7 +69,7 @@ The app has two identities. The person signed in is the user. The app itself run
 |---|---|---|
 | The person signed in | Every Monitoring query, the job picker and pattern preview, the config banner, the copilot's questions, and the list of that person's own copilot chats | `CAN USE` on the SQL warehouse; `SELECT` on the Watchdog schema; `SELECT` on `system.lakeflow.jobs` and `system.access.workspaces_latest`; `CAN RUN` on the copilot's Genie agent. [Who can use the app](multi-region.md#who-can-use-the-app) lists the grants. |
 | The app's service principal | Reads and writes the job list in Lakebase; reads the scan job's settings and its runs; starts `watchdog_scan` when someone clicks Scan now | The grants the bundle gives through the app's resources: Lakebase `CAN_CONNECT_AND_CREATE`, the scan job `CAN_MANAGE_RUN`, the warehouse `CAN_USE`, the Genie agent `CAN_RUN`. Nothing to do by hand. |
-| The scan job's identity (`watchdog_scan`) | When `scan.config_source` is `lakebase`, notebook 02 reads the newest saved version of the job list, with a short-lived database credential minted for it | Access to the app's Lakebase schema. The identity that deployed the bundle created the Lakebase project, so it has this. The job runs as that identity, in every target. |
+| The scan job's identity (`watchdog_scan`) | When `scan.config_source` is `lakebase`, notebook 02 reads the newest saved version of the job list, with a short-lived database credential minted for it, over TLS that checks the server's certificate | Access to the app's Lakebase schema. The identity that deployed the bundle created the Lakebase project, so it has this. The job runs as that identity, in every target. |
 
 Things that follow from this table:
 
@@ -154,7 +154,6 @@ These are not built. Each is a choice for this release, not a hidden fault.
 - **User authorization is required.** There is no mode that runs the queries as the app's service principal.
 - **One install per workspace.** The app name and the Lakebase project ID must be unique in a workspace, and the dev and demo targets do not add a prefix to them.
 - **A change with no effect still writes a version.** Saving a form without changing anything from the API adds a version. The forms stop the common case, the server does not.
-- **The Lakebase connection does not verify the server certificate.** The scan's connection uses `sslmode=require`, which encrypts the traffic but does not check the certificate.
 - **A failed schema setup leaves the app up.** If the app cannot create its `watchdog_app` schema at start, Monitoring and the copilot still work, but the job list calls fail until a later request succeeds. The app log names the cause.
 - **Restore has no button.** The server has the call; the app does not.
 - **No per-person chat storage in the app.** Conversations live in Genie. If you delete the Genie agent (a plain teardown does), everyone's conversations go with it.
@@ -162,5 +161,4 @@ These are not built. Each is a choice for this release, not a hidden fault.
 - **Scan now can queue a second run.** Two clicks whose reads both land before either run starts can queue a second run. The scan job allows one run at a time, so they never run together.
 - **The page is sized for about 200 monitored jobs.** A query result sent to the page is capped at 16 MiB, which holds the history strip for roughly 1,000 to 2,000 jobs, going by the size of one job's rows. A Watchdog with more would need the cap raised in `app/server/server.ts`, and the page has not been tested at that size.
 - **The copilot has one agent.** You cannot pick another model, and it has no actions. Alerts, approvals, a roll-up across regions and a scan that reads Lakebase as a different identity are on the [roadmap](roadmap.md#backlog).
-- **A teardown and a redeploy has not been run end to end.** The steps are in [Deploy again after a teardown](multi-region.md#deploy-again-after-a-teardown), with what was checked and what was not.
 - **The app needs the internet at deploy time.** The platform runs `npm install` and builds the app when you deploy. A workspace that cannot reach an npm registry needs a package mirror.
