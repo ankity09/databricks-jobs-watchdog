@@ -6,16 +6,18 @@ config_source is lakebase. The run connects as the identity it runs as, with a
 short-lived database credential, so it needs no stored password.
 
 The caller passes in the Databricks API client (WorkspaceClient().api_client)
-and the connect function (psycopg.connect, from psycopg_connect), so this
+and the connect function (pg8000.dbapi.connect, from pg8000_connect), so this
 module needs neither package and the tests run without a workspace.
 """
 
 import importlib
 import json
 import re
+import ssl
 import subprocess
 import sys
 import time
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -23,35 +25,44 @@ APP_SCHEMA = "watchdog_app"
 _ID = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 _DATABASE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 _QUERY = f"SELECT version, document, saved_by, saved_at FROM {APP_SCHEMA}.job_list_versions ORDER BY version DESC LIMIT 1"
+_UNDEFINED_TABLE = "42P01"  # the SQLSTATE of a missing table
+_TIMEOUT_SECONDS = 30  # pg8000's socket timeout, for connecting and for each statement
 
 
 class LakebaseSourceError(Exception):
     """Raised when the job list cannot be read from Lakebase."""
 
 
-PSYCOPG_REQUIREMENT = "psycopg[binary]>=3.2,<4"
+# pg8000 is a pure-Python Postgres driver: its TLS is Python's own ssl module, on the system's OpenSSL. A driver
+# wheel that bundles its own OpenSSL can abort this Python process as it loads, on hosts where that OpenSSL fails
+# its FIPS self-test, and then notebook 02 cannot record the failed load. pip picks 1.31.5 on Python 3.10 and
+# 1.31.6 on 3.11 and later, and both are checked. pg8000 has changed its API in minor releases, so 1.32 is left
+# out until it is checked.
+PG8000_REQUIREMENT = "pg8000>=1.31,<1.32"
 
-# What each notebook needs psycopg for, and what to do when it cannot be installed.
+# What each notebook needs pg8000 for, and what to do when it cannot be installed.
 READ_JOB_LIST = ("reading the job list from Lakebase", "until then the scans use the last job list that loaded")
 GRANT_APP_ACCESS = ("giving the app access to its job list",
                     "then run the watchdog_app_access job again, as a deploy runs it only when the app gets a new "
                     "service principal")
 
 
-def psycopg_connect(purpose=READ_JOB_LIST, run=subprocess.run, import_module=importlib.import_module):
-    """psycopg.connect, installing psycopg into this Python first when it is missing.
+def pg8000_connect(purpose=READ_JOB_LIST, run=subprocess.run, import_module=importlib.import_module):
+    """pg8000.dbapi.connect, installing pg8000 into this Python first when it is missing.
 
     Only the Lakebase source (notebook 02) and the app access grant (notebook 11)
-    need psycopg, so a YAML load never reaches PyPI. A failed install raises
-    LakebaseSourceError on one line that says what purpose, one of the pairs above,
-    needs it: notebook 02 records it as a FAILED config_loads row, and the config
-    tables keep their rows.
+    need pg8000, so a YAML load never reaches PyPI. Being pure Python, it is
+    imported right after the install, in the same process. A failed install
+    raises LakebaseSourceError on one line that says what purpose, one of the
+    pairs above, needs it: notebook 02 records it as a FAILED config_loads row,
+    and the config tables keep their rows.
     """
     try:
-        return import_module("psycopg").connect
+        return import_module("pg8000.dbapi").connect
     except ImportError:
         pass
-    argv = [sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", PSYCOPG_REQUIREMENT]
+    needed_for, meanwhile = purpose
+    argv = [sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", PG8000_REQUIREMENT]
     try:
         done = run(argv, capture_output=True, text=True)
         lines = [line.strip() for line in (done.stderr or done.stdout or "").splitlines() if line.strip()]
@@ -62,11 +73,25 @@ def psycopg_connect(purpose=READ_JOB_LIST, run=subprocess.run, import_module=imp
         problem = str(err)
     if problem is not None:
         detail = " ".join(problem.removeprefix("ERROR:").split())[:160]
-        needed_for, meanwhile = purpose
-        raise LakebaseSourceError(f"could not install {PSYCOPG_REQUIREMENT}, which {needed_for} needs ({detail}). "
+        raise LakebaseSourceError(f"could not install {PG8000_REQUIREMENT}, which {needed_for} needs ({detail}). "
                                   f"Let serverless compute reach PyPI or your package mirror; {meanwhile}")
     importlib.invalidate_caches()
-    return import_module("psycopg").connect
+    try:
+        return import_module("pg8000.dbapi").connect
+    except ImportError as err:
+        detail = " ".join(str(err).split())[:160]
+        raise LakebaseSourceError(f"installed {PG8000_REQUIREMENT}, which {needed_for} needs, but could not import "
+                                  f"it ({detail}); {meanwhile}") from err
+
+
+def tls_context():
+    """TLS that checks the server's certificate and host name against this Python's CA certificates.
+
+    A Lakebase endpoint presents a certificate for its host name from a public
+    CA, which the system's CA bundle trusts. pg8000 reads ssl_context None or
+    True as TLS without any check, so every connection gets this context.
+    """
+    return ssl.create_default_context()
 
 
 @dataclass(frozen=True)
@@ -130,43 +155,75 @@ def current_username(api):
     return name
 
 
-def open_branch(api, target, connect):
-    """A connection to the target's database as the identity the API client runs as (a context manager, as psycopg's is)."""
+def _server_fields(err):
+    """The fields of an error the Postgres server sent: pg8000 raises it with one dict, C the SQLSTATE, M the message."""
+    return err.args[0] if err.args and isinstance(err.args[0], dict) else {}
+
+
+def error_line(err):
+    """The error's type and text on one line: for a server error, Postgres's message and SQLSTATE.
+
+    pg8000 keeps the socket's own error of a failed connection in __cause__, so that is named too.
+    """
+    fields = _server_fields(err)
+    if fields.get("M"):
+        text = f"{fields['M']} (SQLSTATE {fields['C']})" if fields.get("C") else fields["M"]
+    else:
+        text = str(err)
+    cause = err.__cause__
+    if cause is not None:
+        text += f" ({type(cause).__name__}: {cause})" if str(cause) else f" ({type(cause).__name__})"
+    return " ".join(f"{type(err).__name__}: {text}".split())[:300]
+
+
+@contextmanager
+def open_branch(api, target, connect, attempts=2, wait_seconds=3.0):
+    """A pg8000 connection to the target's database as the identity the API client runs as, for a with block.
+
+    TLS checks the server's certificate and host name (tls_context). A Lakebase
+    compute that scaled to zero wakes up in about a second and can refuse the
+    first connection, so a failed connection gets one more try with a fresh
+    credential; a second failure raises LakebaseSourceError with the reason.
+    The with block closes the connection and does not commit. A connection
+    that is gone already does not hide the block's own error.
+    """
     endpoint_name, host = read_write_endpoint(api, target)
-    password = database_credential(api, endpoint_name)
     user = current_username(api)
-    return connect(host=host, port=5432, dbname=target.database, user=user, password=password,
-                   sslmode="require", connect_timeout=30)
-
-
-def _fetch_latest(api, target, connect):
-    with open_branch(api, target, connect) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(_QUERY)
-            return cursor.fetchone()
+    for attempt in range(1, attempts + 1):
+        password = database_credential(api, endpoint_name)
+        try:
+            connection = connect(user=user, host=host, port=5432, database=target.database, password=password,
+                                 ssl_context=tls_context(), timeout=_TIMEOUT_SECONDS)
+            break
+        except Exception as err:
+            if attempt == attempts:
+                raise LakebaseSourceError(f"could not connect to {target.database_path} as {user}: "
+                                          f"{error_line(err)}") from err
+            time.sleep(wait_seconds)
+    try:
+        yield connection
+    finally:
+        try:
+            connection.close()
+        except Exception:
+            pass  # gone already: the block's own error, if any, says why
 
 
 def read_latest_job_list(api, target, connect, attempts=2, wait_seconds=3.0):
-    """The newest saved version of the job list.
-
-    A Lakebase compute that is waking up refuses the first connection, so a
-    connection error gets one more try with a fresh credential.
-    """
-    for attempt in range(1, attempts + 1):
-        try:
-            row = _fetch_latest(api, target, connect)
-            break
-        except LakebaseSourceError:
-            raise
-        except Exception as err:
-            name = type(err).__name__
-            if name == "UndefinedTable":
-                raise LakebaseSourceError(f"the Watchdog app has not created its tables in {target.database_path} "
-                                          "yet: deploy and open the app first") from err
-            if name != "OperationalError" or attempt == attempts:
-                raise LakebaseSourceError(f"could not read the job list from {target.database_path}: "
-                                          f"{name}: {str(err).strip()[:300]}") from err
-            time.sleep(wait_seconds)
+    """The newest saved version of the job list. A failed connection gets one more try (see open_branch)."""
+    try:
+        with open_branch(api, target, connect, attempts, wait_seconds) as connection:
+            with closing(connection.cursor()) as cursor:
+                cursor.execute(_QUERY)
+                row = cursor.fetchone()
+    except LakebaseSourceError:
+        raise
+    except Exception as err:
+        if _server_fields(err).get("C") == _UNDEFINED_TABLE:
+            raise LakebaseSourceError(f"the Watchdog app has not created its tables in {target.database_path} "
+                                      "yet: deploy and open the app first") from err
+        raise LakebaseSourceError(f"could not read the job list from {target.database_path}: "
+                                  f"{error_line(err)}") from err
     if row is None:
         raise LakebaseSourceError(f"the job list in {target.database_path} is empty: import your job list in the "
                                   "Watchdog app first")

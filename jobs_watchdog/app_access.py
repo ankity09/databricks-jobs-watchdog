@@ -25,12 +25,15 @@ owner. So when appkit belongs to someone else, grant_app_access drops it, as its
 owner after the teardown; the app creates it again at its next start, and caches
 in memory until then. It holds nothing but cached query results.
 
-The caller passes in an open database connection (psycopg's), so the tests
-run without one.
+The caller passes in an open database connection (pg8000's DB-API one, from
+lakebase_source.open_branch), so the tests run without one.
 """
 
 import re
+from contextlib import closing
 from dataclasses import dataclass
+
+from jobs_watchdog.lakebase_source import error_line
 
 APP_SCHEMA = "watchdog_app"
 APPKIT_CACHE_SCHEMA = "appkit"  # AppKit's persistent cache (lakebaseStorageDefaults in @databricks/appkit)
@@ -65,22 +68,28 @@ def grant_app_access(connection, role, schema=APP_SCHEMA, cache_schema=APPKIT_CA
     """Give the role (the app's service principal) the rights the app needs on its schema. Returns what it did.
 
     It also drops AppKit's cache schema when another role owns it, so that the app creates it again. It commits
-    its work, or rolls it back on an error, so it never leaves a transaction open.
+    its work, or rolls it back on an error, so it never leaves a transaction open. An error from the database
+    raises AppAccessError on one line, with Postgres's own message.
     """
     try:
         result = _grant(connection, role, schema)
         cache = _reset_cache(connection, role, cache_schema)
-    except BaseException:
-        connection.rollback()
+        connection.commit()
+    except BaseException as err:
+        try:
+            connection.rollback()
+        except Exception:
+            pass  # the connection is gone, and its transaction with it
+        if isinstance(err, Exception) and not isinstance(err, AppAccessError):
+            raise AppAccessError(f"could not give {role} access to {schema}: {error_line(err)}") from err
         raise
-    connection.commit()
     if not cache.message:
         return result
     return AccessResult(result.changed or cache.changed, f"{result.message.rstrip('.')}. {cache.message}")
 
 
 def _reset_cache(connection, role, schema):
-    with connection.cursor() as cursor:
+    with closing(connection.cursor()) as cursor:  # pg8000's cursors have no with block
         cursor.execute("SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = %s", (schema,))
         row = cursor.fetchone()
         if row is None or row[0] == role:
@@ -101,7 +110,7 @@ def _reset_cache(connection, role, schema):
 
 
 def _grant(connection, role, schema):
-    with connection.cursor() as cursor:
+    with closing(connection.cursor()) as cursor:  # pg8000's cursors have no with block
         cursor.execute("SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = %s", (schema,))
         row = cursor.fetchone()
         if row is None:
