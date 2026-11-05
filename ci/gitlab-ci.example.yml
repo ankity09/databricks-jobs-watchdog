@@ -9,6 +9,8 @@
 # (for example prod-eu), and scope these variables to it:
 #   DATABRICKS_CLIENT_ID      application ID of the service principal that deploys
 #   DATABRICKS_CLIENT_SECRET  its OAuth secret (mask it, and protect it)
+# Use this service principal for every deploy of the region, in CI or by hand:
+# another identity would keep its own bundle state and start a conflicting copy.
 # The service principal signs in with OAuth M2M. The workspace host is not a CI
 # variable: it comes from the region file (deploy.workspace_host).
 

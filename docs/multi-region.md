@@ -42,10 +42,16 @@ deploy:
 ```
 
 - `deploy.workspace_host` is the workspace where this region's Watchdog runs. A bundle target cannot take its host from a variable, so the script passes it to the CLI as `DATABRICKS_HOST`.
-- `deploy.profile` is optional. With a profile, the script passes `--profile` to every command and does not set `DATABRICKS_HOST`. Use it for runs by hand. CI sets no profile and signs in with `DATABRICKS_CLIENT_ID` and `DATABRICKS_CLIENT_SECRET`.
+- `deploy.profile` is optional. With a profile, the script passes `--profile` to every command and does not set `DATABRICKS_HOST`. Without one, the script sets `DATABRICKS_HOST` from `deploy.workspace_host` and the CLI signs in with OAuth M2M (`DATABRICKS_CLIENT_ID` and `DATABRICKS_CLIENT_SECRET`), as CI does. Whichever you choose, the profile must be for the same identity that CI deploys as (see the rule below).
 - A file with no `target.warehouse_id` or no valid `deploy.workspace_host` fails before anything runs. The message names the file and the key.
 
 [config/regions](../config/regions) holds two examples with placeholders. Real region files hold workspace details, so keep them in your own repo or a private one. A file named `accelerator.<region>.local.yaml` is git-ignored here.
+
+## One deploying identity per region
+
+**Deploy each region as the same identity every time.** The production target keeps the bundle's deployment state in the deploying identity's own folder. If a person deploys a region by hand and the CI service principal deploys it later (or the other way round), each identity gets its own state. The second deploy then starts a conflicting copy of the jobs and the app instead of updating the first.
+
+So pick one identity per region, normally the CI service principal. For a run by hand, use a CLI profile that signs in as that service principal, not as yourself. Use `--validate-only` freely as anyone: it changes nothing.
 
 ## Deploy by script
 
@@ -87,7 +93,7 @@ To do it by hand instead, run the `sql/setup/*.sql` files in order in the SQL ed
 The CLI checks the `production` target more strictly than `dev`. Here is what it asked for:
 
 - **A root path that is not shared.** The target deploys to `/Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}`, the folder of the deploying identity. A path under `/Workspace/Shared` makes `validate --strict` warn that every user can write to it. The only fix it offers is `CAN_MANAGE` for the group `users`, and that would also reach the jobs, the app and the copilot. So the target uses the deploying identity's folder and sets no permissions.
-- **No `run_as`.** The jobs run as the deploying identity. Use the same identity for every deploy to a region: the bundle's deployment state lives under that identity's folder, and another identity would start a second, conflicting copy.
+- **No `run_as`.** The jobs run as the deploying identity. This is why [one identity per region](#one-deploying-identity-per-region) matters.
 
 If your policy needs a service principal for `run_as`, or a shared path with its own permissions, add them to the `production` target in `databricks.yml`.
 
@@ -99,6 +105,8 @@ If your policy needs a service principal for `run_as`, or a shared path with its
 - a manual `deploy` stage on the default branch, one job per region;
 - a GitLab environment per region, so the service principal's `DATABRICKS_CLIENT_ID` and `DATABRICKS_CLIENT_SECRET` are scoped to the region;
 - a pinned Databricks CLI.
+
+The CI service principal is the one deploying identity for each region. Do not also deploy a region by hand as a person, or the state splits (see [one identity per region](#one-deploying-identity-per-region)).
 
 Each job runs `python3 scripts/deploy_regions.py config/regions/accelerator.$REGION.yaml`. Add a region by adding its file and its name to the two `matrix` lists.
 

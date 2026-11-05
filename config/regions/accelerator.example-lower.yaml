@@ -27,4 +27,5 @@ app:
 
 deploy:
   workspace_host: https://your-workspace.example.com # where this region's Watchdog runs
-  profile: ""                        # optional CLI profile for runs by hand; CI uses DATABRICKS_HOST and OAuth M2M
+  profile: ""                        # optional CLI profile. Empty: DATABRICKS_HOST comes from workspace_host and the CLI
+                                     # signs in with OAuth M2M. Always deploy this region as the same identity (see docs/multi-region.md)

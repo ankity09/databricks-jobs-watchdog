@@ -4,7 +4,11 @@ A region file is an accelerator file plus a deploy section:
 
     deploy:
       workspace_host: https://<workspace>.cloud.databricks.com
-      profile: ""     # optional CLI profile; CI uses DATABRICKS_HOST and OAuth M2M instead
+      profile: ""     # optional CLI profile. Empty: the script sets DATABRICKS_HOST from
+                      # workspace_host and the CLI signs in with OAuth M2M
+
+Deploy a region as the same identity every time: the bundle state lives under that
+identity's folder (docs/multi-region.md).
 
 load_regions checks the files, region_env builds the environment one region's
 CLI commands run in, and deploy_steps lists those commands. The script
