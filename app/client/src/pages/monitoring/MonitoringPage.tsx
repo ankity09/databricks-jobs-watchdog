@@ -11,7 +11,7 @@ import { HistoryStrip } from "./HistoryStrip";
 import { JobDetailSheet } from "./JobDetailSheet";
 import { JobFilters } from "./JobFilters";
 import { JobStatusTable } from "./JobStatusTable";
-import { countByStatus, filterJobs, filterOptions, jobKey, type JobFilterValue, type JobRef, newestScan, NO_FILTERS, sortJobs } from "./jobs";
+import { countByStatus, filterJobs, filterOptions, jobKey, type JobFilterValue, type JobRef, newestScan, NO_FILTERS, sameJob, sortJobs } from "./jobs";
 import { ProblemAlert } from "./ProblemAlert";
 import { useJobStatus } from "./queries";
 import { SummaryCounts } from "./SummaryCounts";
@@ -27,7 +27,7 @@ function PageSkeleton() {
         ))}
       </div>
       <div className="flex gap-2">
-        {["environment", "owner", "severity", "workspace"].map((id) => (
+        {["environment", "owner", "severity", "workspace", "check", "last-run"].map((id) => (
           <Skeleton key={id} className="h-8 w-36 motion-reduce:animate-none" />
         ))}
       </div>
@@ -63,11 +63,13 @@ export function MonitoringPage() {
 
   const sorted = useMemo(() => (status.rows === null ? [] : sortJobs(status.rows)), [status.rows]);
   // The counts follow every filter except the status, so each count says how many clicking it would show.
-  const scoped = useMemo(() => filterJobs(sorted, { ...filters, status: null }), [sorted, filters]);
+  const scoped = useMemo(() => filterJobs(sorted, { ...filters, status: null }, now), [sorted, filters, now]);
   const visible = useMemo(() => (filters.status === null ? scoped : scoped.filter((row) => row.status === filters.status)), [scoped, filters.status]);
   const counts = useMemo(() => countByStatus(scoped), [scoped]);
   const options = useMemo(() => filterOptions(sorted), [sorted]);
   const newest = useMemo(() => newestScan(sorted), [sorted]);
+  // The open job's status from the newest rows, for the panel until its checks load.
+  const panelStatus = useMemo(() => (panelJob === null ? null : (sorted.find((row) => sameJob(row, panelJob))?.status ?? null)), [sorted, panelJob]);
 
   const openPanel = useCallback((row: JobStatusRow, back: HTMLElement | null) => {
     focusBack.current = back;
@@ -163,6 +165,7 @@ export function MonitoringPage() {
         open={panelOpen}
         onOpenChange={setPanelOpen}
         focusBack={getFocusBack}
+        rowStatus={panelStatus}
       />
     </>
   );

@@ -2,7 +2,7 @@ import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue }
 import { X } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { SEVERITY_LABEL } from "./format";
-import { type FilterOption, type FilterOptions, hasFilters, type JobFilterValue, NO_FILTERS, SEVERITIES, type Severity } from "./jobs";
+import { type FilterOption, type FilterOptions, hasFilters, type JobFilterValue, LAST_RUN_FILTERS, type LastRunFilter, NO_FILTERS, SEVERITIES, type Severity } from "./jobs";
 
 /** Radix Select keeps "" for "no value", so "all" has a value of its own. */
 const ALL = "__all__";
@@ -16,7 +16,10 @@ interface FilterSelectProps {
 }
 
 function FilterSelect({ label, allLabel, value, options, onChange }: FilterSelectProps) {
-  const chosen = options.find((option) => option.value === value);
+  // A chosen value that the newest rows no longer have stays listed, so the filter says what it is and can be cleared.
+  const listed = options.find((option) => option.value === value);
+  const chosen = listed ?? (value === null ? undefined : { value, label: value });
+  const shown = chosen && !listed ? [...options, chosen] : options;
   return (
     <Select value={value ?? ALL} onValueChange={(next) => onChange(next === ALL ? null : next)}>
       <SelectTrigger
@@ -24,11 +27,11 @@ function FilterSelect({ label, allLabel, value, options, onChange }: FilterSelec
         aria-label={label}
         className={cn("h-8 min-w-36 max-w-60 bg-background text-[13px]", chosen && "border-foreground/30 text-foreground")}
       >
-        <SelectValue>{chosen ? `${label}: ${chosen.label}` : allLabel}</SelectValue>
+        <SelectValue>{chosen ? (chosen.selected ?? `${label}: ${chosen.label}`) : allLabel}</SelectValue>
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={ALL}>{allLabel}</SelectItem>
-        {options.map((option) => (
+        {shown.map((option) => (
           <SelectItem key={option.value} value={option.value}>
             {option.label}
           </SelectItem>
@@ -44,6 +47,16 @@ function toSeverity(value: string | null): Severity | null {
   return SEVERITIES.find((severity) => severity === value) ?? null;
 }
 
+const LAST_RUN_OPTIONS: FilterOption[] = [
+  { value: "recent", label: "In the last 24 hours", selected: "Last run in the last 24 hours" },
+  { value: "older", label: "More than 24 hours ago", selected: "Last run over 24 hours ago" },
+  { value: "none", label: "No run", selected: "No run" },
+];
+
+function toLastRun(value: string | null): LastRunFilter | null {
+  return LAST_RUN_FILTERS.find((bucket) => bucket === value) ?? null;
+}
+
 export interface JobFiltersProps {
   options: FilterOptions;
   value: JobFilterValue;
@@ -53,7 +66,7 @@ export interface JobFiltersProps {
   total: number;
 }
 
-/** The environment, owner, severity and workspace filters, and how many jobs they leave. */
+/** The environment, owner, severity, workspace, failing-check and last-run filters, and how many jobs they leave. */
 export function JobFilters({ options, value, onChange, shown, total }: JobFiltersProps) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -61,6 +74,8 @@ export function JobFilters({ options, value, onChange, shown, total }: JobFilter
       <FilterSelect label="Owner" allLabel="All owners" value={value.owner} options={options.owners} onChange={(owner) => onChange({ ...value, owner })} />
       <FilterSelect label="Severity" allLabel="All severities" value={value.severity} options={SEVERITY_OPTIONS} onChange={(severity) => onChange({ ...value, severity: toSeverity(severity) })} />
       <FilterSelect label="Workspace" allLabel="All workspaces" value={value.workspace} options={options.workspaces} onChange={(workspace) => onChange({ ...value, workspace })} />
+      <FilterSelect label="Failing check" allLabel="Any check" value={value.check} options={options.checks} onChange={(check) => onChange({ ...value, check })} />
+      <FilterSelect label="Last run" allLabel="Any last run" value={value.lastRun} options={LAST_RUN_OPTIONS} onChange={(lastRun) => onChange({ ...value, lastRun: toLastRun(lastRun) })} />
       {hasFilters(value) ? (
         <Button variant="ghost" size="sm" className="h-8 text-[13px] text-muted-foreground" onClick={() => onChange(NO_FILTERS)}>
           <X aria-hidden="true" />

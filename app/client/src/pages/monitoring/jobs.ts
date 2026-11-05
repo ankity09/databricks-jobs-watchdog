@@ -66,6 +66,18 @@ export function sortJobs(rows: readonly JobStatusRow[]): JobStatusRow[] {
   );
 }
 
+/** When a job's newest run started: in the last 24 hours, longer ago, or never. */
+export type LastRunFilter = "recent" | "older" | "none";
+export const LAST_RUN_FILTERS: readonly LastRunFilter[] = ["recent", "older", "none"];
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export function lastRunBucket(row: Pick<JobStatusRow, "last_run_start">, now: Date): LastRunFilter {
+  const started = row.last_run_start === null ? null : parseTime(row.last_run_start);
+  if (started === null) return "none";
+  return now.getTime() - started <= DAY_MS ? "recent" : "older";
+}
+
 export interface JobFilterValue {
   status: Status | null;
   environment: string | null;
@@ -73,23 +85,28 @@ export interface JobFilterValue {
   severity: Severity | null;
   /** A workspace ID. */
   workspace: string | null;
+  /** A check that fails (is not healthy) for the job. */
+  check: string | null;
+  lastRun: LastRunFilter | null;
 }
 
-export const NO_FILTERS: JobFilterValue = { status: null, environment: null, owner: null, severity: null, workspace: null };
+export const NO_FILTERS: JobFilterValue = { status: null, environment: null, owner: null, severity: null, workspace: null, check: null, lastRun: null };
 
 export function hasFilters(filters: JobFilterValue): boolean {
   return Object.values(filters).some((value) => value !== null);
 }
 
-/** The rows that pass every filter that is set. */
-export function filterJobs(rows: readonly JobStatusRow[], filters: JobFilterValue): JobStatusRow[] {
+/** The rows that pass every filter that is set. `now` places each last run in its bucket. */
+export function filterJobs(rows: readonly JobStatusRow[], filters: JobFilterValue, now: Date): JobStatusRow[] {
   return rows.filter(
     (row) =>
       (filters.status === null || row.status === filters.status) &&
       (filters.environment === null || row.environment === filters.environment) &&
       (filters.owner === null || row.owner === filters.owner) &&
       (filters.severity === null || row.severity === filters.severity) &&
-      (filters.workspace === null || row.workspace_id === filters.workspace),
+      (filters.workspace === null || row.workspace_id === filters.workspace) &&
+      (filters.check === null || row.failing_checks.includes(filters.check)) &&
+      (filters.lastRun === null || lastRunBucket(row, now) === filters.lastRun),
   );
 }
 
@@ -102,12 +119,16 @@ export function countByStatus(rows: readonly JobStatusRow[]): Record<Status, num
 export interface FilterOption {
   value: string;
   label: string;
+  /** The filter's text once this option is chosen, when "<filter>: <label>" would read badly. */
+  selected?: string;
 }
 
 export interface FilterOptions {
   environments: FilterOption[];
   owners: FilterOption[];
   workspaces: FilterOption[];
+  /** The checks that are not healthy in some row. */
+  checks: FilterOption[];
 }
 
 function distinct(values: Iterable<string | null>): FilterOption[] {
@@ -123,6 +144,7 @@ export function filterOptions(rows: readonly JobStatusRow[]): FilterOptions {
   return {
     environments: distinct(rows.map((row) => row.environment)),
     owners: distinct(rows.map((row) => row.owner)),
+    checks: distinct(rows.flatMap((row) => row.failing_checks)),
     workspaces: [...workspaces.entries()].map(([value, label]) => ({ value, label })).sort((a, b) => compareText(a.label, b.label)),
   };
 }

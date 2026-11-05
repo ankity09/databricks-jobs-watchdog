@@ -14,9 +14,10 @@ import { Link } from "react-router";
 import { useRefreshKey } from "../../hooks/useRefreshKey";
 import { useWatchdogLocation } from "../../hooks/useWatchdogRows";
 import type { CheckRow } from "../../lib/rows";
-import { worstStatus } from "../../lib/status";
-import { formatUtc, parseTime } from "../../lib/time";
-import { categoryLabel, formatDuration, SEVERITY_LABEL, sourceLabel, triggerLabel } from "./format";
+import { type Status, worstStatus } from "../../lib/status";
+import { formatUtc, formatUtcAfter, parseTime } from "../../lib/time";
+import { cn } from "../../lib/utils";
+import { categoryLabel, formatDuration, SEVERITY_LABEL, shortCodeVersion, sourceLabel, triggerLabel } from "./format";
 import { compareText, highestSeverity, newestScan, sameJob } from "./jobs";
 import { ProblemAlert } from "./ProblemAlert";
 import { useJobChecks } from "./queries";
@@ -31,6 +32,8 @@ export interface JobDetailSheetProps {
   onOpenChange(this: void, open: boolean): void;
   /** The control to focus when the panel closes (the row's job button). */
   focusBack?: () => HTMLElement | null;
+  /** The job's status from its table row, shown (and sent to the copilot) until the checks load, or when they fail. */
+  rowStatus?: Status | null;
 }
 
 function ExternalLink({ href, children }: { href: string; children: ReactNode }) {
@@ -86,7 +89,7 @@ function CheckCard({ check }: { check: CheckRow }) {
         {category ? <span className="ml-auto rounded-[4px] bg-muted px-1.5 py-px text-[11px] text-muted-foreground">{category}</span> : null}
       </div>
       {check.error_summary ? (
-        <p className="mt-2.5 max-h-40 overflow-y-auto rounded-md border border-border bg-muted/60 px-2.5 py-2 font-mono text-xs leading-5 break-words whitespace-pre-wrap text-foreground">
+        <p data-slot="check-error" className="mt-2.5 max-h-40 overflow-y-auto rounded-md border border-border bg-muted/60 px-2.5 py-2 font-mono text-xs leading-5 break-words whitespace-pre-wrap text-foreground">
           {check.error_summary}
         </p>
       ) : null}
@@ -104,7 +107,7 @@ function CheckCard({ check }: { check: CheckRow }) {
         <Fact label="Run">{check.run_page_url ? <ExternalLink href={check.run_page_url}>{check.run_id ?? "Open"}</ExternalLink> : NOT_SET}</Fact>
         <Fact label="Pipeline">{check.pipeline_url ? <ExternalLink href={check.pipeline_url}>Open</ExternalLink> : NOT_SET}</Fact>
         <Fact label="Code version" mono>
-          <span title={check.code_version ?? undefined}>{check.code_version ?? NOT_SET}</span>
+          <span title={check.code_version ?? undefined}>{check.code_version ? shortCodeVersion(check.code_version) : NOT_SET}</span>
         </Fact>
         <Fact label="Trigger">{check.trigger_type ? triggerLabel(check.trigger_type, check.triggered_by) : NOT_SET}</Fact>
         <Fact label="Started" mono>
@@ -121,16 +124,51 @@ function CheckCard({ check }: { check: CheckRow }) {
   );
 }
 
-/** A healthy check: one line with what it found. */
+interface RunFact {
+  label: string;
+  value: ReactNode;
+  mono?: boolean;
+}
+
+/** The run facts a check has a value for, in the card's order. */
+function presentRunFacts(check: CheckRow): RunFact[] {
+  const facts: RunFact[] = [];
+  if (check.run_page_url) facts.push({ label: "Run", value: <ExternalLink href={check.run_page_url}>{check.run_id ?? "Open"}</ExternalLink> });
+  if (check.pipeline_url) facts.push({ label: "Pipeline", value: <ExternalLink href={check.pipeline_url}>Open</ExternalLink> });
+  if (check.code_version) facts.push({ label: "Code version", value: <span title={check.code_version}>{shortCodeVersion(check.code_version)}</span>, mono: true });
+  if (check.trigger_type) facts.push({ label: "Trigger", value: triggerLabel(check.trigger_type, check.triggered_by) });
+  if (check.run_start_time) facts.push({ label: "Started", value: formatUtc(check.run_start_time), mono: true });
+  if (check.run_end_time) {
+    const ended = check.run_start_time ? formatUtcAfter(check.run_end_time, check.run_start_time) : formatUtc(check.run_end_time);
+    facts.push({ label: "Ended", value: ended, mono: true });
+  }
+  if (check.run_duration_seconds !== null) facts.push({ label: "Duration", value: formatDuration(check.run_duration_seconds), mono: true });
+  return facts;
+}
+
+/** A healthy check: one line with what it found, and a compact line with the run facts it has. */
 function HealthyCheck({ check }: { check: CheckRow }) {
+  const facts = presentRunFacts(check);
   return (
-    <li className="flex min-w-0 items-center gap-2 py-2">
-      <StatusBadge status={check.status} />
-      <h3 className="shrink-0 font-mono text-[13px] font-medium">{check.check_id}</h3>
-      <span className="shrink-0 text-xs text-muted-foreground">{sourceLabel(check.source)}</span>
-      <span className="min-w-0 truncate text-xs text-muted-foreground" title={check.error_summary ?? undefined}>
-        {check.error_summary}
-      </span>
+    <li className="flex min-w-0 flex-col gap-1 py-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <StatusBadge status={check.status} />
+        <h3 className="shrink-0 font-mono text-[13px] font-medium">{check.check_id}</h3>
+        <span className="shrink-0 text-xs text-muted-foreground">{sourceLabel(check.source)}</span>
+        <span className="min-w-0 truncate text-xs text-muted-foreground" title={check.error_summary ?? undefined}>
+          {check.error_summary}
+        </span>
+      </div>
+      {facts.length > 0 ? (
+        <dl className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
+          {facts.map((fact) => (
+            <div key={fact.label} className="flex min-w-0 items-baseline gap-1.5">
+              <dt className="shrink-0 text-muted-foreground">{fact.label}</dt>
+              <dd className={cn("min-w-0 truncate", fact.mono && "font-mono tabular-nums")}>{fact.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
     </li>
   );
 }
@@ -155,7 +193,7 @@ function SheetSkeleton() {
  * and Open run and Ask the copilot. Rows come from job_checks, kept to this
  * workspace and job ID (a job name can run in several workspaces).
  */
-export function JobDetailSheet({ job, workspaceId, jobId, open, onOpenChange, focusBack }: JobDetailSheetProps) {
+export function JobDetailSheet({ job, workspaceId, jobId, open, onOpenChange, focusBack, rowStatus = null }: JobDetailSheetProps) {
   const { bump } = useRefreshKey();
   const where = useWatchdogLocation();
   const checks = useJobChecks(where, job, open);
@@ -168,11 +206,14 @@ export function JobDetailSheet({ job, workspaceId, jobId, open, onOpenChange, fo
   }, [checks.rows, job, workspaceId, jobId]);
 
   const facts = mine?.[0] ?? null;
-  const status = mine && mine.length > 0 ? worstStatus(mine.map((check) => check.status)) : null;
+  // The checks' worst status once they load; until then, or when they fail to load, the table row's.
+  const status = mine && mine.length > 0 ? worstStatus(mine.map((check) => check.status)) : rowStatus;
   const failing = mine?.filter((check) => check.status !== "HEALTHY") ?? [];
   const healthy = mine?.filter((check) => check.status === "HEALTHY") ?? [];
   const severity = highestSeverity(failing.map((check) => check.severity));
-  const affected = useMemo(() => [...new Set((mine ?? []).flatMap((check) => check.affected_jobs))].sort(compareText), [mine]);
+  // Both scans fill affected_jobs on FAILED rows only, so the section is for a job with a failed check.
+  const failed = useMemo(() => (mine ?? []).filter((check) => check.status === "FAILED"), [mine]);
+  const affected = useMemo(() => [...new Set(failed.flatMap((check) => check.affected_jobs))].sort(compareText), [failed]);
   const runUrl = mine ? newestRunUrl(mine) : null;
   const newestObserved = mine ? newestScan(mine) : null;
 
@@ -276,7 +317,7 @@ export function JobDetailSheet({ job, workspaceId, jobId, open, onOpenChange, fo
             )}
           </section>
 
-          {mine !== null && mine.length > 0 ? (
+          {failed.length > 0 ? (
             <section aria-labelledby="affected-heading" className="mt-6">
               <h2 id="affected-heading" className="text-sm font-semibold">
                 Affected jobs

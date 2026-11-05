@@ -24,6 +24,7 @@ export function statusRow(overrides: Record<string, unknown>): Record<string, un
 /**
  * Seven jobs in two workspaces, and one the scan could not find. archive_cleanup
  * sorts first by name but has the lower severity, so only severity puts it third.
+ * audit_rollup last ran two days before the others; inventory_snapshot never ran.
  */
 export const STATUS_ROWS = [
   statusRow({ job_name: "customer_sync", workspace_id: "2002", workspace_name: "example-stage", job_id: "22", environment: "lower" }),
@@ -46,7 +47,7 @@ export const STATUS_ROWS = [
     failing_checks: '["last_run_result","task_failures"]',
     top_error: "load: ValueError: bad input in prod",
   }),
-  statusRow({ job_name: "audit_rollup", job_id: "14", owner: "security-ops" }),
+  statusRow({ job_name: "audit_rollup", job_id: "14", owner: "security-ops", last_run_start: "2026-11-03T09:58:00.000Z" }),
   statusRow({
     job_name: "inventory_snapshot",
     workspace_id: null,
