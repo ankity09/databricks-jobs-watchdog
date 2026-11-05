@@ -38,6 +38,7 @@ import { type LiveStatus, useLiveStatus } from "../../hooks/useLiveStatus";
 import { changeIssues, linksRemovedWith } from "../../lib/draft";
 import { inheritedSettings, type InheritedSettings, pyReEscape } from "../../lib/job-form";
 import { exportUrl } from "../../lib/joblist-api";
+import type { EntryJobIds } from "../../lib/picker";
 import { type Status, statusTone } from "../../lib/status";
 import { describeTarget } from "../../lib/targets";
 import { formatUtc } from "../../lib/time";
@@ -83,9 +84,9 @@ function addFromWorkspace(actions: JobListActions): ReactNode {
   return <AddFromWorkspace {...actions} />;
 }
 
-/** Under the editor's pattern fields: which of the region's jobs those patterns match, as the scan would match them. */
-function patternPreview(pattern: string, exclude: string): ReactNode {
-  return <PatternMatches pattern={pattern} exclude={exclude} />;
+/** Under the editor's pattern fields: which of the region's jobs those patterns match, and where the scan finds the job by its ID instead. */
+function patternPreview(pattern: string, exclude: string, jobIds: EntryJobIds): ReactNode {
+  return <PatternMatches pattern={pattern} exclude={exclude} jobIds={jobIds} />;
 }
 
 type Editing = { mode: "create"; draft: JobEntry } | { mode: "edit"; name: string };

@@ -2,6 +2,7 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RefreshProvider } from "../../hooks/useRefreshKey";
+import type { EntryJobIds } from "../../lib/picker";
 import { type QueryAnswer, type QueryCall, mockFetch } from "../../test/analytics-mock";
 import { PatternMatches } from "./PatternMatches";
 
@@ -9,11 +10,11 @@ function matchRows(names: string[], total = names.length) {
   return names.map((name, i) => ({ workspace_id: "1111111111111111", job_id: String(100 + i), name, match_count: String(total) }));
 }
 
-function renderMatches(pattern: string, exclude: string, answer: (call: QueryCall) => QueryAnswer) {
+function renderMatches(pattern: string, exclude: string, answer: (call: QueryCall) => QueryAnswer, jobIds?: EntryJobIds) {
   const { calls } = mockFetch(answer);
   render(
     <RefreshProvider>
-      <PatternMatches pattern={pattern} exclude={exclude} />
+      <PatternMatches pattern={pattern} exclude={exclude} jobIds={jobIds} />
     </RefreshProvider>,
   );
   return calls;
@@ -21,6 +22,37 @@ function renderMatches(pattern: string, exclude: string, answer: (call: QueryCal
 
 describe("PatternMatches", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  // Each test below has its own pattern: AppKit shares a finished request with the next test that sends the same one.
+  it("says the scan finds the job by its job ID, and gives no not-found warning, when the entry has job IDs", async () => {
+    // A picked job: its ID applies everywhere, and its name pattern matches nothing (a dev-mode job's name has a prefix).
+    renderMatches("^nightly_billing_rollup$", "", () => ({ rows: [] }), { jobIds: ["9007199254740993"], environments: {} });
+    expect(await screen.findByText("The scan finds this job by its job ID.")).toBeInTheDocument();
+    expect(screen.getByText("The pattern matches 0 jobs.")).toBeInTheDocument();
+    expect(screen.queryByText("The scan would report this job as not found.")).toBeNull();
+  });
+
+  it("keeps the pattern's matches as information under the job ID line", async () => {
+    renderMatches("^by_id_with_matches_", "", () => ({ rows: matchRows(["by_id_with_matches_a", "by_id_with_matches_b"]) }), {
+      jobIds: ["123"],
+      environments: {},
+    });
+    expect(await screen.findByText("The pattern matches 2 jobs.")).toBeInTheDocument();
+    expect(screen.getByText("The scan finds this job by its job ID.")).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual(["by_id_with_matches_a", "by_id_with_matches_b"]);
+  });
+
+  it("names the environments where the scan uses the pattern instead, and warns for them", async () => {
+    renderMatches("^falls_back_in_lower$", "", () => ({ rows: [] }), { jobIds: ["123"], environments: { lower: [] } });
+    expect(await screen.findByText("The scan finds this job by its job ID, except in lower, where it uses the pattern.")).toBeInTheDocument();
+    expect(screen.getByText("In lower, the scan would report this job as not found.")).toBeInTheDocument();
+  });
+
+  it("names the environments where the scan finds the job by ID, and warns for the others", async () => {
+    renderMatches("^by_id_in_production$", "", () => ({ rows: [] }), { jobIds: [], environments: { production: ["456"] } });
+    expect(await screen.findByText("In production, the scan finds this job by its job ID. Elsewhere it uses the pattern.")).toBeInTheDocument();
+    expect(screen.getByText("Elsewhere, the scan would report this job as not found.")).toBeInTheDocument();
+  });
 
   it("shows how many jobs match and the first 10 names, in mono", async () => {
     const names = Array.from({ length: 12 }, (_, i) => `orders_ingest_${String(i).padStart(2, "0")}_prod`);

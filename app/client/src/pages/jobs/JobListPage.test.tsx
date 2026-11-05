@@ -307,6 +307,23 @@ describe("JobListPage", () => {
     expect(screen.getByLabelText("Job name")).toHaveValue("nightly_billing_rollup");
     expect(screen.getByText("9007199254740993")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Schedule type" })).toHaveTextContent("continuous");
+
+    // The real name has the dev prefix, so ^nightly_billing_rollup$ matches nothing: the scan finds the job by its ID instead.
+    expect(await screen.findByText("The scan finds this job by its job ID.", {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(await screen.findByText("The pattern matches 0 jobs.", {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.queryByText("The scan would report this job as not found.")).toBeNull();
+  });
+
+  it("still warns in the editor when a job without IDs matches no job by name", async () => {
+    setClock("2026-11-05T19:30:00Z");
+    mockApi(SAVED);
+    renderPage();
+    await screen.findByRole("button", { name: "Edit orders_enrich" });
+    await userEvent.click(screen.getByRole("button", { name: "Add job" }));
+    await userEvent.type(await screen.findByLabelText("Job name"), "brand_new_job");
+    expect(await screen.findByText("Matches 0 jobs", {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByText("The scan would report this job as not found.")).toBeInTheDocument();
+    expect(screen.queryByText(/finds this job by its job ID/)).toBeNull();
   });
 
   it("shows the jobs the name pattern matches in the editor, and a hint while there is no pattern", async () => {
