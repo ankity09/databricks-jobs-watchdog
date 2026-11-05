@@ -146,7 +146,7 @@ If your policy needs a service principal for `run_as`, or a shared path with its
 
 The CI service principal is the one deploying identity for each region. Do not also deploy a region by hand as a person, or the state splits (see [one identity per region](#one-deploying-identity-per-region)).
 
-GitLab passes protected variables only to pipelines on protected branches and tags, so a merge request never sees the deploy secret. The example's validate jobs therefore sign in with a second, validate-only service principal (`VALIDATE_CLIENT_ID` and `VALIDATE_CLIENT_SECRET`, masked but not protected), which only needs to read the workspace. If you would rather not have a second principal, delete those variables and the merge request rule, and validate on the default branch only.
+GitLab passes protected variables only to pipelines on protected branches and tags, so a merge request never sees the deploy secret. The example's validate jobs therefore sign in with a second, validate-only service principal (`VALIDATE_CLIENT_ID` and `VALIDATE_CLIENT_SECRET`, masked but not protected), which only needs to read the workspace. They set `DATABRICKS_CLIENT_ID` and `DATABRICKS_CLIENT_SECRET` to those values on the script's command line, not in the job's `variables:` block: a variable set in Settings outranks a job's `variables:`, so the deploy principal's ID would go out with the validate secret and sign-in would fail. If you would rather not have a second principal, drop that prefix and the merge request rule, and validate on the default branch only.
 
 Each job runs `python3 scripts/deploy_regions.py config/regions/accelerator.$REGION.yaml`. Add a region by adding its file and its name to the two `matrix` lists.
 

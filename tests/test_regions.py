@@ -265,13 +265,19 @@ def test_the_gitlab_example_has_a_matrix_job_per_stage_and_the_region_script():
 
 
 def test_merge_request_validation_signs_in_without_the_protected_deploy_secret():
-    # GitLab gives protected variables only to protected refs, so a merge request never sees the deploy secret
+    # GitLab gives protected variables only to protected refs, so a merge request never sees the deploy secret.
+    # A variable set in Settings outranks a job's variables: block, so the validate job sets both on its
+    # command line; otherwise the deploy ID from Settings would go out with the validate secret.
     import yaml
 
     ci = yaml.safe_load((repo_root() / "ci" / "gitlab-ci.example.yml").read_text())
-    assert ci["validate"]["variables"] == {"DATABRICKS_CLIENT_ID": "$VALIDATE_CLIENT_ID",
-                                           "DATABRICKS_CLIENT_SECRET": "$VALIDATE_CLIENT_SECRET"}
-    assert "variables" not in ci["deploy"]
+    assert "variables" not in ci["validate"] and "variables" not in ci["deploy"]
+    assert ci["validate"]["script"][0].startswith(
+        'DATABRICKS_CLIENT_ID="$VALIDATE_CLIENT_ID" DATABRICKS_CLIENT_SECRET="$VALIDATE_CLIENT_SECRET" '
+        "python3 scripts/deploy_regions.py "
+    )
+    header = (repo_root() / "ci" / "gitlab-ci.example.yml").read_text().split("stages:")[0]
+    assert "outranks" in header and "command line" in header
 
 
 # teardown_target

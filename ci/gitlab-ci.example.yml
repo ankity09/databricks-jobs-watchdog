@@ -15,8 +15,12 @@
 #   VALIDATE_CLIENT_SECRET    its OAuth secret (mask it, but do not protect it)
 # GitLab passes protected variables only to pipelines on protected branches and
 # tags, so a merge request never sees the deploy secret; the validate jobs sign
-# in with the validate-only principal instead. To skip that, delete the validate
-# job's variables and its merge request rule, and validate on the default branch.
+# in with the validate-only principal instead. They set both of its variables on
+# the command line, because a variable set in Settings outranks a job's
+# variables: block: set there, the deploy principal's ID from Settings would go
+# out with the validate secret, and sign-in would fail. To skip the second
+# principal, drop that prefix and the merge request rule, and validate on the
+# default branch.
 # Use the deploying service principal for every deploy of the region, in CI or
 # by hand: another identity would keep its own bundle state and start a
 # conflicting copy. Both sign in with OAuth M2M. The workspace host is not a CI
@@ -43,9 +47,6 @@ variables:
 validate:
   extends: .databricks_setup
   stage: validate
-  variables:
-    DATABRICKS_CLIENT_ID: $VALIDATE_CLIENT_ID
-    DATABRICKS_CLIENT_SECRET: $VALIDATE_CLIENT_SECRET
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   parallel:
@@ -55,7 +56,8 @@ validate:
     name: $REGION
     action: prepare
   script:
-    - python3 scripts/deploy_regions.py config/regions/accelerator.$REGION.yaml --validate-only
+    # the validate-only principal, on the command line so that it outranks the Settings variables
+    - DATABRICKS_CLIENT_ID="$VALIDATE_CLIENT_ID" DATABRICKS_CLIENT_SECRET="$VALIDATE_CLIENT_SECRET" python3 scripts/deploy_regions.py config/regions/accelerator.$REGION.yaml --validate-only
 
 # Deploy stage, on the default branch: a person starts each region by hand.
 # The script creates the Watchdog tables if the region lacks them, deploys the
