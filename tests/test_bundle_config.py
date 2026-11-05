@@ -447,16 +447,117 @@ def test_every_genie_table_is_in_the_catalog_and_schema_variables_and_sorted():
 def test_genie_ids_are_32_hex_characters_and_each_list_is_sorted_by_id():
     space = genie_space()
     lists = [space["config"]["sample_questions"], space["instructions"]["text_instructions"]]
-    lists += [space["instructions"].get("example_question_sqls", [])]
+    lists += [space["instructions"]["example_question_sqls"], space["benchmarks"]["questions"]]
     for items in lists:
         ids = [item["id"] for item in items]
         assert all(re.fullmatch(r"[0-9a-f]{32}", i) for i in ids)
         assert ids == sorted(ids) and len(set(ids)) == len(ids)
 
 
+def test_genie_ids_are_unique_across_questions_and_across_instructions():
+    # Genie rejects a question ID used by both a sample question and a benchmark,
+    # and an instruction ID used by both a text instruction and an example SQL
+    space = genie_space()
+    questions = [q["id"] for q in space["config"]["sample_questions"] + space["benchmarks"]["questions"]]
+    instructions = space["instructions"]["text_instructions"] + space["instructions"]["example_question_sqls"]
+    assert len(set(questions)) == len(questions)
+    assert len({i["id"] for i in instructions}) == len(instructions)
+
+
 def test_genie_has_at_most_one_text_instruction_and_version_2():
     assert len(genie_space()["instructions"]["text_instructions"]) <= 1
     assert genie_space()["version"] == 2
+
+
+def test_genie_has_at_least_eight_example_sqls_and_six_benchmarks_with_sql():
+    space = genie_space()
+    examples = space["instructions"]["example_question_sqls"]
+    benchmarks = space["benchmarks"]["questions"]
+    assert len(examples) >= 8 and len(benchmarks) >= 6
+    for example in examples:
+        assert example["question"] and example["sql"]
+    for benchmark in benchmarks:
+        assert benchmark["question"]
+        assert [a["format"] for a in benchmark["answer"]] == ["SQL"]
+        assert benchmark["answer"][0]["content"]
+
+
+def genie_text_fields():
+    """Every array-of-strings field Genie reads, with where it came from."""
+    space = genie_space()
+    fields = [("sample question", q["question"]) for q in space["config"]["sample_questions"]]
+    fields += [("text instruction", t["content"]) for t in space["instructions"]["text_instructions"]]
+    for example in space["instructions"]["example_question_sqls"]:
+        fields += [("example question", example["question"]), ("example SQL", example["sql"])]
+        fields += [("usage guidance", example.get("usage_guidance", ["-"]))]
+    for benchmark in space["benchmarks"]["questions"]:
+        fields += [("benchmark question", benchmark["question"]), ("benchmark SQL", benchmark["answer"][0]["content"])]
+        fields += [("evaluation note", benchmark.get("evaluation_note", ["-"]))]
+    for table in space["data_sources"]["tables"]:
+        for column in table.get("column_configs", []):
+            fields += [("column description", column.get("description", ["-"]))]
+    return fields
+
+
+def test_genie_text_fields_are_arrays_of_strings_that_never_run_together():
+    # Genie joins the strings of an array with nothing in between, so every
+    # string but the last must end with a newline
+    for where, value in genie_text_fields():
+        assert isinstance(value, list) and all(isinstance(s, str) and s.strip() for s in value), where
+        assert all(s.endswith("\n") for s in value[:-1]), where
+
+
+def genie_sql():
+    space = genie_space()
+    sql = ["".join(e["sql"]) for e in space["instructions"]["example_question_sqls"]]
+    return sql + ["".join(b["answer"][0]["content"]) for b in space["benchmarks"]["questions"]]
+
+
+def test_genie_sql_only_reads_the_agent_s_own_tables():
+    tables = {t["identifier"] for t in genie_space()["data_sources"]["tables"]}
+    for sql in genie_sql():
+        assert re.match(r"\s*(SELECT|WITH)\b", sql), sql
+        assert not re.search(r"\b(INSERT|UPDATE|DELETE|MERGE|DROP|CREATE|ALTER|TRUNCATE)\b", sql, re.I), sql
+        named = set(re.findall(r"\$\{var\.catalog\}\.\$\{var\.schema\}\.\w+", sql))
+        assert named and named <= tables, sql
+
+
+def test_genie_examples_cover_each_question_shape():
+    sql = "\n".join("".join(e["sql"]) for e in genie_space()["instructions"]["example_question_sqls"])
+    for shape in ("schedule_gap", "SLA_EXCEEDED", "retry_loop", "not_found", "environment",
+                  "INTERVAL 7 DAYS", "affected_jobs", "WITH RECURSIVE", "INTERVAL 24 HOURS"):
+        assert shape.lower() in sql.lower(), shape
+
+
+def column_configs(table):
+    for t in genie_space()["data_sources"]["tables"]:
+        if t["identifier"] == "${var.catalog}.${var.schema}." + table:
+            return {c["column_name"]: c for c in t.get("column_configs", [])}
+    raise AssertionError(table)
+
+
+def test_genie_describes_the_six_finding_columns_with_synonyms():
+    for table in ("findings", "findings_latest"):
+        columns = column_configs(table)
+        for name in ("status", "severity", "check_id", "failure_category", "environment", "error_summary"):
+            assert columns[name]["description"] and columns[name]["synonyms"], (table, name)
+
+
+def test_genie_matches_entities_only_on_job_name_owner_and_environment():
+    for table in genie_space()["data_sources"]["tables"]:
+        names = [c["column_name"] for c in table.get("column_configs", [])]
+        assert names == sorted(names), table["identifier"]
+        matched = {c["column_name"] for c in table.get("column_configs", []) if c.get("enable_entity_matching")}
+        assert matched <= {"job_name", "owner", "environment"}, table["identifier"]
+    for table in ("findings", "findings_latest"):
+        assert {n for n, c in column_configs(table).items() if c.get("enable_entity_matching")} == {
+            "job_name", "owner", "environment"}
+
+
+def test_genie_sample_questions_are_the_app_s_suggested_questions():
+    prompts = (repo_root() / "app" / "client" / "src" / "pages" / "copilot" / "SuggestedPrompts.tsx").read_text()
+    for sample in genie_space()["config"]["sample_questions"]:
+        assert f'"{"".join(sample["question"])}"' in prompts
 
 
 def test_the_genie_file_names_no_literal_catalog():

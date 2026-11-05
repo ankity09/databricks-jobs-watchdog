@@ -5,6 +5,20 @@
 # The catalog, schema and tables must exist before the first deploy, because
 # Genie will not create a space over a schema that does not exist.
 # scripts/deploy_regions.py creates them.
+#
+# Editing the agent:
+# - Genie joins the strings of an array with nothing in between, so each text
+#   is one string (a block scalar), or every string but the last ends with \n.
+# - IDs are 32 lowercase hex characters, and every list is sorted by id.
+#   Question IDs (sample questions, benchmarks) and instruction IDs (the text
+#   instruction, example SQL) must each be unique. Tables are sorted by
+#   identifier, and column_configs by column_name.
+# - Every SQL statement here was run read-only against a deployed Watchdog
+#   schema. Run a changed one before you deploy it.
+# - The sample questions are also the app's suggested questions
+#   (app/client/src/pages/copilot/SuggestedPrompts.tsx); keep them the same.
+# - The users group gets CAN_RUN: anyone can ask, and each question runs as
+#   the person asking.
 resources:
   genie_spaces:
     watchdog_copilot:
@@ -30,18 +44,365 @@ resources:
         data_sources:
           tables:
             - identifier: ${var.catalog}.${var.schema}.findings
+              column_configs: &finding_columns
+                - column_name: check_id
+                  description:
+                    - >-
+                      Which check wrote the row. From system tables (source SYSTEM_TABLES, about an
+                      hour behind): last_run_result, task_failures, schedule_gap, long_runtime,
+                      duplicate_name and not_found. From the Jobs API (source JOBS_API, live):
+                      live_run_status, live_task_failures, live_long_runtime, retry_loop, not_found
+                      and api_unreachable. Custom checks (source CUSTOM) use their own IDs, such as
+                      service_connectivity.
+                  synonyms: ["check", "check type", "rule", "test"]
+                - column_name: environment
+                  description:
+                    - >-
+                      The environment label of the workspace, from monitored_workspaces, for
+                      example production or lower. Empty when the workspace has no label, and on
+                      rows with no workspace.
+                  synonyms: ["env", "stage", "tier"]
+                  enable_format_assistance: true
+                  enable_entity_matching: true
+                - column_name: error_summary
+                  description:
+                    - >-
+                      What the check found, on every row, HEALTHY rows included. On failures, the
+                      start of the error text; a Jobs API task failure reads task_key: error. At
+                      most 1,000 characters.
+                  synonyms: ["error", "error message", "reason", "details", "what happened"]
+                - column_name: failure_category
+                  description:
+                    - >-
+                      What kind of problem the row is: FUNCTIONAL (the code or its inputs),
+                      INFRASTRUCTURE (the platform or the cloud), SLA_EXCEEDED (a run took too
+                      long), SCHEDULE_GAP (a missed schedule, or a stream that is not running),
+                      RETRY_LOOP (tasks retried too often), COVERAGE (the Watchdog could not tell,
+                      or found no job), and NONE on HEALTHY rows.
+                  synonyms: ["category", "failure type", "cause", "kind of problem", "root cause"]
+                - column_name: job_name
+                  enable_format_assistance: true
+                  enable_entity_matching: true
+                - column_name: owner
+                  enable_format_assistance: true
+                  enable_entity_matching: true
+                - column_name: severity
+                  description:
+                    - >-
+                      How much the job matters: CRITICAL or WARNING, from the job's settings for
+                      the row's environment. Empty on HEALTHY rows. A WARNING row about a CRITICAL
+                      job keeps CRITICAL.
+                  synonyms: ["priority", "criticality", "importance"]
+                - column_name: status
+                  description:
+                    - >-
+                      What the check found: FAILED (a run or task failed, or a CRITICAL job missed
+                      its schedule), WARNING (needs a look: a long run, a retry loop, a cancelled
+                      run), UNKNOWN (the Watchdog could not tell, for example no matching job or
+                      no finished run) or HEALTHY (the check passed).
+                  synonyms: ["state", "health", "result", "outcome"]
             - identifier: ${var.catalog}.${var.schema}.findings_latest
+              column_configs: *finding_columns
             - identifier: ${var.catalog}.${var.schema}.job_dependencies
+              column_configs:
+                - column_name: dependency_type
+                  description:
+                    - >-
+                      job: job_name needs the output of depends_on. child_job: depends_on starts
+                      job_name, so job_name is the child and depends_on its parent; a failure of
+                      either affects the other. service: something else job_name needs, such as a
+                      message broker; it is not a job.
+                - column_name: depends_on
+                  description:
+                    - >-
+                      What job_name needs: another monitored job, the parent job that starts it,
+                      or a service.
+                - column_name: job_name
+                  enable_format_assistance: true
+                  enable_entity_matching: true
             - identifier: ${var.catalog}.${var.schema}.monitored_job_environments
+              column_configs:
+                - column_name: environment
+                  enable_format_assistance: true
+                  enable_entity_matching: true
+                - column_name: job_name
+                  enable_format_assistance: true
+                  enable_entity_matching: true
+                - column_name: owner
+                  enable_format_assistance: true
+                  enable_entity_matching: true
             - identifier: ${var.catalog}.${var.schema}.monitored_jobs
+              column_configs:
+                - column_name: job_name
+                  enable_format_assistance: true
+                  enable_entity_matching: true
+                - column_name: owner
+                  enable_format_assistance: true
+                  enable_entity_matching: true
             - identifier: ${var.catalog}.${var.schema}.monitored_workspaces
+              column_configs:
+                - column_name: environment
+                  enable_format_assistance: true
+                  enable_entity_matching: true
         instructions:
           text_instructions:
             - id: "b0000000000000000000000000000001"
               content:
-                - "The Watchdog checks Databricks jobs and writes what it finds to findings. findings_latest holds the newest scan from each source: one row per job, check and source. findings holds every scan, as history."
-                - "status is HEALTHY, WARNING, FAILED or UNKNOWN. severity (CRITICAL or WARNING) is set only on rows that are not healthy. failure_category says what kind of problem it is."
-                - "For what is failing now, use findings_latest where status is FAILED or WARNING, and show job_name, workspace_name, check_id, status, severity, error_summary and run_page_url."
-                - "affected_jobs, on FAILED rows, lists every job downstream of the failed one. For the configured chain, use job_dependencies: a job link means job_name depends on depends_on, and a child_job link counts both ways."
-                - "monitored_jobs and monitored_job_environments hold the settings each job is checked against; monitored_workspaces gives each workspace an environment label."
-                - "Answer in plain language: what failed, when, the likely cause (from error_summary and failure_category), what it affects, and the next step. Include run_page_url when there is one. You cannot change anything; say so if asked."
+                - |
+                  ## PURPOSE
+                  - The Watchdog checks Databricks jobs and writes what it finds to findings. findings_latest holds the newest scan from each source: one row per job, check and source. findings holds every scan, as history.
+                  - People ask what is failing, why, what it affects and what to do next.
+
+                  ## DISAMBIGUATION
+                  - For what is failing now, use findings_latest where status is FAILED or WARNING, and show job_name, workspace_name, check_id, status, severity, error_summary and run_page_url.
+                  - "Now" and "the newest scan" mean all of findings_latest (each source's newest scan); do not filter it on observed_at.
+                  - To count failing jobs, count jobs with a FAILED row; give jobs with only warnings as a second number.
+                  - Questions about a period (the last 24 hours, a job's history) use findings, filtered on observed_at.
+                  - One problem shows on several rows, one per check and source, so count jobs, not rows.
+
+                  ## DATA QUALITY NOTES
+                  - status is HEALTHY, WARNING, FAILED or UNKNOWN. severity (CRITICAL or WARNING) is set only on rows that are not healthy. failure_category says what kind of problem it is.
+                  - SYSTEM_TABLES rows lag about an hour; JOBS_API rows are live and carry the error text.
+                  - affected_jobs, on FAILED rows, lists every job downstream of the failed one. For the configured chain, use job_dependencies: a job link means job_name depends on depends_on, and a child_job link counts both ways.
+                  - monitored_jobs and monitored_job_environments hold the settings each job is checked against; monitored_workspaces gives each workspace an environment label.
+
+                  ## CONSTRAINTS
+                  - You can only read. You cannot change, rerun or fix anything; say so if asked.
+
+                  ## Instructions you must follow when providing summaries
+                  - Answer in plain language: what failed, when, the likely cause (from error_summary and failure_category), what it affects, and the next step. Include run_page_url when there is one.
+                  - Give times in UTC and say when the newest scan ran.
+                  - Write short plain sentences without em dashes.
+          example_question_sqls:
+            - id: "c0000000000000000000000000000001"
+              question: ["What is failing now?"]
+              sql:
+                - |
+                  SELECT fl.job_name, fl.workspace_name, fl.environment, fl.check_id, fl.status, fl.severity,
+                    fl.failure_category, fl.error_summary, fl.run_page_url, fl.observed_at
+                  FROM ${var.catalog}.${var.schema}.findings_latest fl
+                  WHERE fl.status IN ('FAILED', 'WARNING')
+                  ORDER BY fl.status, fl.severity, fl.job_name, fl.check_id
+            - id: "c0000000000000000000000000000002"
+              question: ["Which jobs missed their schedule?"]
+              usage_guidance: ["schedule_gap rows and continuous jobs that are not running both have failure_category SCHEDULE_GAP."]
+              sql:
+                - |
+                  SELECT fl.job_name, fl.workspace_name, fl.environment, fl.check_id, fl.status, fl.severity,
+                    fl.schedule_type, fl.error_summary, fl.run_page_url, fl.observed_at
+                  FROM ${var.catalog}.${var.schema}.findings_latest fl
+                  WHERE fl.failure_category = 'SCHEDULE_GAP'
+                  ORDER BY fl.status, fl.severity, fl.job_name
+            - id: "c0000000000000000000000000000003"
+              question: ["Which runs took longer than their limit?"]
+              usage_guidance: ["An environment's setting in monitored_job_environments overrides the job's own setting in monitored_jobs."]
+              sql:
+                - |
+                  SELECT fl.job_name, fl.workspace_name, fl.environment, fl.check_id,
+                    round(fl.run_duration_seconds / 60.0, 1) AS run_minutes,
+                    coalesce(mje.max_runtime_minutes, mj.max_runtime_minutes) AS limit_minutes,
+                    fl.run_start_time, fl.run_end_time, fl.error_summary, fl.run_page_url
+                  FROM ${var.catalog}.${var.schema}.findings_latest fl
+                  LEFT JOIN ${var.catalog}.${var.schema}.monitored_jobs mj ON mj.job_name = fl.job_name
+                  LEFT JOIN ${var.catalog}.${var.schema}.monitored_job_environments mje
+                    ON mje.job_name = fl.job_name AND mje.environment = fl.environment
+                  WHERE fl.failure_category = 'SLA_EXCEEDED'
+                  ORDER BY fl.run_duration_seconds DESC
+            - id: "c0000000000000000000000000000004"
+              question: ["Which jobs are stuck in a retry loop?"]
+              sql:
+                - |
+                  SELECT fl.job_name, fl.workspace_name, fl.environment, fl.failed_task_keys AS retried_tasks,
+                    coalesce(mje.max_retries, mj.max_retries) AS max_retries, fl.error_summary, fl.run_page_url,
+                    fl.observed_at
+                  FROM ${var.catalog}.${var.schema}.findings_latest fl
+                  LEFT JOIN ${var.catalog}.${var.schema}.monitored_jobs mj ON mj.job_name = fl.job_name
+                  LEFT JOIN ${var.catalog}.${var.schema}.monitored_job_environments mje
+                    ON mje.job_name = fl.job_name AND mje.environment = fl.environment
+                  WHERE fl.check_id = 'retry_loop' AND fl.status <> 'HEALTHY'
+                  ORDER BY fl.job_name
+            - id: "c0000000000000000000000000000005"
+              question: ["Which monitored jobs could the Watchdog not find?"]
+              usage_guidance: ["not_found rows have no job ID, and usually no workspace; error_summary says what did not match."]
+              sql:
+                - |
+                  SELECT fl.job_name, fl.source, fl.workspace_id, fl.workspace_name, fl.error_summary, fl.owner,
+                    fl.observed_at
+                  FROM ${var.catalog}.${var.schema}.findings_latest fl
+                  WHERE fl.check_id = 'not_found'
+                  ORDER BY fl.job_name, fl.source
+            - id: "c0000000000000000000000000000006"
+              question: ["How healthy is each environment?"]
+              usage_guidance: ["A job's status is its worst check: FAILED, then WARNING, then UNKNOWN, then HEALTHY."]
+              sql:
+                - |
+                  WITH per_job AS (
+                    SELECT coalesce(fl.environment, '(no label)') AS environment, fl.job_name,
+                      collect_set(fl.status) AS statuses
+                    FROM ${var.catalog}.${var.schema}.findings_latest fl
+                    GROUP BY coalesce(fl.environment, '(no label)'), fl.job_name
+                  )
+                  SELECT pj.environment,
+                    count_if(array_contains(pj.statuses, 'FAILED')) AS failed_jobs,
+                    count_if(NOT array_contains(pj.statuses, 'FAILED') AND array_contains(pj.statuses, 'WARNING')) AS warning_jobs,
+                    count_if(NOT array_contains(pj.statuses, 'FAILED') AND NOT array_contains(pj.statuses, 'WARNING')
+                      AND array_contains(pj.statuses, 'UNKNOWN')) AS unknown_jobs,
+                    count_if(array_except(pj.statuses, array('HEALTHY')) = array()) AS healthy_jobs,
+                    count(*) AS jobs
+                  FROM per_job pj
+                  GROUP BY pj.environment
+                  ORDER BY pj.environment
+            - id: "c0000000000000000000000000000007"
+              question: ["Show the last 7 days for orders_ingest."]
+              usage_guidance: ["Use for one job's history. Replace orders_ingest with the job asked about."]
+              sql:
+                - |
+                  SELECT date(f.observed_at) AS day,
+                    count(DISTINCT f.scan_id) AS scans,
+                    count(DISTINCT f.scan_id) FILTER (WHERE f.status = 'FAILED') AS scans_failed,
+                    count(DISTINCT f.scan_id) FILTER (WHERE f.status = 'WARNING') AS scans_warning,
+                    array_sort(collect_set(f.check_id) FILTER (WHERE f.status <> 'HEALTHY')) AS checks_not_healthy,
+                    max_by(f.error_summary, f.observed_at) FILTER (WHERE f.status = 'FAILED') AS last_error
+                  FROM ${var.catalog}.${var.schema}.findings f
+                  WHERE f.job_name = 'orders_ingest' AND f.observed_at >= current_timestamp() - INTERVAL 7 DAYS
+                  GROUP BY date(f.observed_at)
+                  ORDER BY day DESC
+            - id: "c0000000000000000000000000000008"
+              question: ["Which jobs are affected by the current failures?"]
+              sql:
+                - |
+                  SELECT fl.job_name AS failed_job,
+                    array_sort(array_distinct(flatten(collect_list(fl.affected_jobs)))) AS affected_jobs,
+                    array_sort(collect_set(fl.workspace_name)) AS workspaces
+                  FROM ${var.catalog}.${var.schema}.findings_latest fl
+                  WHERE fl.status = 'FAILED' AND fl.affected_jobs IS NOT NULL
+                  GROUP BY fl.job_name
+                  ORDER BY size(affected_jobs) DESC, fl.job_name
+            - id: "c0000000000000000000000000000009"
+              question: ["What breaks if orders_ingest fails?"]
+              usage_guidance: ["Use for impact through the configured chain, also for a job that is not failing now. Replace orders_ingest with the job asked about, and keep WITH RECURSIVE: it follows a chain of any length."]
+              sql:
+                - |
+                  WITH RECURSIVE edges AS (
+                    SELECT jd.depends_on AS upstream, jd.job_name AS downstream
+                    FROM ${var.catalog}.${var.schema}.job_dependencies jd
+                    WHERE jd.dependency_type IN ('job', 'child_job')
+                    UNION ALL
+                    SELECT jd.job_name AS upstream, jd.depends_on AS downstream
+                    FROM ${var.catalog}.${var.schema}.job_dependencies jd
+                    WHERE jd.dependency_type = 'child_job'
+                  ),
+                  downstream (job_name, hops) AS (
+                    SELECT e.downstream, 1 FROM edges e WHERE e.upstream = 'orders_ingest'
+                    UNION ALL
+                    SELECT e.downstream, d.hops + 1
+                    FROM downstream d JOIN edges e ON e.upstream = d.job_name
+                    WHERE d.hops < 10
+                  )
+                  SELECT d.job_name AS affected_job, min(d.hops) AS hops
+                  FROM downstream d
+                  WHERE d.job_name <> 'orders_ingest'
+                  GROUP BY d.job_name
+                  ORDER BY hops, affected_job
+            - id: "c0000000000000000000000000000010"
+              question: ["Summarize the last 24 hours."]
+              sql:
+                - |
+                  SELECT f.job_name, f.environment,
+                    count(DISTINCT f.scan_id) AS scans,
+                    count(DISTINCT f.scan_id) FILTER (WHERE f.status = 'FAILED') AS scans_failed,
+                    count(DISTINCT f.scan_id) FILTER (WHERE f.status = 'WARNING') AS scans_warning,
+                    min(f.observed_at) FILTER (WHERE f.status = 'FAILED') AS first_failed_at,
+                    max(f.observed_at) FILTER (WHERE f.status = 'FAILED') AS last_failed_at,
+                    array_sort(collect_set(f.check_id) FILTER (WHERE f.status <> 'HEALTHY')) AS checks_not_healthy
+                  FROM ${var.catalog}.${var.schema}.findings f
+                  WHERE f.observed_at >= current_timestamp() - INTERVAL 24 HOURS
+                  GROUP BY f.job_name, f.environment
+                  HAVING scans_failed > 0 OR scans_warning > 0
+                  ORDER BY scans_failed DESC, scans_warning DESC, f.job_name
+        benchmarks:
+          questions:
+            - id: "d0000000000000000000000000000001"
+              question: ["How many jobs are failing right now?"]
+              answer:
+                - format: SQL
+                  content:
+                    - |
+                      SELECT count(DISTINCT fl.job_name) AS failing_jobs
+                      FROM ${var.catalog}.${var.schema}.findings_latest fl
+                      WHERE fl.status = 'FAILED'
+              evaluation_note: ["The count is of jobs with a FAILED row. An answer may add the jobs with only warnings as a second number."]
+            - id: "d0000000000000000000000000000002"
+              question: ["Which CRITICAL jobs failed in the newest scan, and who owns them?"]
+              answer:
+                - format: SQL
+                  content:
+                    - |
+                      SELECT DISTINCT fl.job_name, fl.owner
+                      FROM ${var.catalog}.${var.schema}.findings_latest fl
+                      WHERE fl.status = 'FAILED' AND fl.severity = 'CRITICAL'
+                      ORDER BY fl.job_name
+            - id: "d0000000000000000000000000000003"
+              question: ["Which team owns the most jobs that failed in the newest scan?"]
+              answer:
+                - format: SQL
+                  content:
+                    - |
+                      SELECT fl.owner, count(DISTINCT fl.job_name) AS failed_jobs
+                      FROM ${var.catalog}.${var.schema}.findings_latest fl
+                      WHERE fl.status = 'FAILED'
+                      GROUP BY fl.owner
+                      ORDER BY failed_jobs DESC, fl.owner
+            - id: "d0000000000000000000000000000004"
+              question: ["Which job has the most jobs depending on it directly?"]
+              answer:
+                - format: SQL
+                  content:
+                    - |
+                      SELECT jd.depends_on AS job_name, count(*) AS direct_dependents
+                      FROM ${var.catalog}.${var.schema}.job_dependencies jd
+                      WHERE jd.dependency_type = 'job'
+                      GROUP BY jd.depends_on
+                      ORDER BY direct_dependents DESC, job_name
+                      LIMIT 1
+            - id: "d0000000000000000000000000000005"
+              question: ["Which jobs failed at least once in the last 7 days?"]
+              answer:
+                - format: SQL
+                  content:
+                    - |
+                      SELECT DISTINCT f.job_name
+                      FROM ${var.catalog}.${var.schema}.findings f
+                      WHERE f.status = 'FAILED' AND f.observed_at >= current_timestamp() - INTERVAL 7 DAYS
+                      ORDER BY f.job_name
+            - id: "d0000000000000000000000000000006"
+              question: ["When did each source last scan?"]
+              answer:
+                - format: SQL
+                  content:
+                    - |
+                      SELECT fl.source, max(fl.observed_at) AS newest_scan
+                      FROM ${var.catalog}.${var.schema}.findings_latest fl
+                      GROUP BY fl.source
+                      ORDER BY fl.source
+            - id: "d0000000000000000000000000000007"
+              question: ["Which jobs are checked in more than one environment?"]
+              answer:
+                - format: SQL
+                  content:
+                    - |
+                      SELECT fl.job_name, array_sort(collect_set(fl.environment)) AS environments
+                      FROM ${var.catalog}.${var.schema}.findings_latest fl
+                      WHERE fl.environment IS NOT NULL
+                      GROUP BY fl.job_name
+                      HAVING count(DISTINCT fl.environment) > 1
+                      ORDER BY fl.job_name
+            - id: "d0000000000000000000000000000008"
+              question: ["How many failing jobs have other jobs downstream of them?"]
+              answer:
+                - format: SQL
+                  content:
+                    - |
+                      SELECT count(DISTINCT fl.job_name) AS failing_jobs_with_downstream
+                      FROM ${var.catalog}.${var.schema}.findings_latest fl
+                      WHERE fl.status = 'FAILED' AND size(fl.affected_jobs) > 0

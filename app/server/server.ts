@@ -1,6 +1,6 @@
 import { analytics, createApp, genie, jobs, lakebase, server } from "@databricks/appkit";
 import { registerAppConfigRoute } from "./app-config";
-import { registerCopilotRoutes } from "./copilot/routes";
+import { genieConversations, registerCopilotRoutes } from "./copilot/routes";
 import { ensureSchema } from "./db/schema";
 import { registerIdentityRoutes } from "./identity";
 import { registerJobListRoutes } from "./joblist/routes";
@@ -25,7 +25,7 @@ await createApp({
       registerIdentityRoutes(app);
       registerAppConfigRoute(app, appkit);
       registerJobListRoutes(app, { pool: appkit.lakebase.pool });
-      registerCopilotRoutes(app, { pool: appkit.lakebase.pool });
+      registerCopilotRoutes(app, { conversations: genieConversations(appkit) });
     });
   },
 });
