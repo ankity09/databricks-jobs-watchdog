@@ -1,0 +1,121 @@
+{
+  "invalid_bool_as_number.yml": {
+    "ok": false,
+    "error_contains": "max_retries must be a whole number of zero or more"
+  },
+  "invalid_child_with_two_parents.yml": {
+    "ok": false,
+    "error_contains": "a job can have only one parent"
+  },
+  "invalid_defaults_sets_a_pattern.yml": {
+    "ok": false,
+    "error_contains": "defaults cannot set job_name_regex"
+  },
+  "invalid_dependency_type.yml": {
+    "ok": false,
+    "error_contains": "dependency_type must be one of"
+  },
+  "invalid_dependency_unknown_job.yml": {
+    "ok": false,
+    "error_contains": "missing_job is not a configured job"
+  },
+  "invalid_duplicate_job_name.yml": {
+    "ok": false,
+    "error_contains": "duplicate job_name 'orders_ingest'"
+  },
+  "invalid_enabled_text.yml": {
+    "ok": false,
+    "error_contains": "enabled must be true or false"
+  },
+  "invalid_environment_not_a_label.yml": {
+    "ok": false,
+    "error_contains": "is not a label in the workspaces section"
+  },
+  "invalid_environment_unknown_key.yml": {
+    "ok": false,
+    "error_contains": "has unknown keys ['notes']"
+  },
+  "invalid_job_ids_not_digits.yml": {
+    "ok": false,
+    "error_contains": "job_ids must be whole numbers"
+  },
+  "invalid_job_ids_twice.yml": {
+    "ok": false,
+    "error_contains": "job ID 111 is listed twice"
+  },
+  "invalid_missing_job_name.yml": {
+    "ok": false,
+    "error_contains": "every job needs a job_name"
+  },
+  "invalid_negative_number.yml": {
+    "ok": false,
+    "error_contains": "max_runtime_minutes must be a whole number of zero or more"
+  },
+  "invalid_no_jobs.yml": {
+    "ok": false,
+    "error_contains": "lists no jobs"
+  },
+  "invalid_regex.yml": {
+    "ok": false,
+    "error_contains": "job_name_regex does not compile"
+  },
+  "invalid_schedule_type.yml": {
+    "ok": false,
+    "error_contains": "schedule_type must be one of ['continuous', 'scheduled', 'triggered']"
+  },
+  "invalid_scheduled_without_gap.yml": {
+    "ok": false,
+    "error_contains": "scheduled jobs need max_gap_minutes"
+  },
+  "invalid_severity.yml": {
+    "ok": false,
+    "error_contains": "severity must be one of ['CRITICAL', 'WARNING']"
+  },
+  "invalid_triggered_with_gap.yml": {
+    "ok": false,
+    "error_contains": "triggered jobs have no schedule check, so remove max_gap_minutes"
+  },
+  "invalid_unknown_job_key.yml": {
+    "ok": false,
+    "error_contains": "unknown keys ['max_gap']"
+  },
+  "invalid_workspace_id_not_digits.yml": {
+    "ok": false,
+    "error_contains": "workspace_id must be digits"
+  },
+  "invalid_workspace_listed_twice.yml": {
+    "ok": false,
+    "error_contains": "workspace 222 is listed twice"
+  },
+  "invalid_workspace_without_environment.yml": {
+    "ok": false,
+    "error_contains": "environment is required"
+  },
+  "valid_anchors_merge_keys.yml": {
+    "ok": true
+  },
+  "valid_continuous_ignores_default_gap.yml": {
+    "ok": true
+  },
+  "valid_example.yml": {
+    "ok": true
+  },
+  "valid_job_ids_numbers_and_strings.yml": {
+    "ok": true
+  },
+  "valid_minimal.yml": {
+    "ok": true
+  },
+  "valid_service_dependency.yml": {
+    "ok": true
+  },
+  "valid_triggered_child.yml": {
+    "ok": true
+  },
+  "valid_workspaces_by_id_and_name.yml": {
+    "ok": true
+  },
+  "valid_yaml11_booleans.yml": {
+    "ok": true
+  }
+}

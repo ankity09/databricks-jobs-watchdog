@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 # Removes what the Watchdog bundle deployed.
 #
-#   ./teardown.sh [-t dev|demo] [-p profile] [--drop-schema] [-y]
+#   ./teardown.sh [-t dev|demo] [-p profile] [--drop-schema] [--drop-lakebase] [-y]
 #
 # Default: `databricks bundle destroy` for the target, which deletes the
 # watchdog_phase_1, watchdog_scan and watchdog_cleanup jobs (and, for -t demo,
-# the four demo jobs) and the bundle's workspace files. It does not delete the dashboard
+# the four demo jobs), the Watchdog app (watchdog_app), the copilot's MLflow
+# experiment and the bundle's workspace files. It does not delete the dashboard
 # from notebook 08; move that to the trash in the workspace yourself.
+#
+# The Lakebase project, its database and the database's owner role (watchdog_db,
+# watchdog_database and watchdog_owner) are unbound from the bundle first, so a
+# plain teardown keeps them and the job list the app holds survives.
+# --drop-lakebase also deletes the project, with everything in it, after the
+# destroy. You type the project ID to confirm unless -y.
 #
 # --drop-schema also drops <catalog>.<schema> with its tables and view
 # (monitored_jobs, job_dependencies, findings, monitored_workspaces,
@@ -26,6 +33,7 @@ usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' 
 
 target="dev"
 drop_schema=false
+drop_lakebase=false
 assume_yes=false
 profile_args=()
 while [[ $# -gt 0 ]]; do
@@ -33,6 +41,7 @@ while [[ $# -gt 0 ]]; do
     -t|--target) target="$2"; shift 2 ;;
     -p|--profile) profile_args=(--profile "$2"); shift 2 ;;
     --drop-schema) drop_schema=true; shift ;;
+    --drop-lakebase) drop_lakebase=true; shift ;;
     -y|--yes) assume_yes=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "teardown.sh: unknown option $1" >&2; usage >&2; exit 2 ;;
@@ -43,6 +52,7 @@ cd "$(dirname "$0")"
 vars="$(python3 scripts/bundle_vars.py --export)" || exit 2
 eval "$vars"
 schema_name="${BUNDLE_VAR_catalog}.${BUNDLE_VAR_schema}"
+lakebase_project="${BUNDLE_VAR_lakebase_project_id:-jobs-watchdog}"
 
 if $drop_schema; then
   listing="$(databricks tables list "$BUNDLE_VAR_catalog" "$BUNDLE_VAR_schema" --include-browse -o json \
@@ -63,9 +73,29 @@ print(" ".join(names))
   fi
 fi
 
+# Unbind the Lakebase resources so the destroy leaves them alone. A bundle that
+# never deployed them has nothing to unbind, which is fine.
+for key in watchdog_database watchdog_owner watchdog_db; do
+  databricks bundle deployment unbind "$key" -t "$target" ${profile_args[@]+"${profile_args[@]}"} || true
+done
+
 destroy_args=(bundle destroy -t "$target")
 if $assume_yes; then destroy_args+=(--auto-approve); fi
 databricks "${destroy_args[@]}" ${profile_args[@]+"${profile_args[@]}"}
+
+if $drop_lakebase; then
+  confirmed=true
+  if ! $assume_yes; then
+    read -r -p "Delete the Lakebase project ${lakebase_project} and everything in it? Type ${lakebase_project} to confirm: " answer
+    [[ "$answer" == "$lakebase_project" ]] || confirmed=false
+  fi
+  if $confirmed; then
+    databricks postgres delete-project "projects/${lakebase_project}" ${profile_args[@]+"${profile_args[@]}"}
+    echo "Deleted the Lakebase project ${lakebase_project}."
+  else
+    echo "Lakebase project kept."
+  fi
+fi
 
 if $drop_schema; then
   if ! $assume_yes; then

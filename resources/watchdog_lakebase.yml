@@ -1,0 +1,23 @@
+# The Watchdog app's Lakebase project and its database. The app keeps the
+# monitored-jobs list here (schema watchdog_app); with scan.config_source set to
+# lakebase, notebook 02 reads the newest version. A database must have an owner,
+# so the bundle creates a plain Postgres role for it. teardown.sh unbinds all
+# three before bundle destroy, so a plain teardown keeps the list; add
+# --drop-lakebase to delete the project.
+resources:
+  postgres_projects:
+    watchdog_db:
+      project_id: ${var.lakebase_project_id}
+      display_name: Watchdog app
+      pg_version: 17
+  postgres_roles:
+    watchdog_owner:
+      role_id: watchdog-owner
+      postgres_role: watchdog_owner
+      parent: ${resources.postgres_projects.watchdog_db.name}/branches/${var.lakebase_branch}
+  postgres_databases:
+    watchdog_database:
+      database_id: ${var.lakebase_database}
+      postgres_database: ${var.lakebase_database}
+      role: ${resources.postgres_roles.watchdog_owner.name}
+      parent: ${resources.postgres_projects.watchdog_db.name}/branches/${var.lakebase_branch}

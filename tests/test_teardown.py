@@ -66,10 +66,50 @@ def test_only_watchdog_tables_lets_the_schema_drop_run(sandbox):
     assert "schemas delete main.watchdog --force" in calls
 
 
+UNBIND_THEN_DESTROY = [
+    "bundle deployment unbind watchdog_database -t dev",
+    "bundle deployment unbind watchdog_owner -t dev",
+    "bundle deployment unbind watchdog_db -t dev",
+    "bundle destroy -t dev --auto-approve",
+]
+
+
 def test_plain_teardown_never_lists_or_drops_tables(sandbox):
     result, calls = run(sandbox, [], "-y")
     assert result.returncode == 0, result.stderr
-    assert calls == ["bundle destroy -t dev --auto-approve"]
+    assert calls == UNBIND_THEN_DESTROY
+
+
+def test_plain_teardown_keeps_the_lakebase_project(sandbox):
+    result, calls = run(sandbox, [], "-y")
+    assert result.returncode == 0, result.stderr
+    assert calls == UNBIND_THEN_DESTROY
+    assert not any(call.startswith("postgres") for call in calls)
+
+
+def test_drop_lakebase_deletes_the_project_after_the_destroy(sandbox):
+    result, calls = run(sandbox, [], "--drop-lakebase", "-y")
+    assert result.returncode == 0, result.stderr
+    assert calls[:-1] == UNBIND_THEN_DESTROY
+    assert calls[-1] == "postgres delete-project projects/jobs-watchdog"
+
+
+def test_drop_lakebase_keeps_the_project_unless_the_name_is_typed(sandbox):
+    log = sandbox / "calls.log"
+    env = dict(os.environ, PATH=f"{sandbox / 'bin'}:{os.environ['PATH']}", FAKE_LOG=str(log))
+    result = subprocess.run(["bash", str(sandbox / "teardown.sh"), "--drop-lakebase"], capture_output=True,
+                            text=True, env=env, input="nope\n")
+    assert result.returncode == 0
+    assert "Lakebase project kept." in result.stdout
+    assert not any(call.startswith("postgres") for call in log.read_text().splitlines())
+
+
+def test_a_teardown_of_a_bundle_that_never_had_the_app_still_works(sandbox):
+    (sandbox / "bin" / "databricks").write_text(FAKE_DATABRICKS.replace(
+        'exit 0', 'if [[ "$1 $2" == "bundle deployment" ]]; then echo "no such resource" >&2; exit 1; fi\nexit 0'))
+    result, calls = run(sandbox, [], "-y")
+    assert result.returncode == 0, result.stderr
+    assert calls[-1] == "bundle destroy -t dev --auto-approve"
 
 
 def test_bundle_vars_failure_stops_before_any_databricks_call(sandbox):

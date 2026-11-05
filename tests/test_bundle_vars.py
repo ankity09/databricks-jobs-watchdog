@@ -100,3 +100,27 @@ def test_older_files_without_the_schedule_keys_still_export_the_rest(tmp_path):
 def test_every_exported_variable_is_declared_in_databricks_yml():
     declared = yaml.safe_load((repo_root() / "databricks.yml").read_text())["variables"]
     assert set(VARIABLES) <= set(declared)
+
+
+APP_KEYS = """
+app:
+  name: watchdog-app
+  lakebase_project_id: jobs-watchdog
+  copilot_model: databricks-claude-sonnet-5-5
+"""
+
+
+def test_app_and_lakebase_settings_become_bundle_variables(tmp_path):
+    text = COMPLETE.replace("  region: us-east-1\n", "  region: us-east-1\n  warehouse_id: abc123\n")
+    text = text.replace("scan:\n", "scan:\n  config_source: lakebase\n") + APP_KEYS
+    variables = bundle_variables(write(tmp_path, text))
+    assert variables["warehouse_id"] == "abc123"
+    assert variables["config_source"] == "lakebase"
+    assert variables["app_name"] == "watchdog-app"
+    assert variables["lakebase_project_id"] == "jobs-watchdog"
+    assert variables["copilot_model"] == "databricks-claude-sonnet-5-5"
+
+
+def test_files_without_the_app_section_still_export_the_rest(tmp_path):
+    variables = bundle_variables(write(tmp_path, COMPLETE))
+    assert "app_name" not in variables and variables["catalog"] == "main"

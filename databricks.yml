@@ -6,8 +6,9 @@
 #   databricks bundle run watchdog_phase_1 -t dev --profile <your-profile>
 #
 # Targets:
-#   dev   the Phase 1 job, the scan job and the daily cleanup job (default)
-#   demo  the same three jobs plus four sample jobs (one succeeds, one fails, one
+#   dev   the Phase 1 job, the scan job, the daily cleanup job, the Watchdog app and
+#         its Lakebase project (default)
+#   demo  the same resources plus four sample jobs (one succeeds, one fails, one
 #         runs long, one retries), so a fresh workspace has something to watch
 #
 # Both targets use development mode, so deployed names carry a [dev <you>]
@@ -62,6 +63,26 @@ variables:
   retention_days:
     description: watchdog_cleanup deletes findings scans older than this many days, keeping each source's newest scan; 0 keeps everything
     default: "30"
+  warehouse_id:
+    description: SQL warehouse the Watchdog app reads findings through (required)
+  config_source:
+    description: Where notebook 02 reads the job list, yaml (the monitored-jobs file) or lakebase (the Watchdog app)
+    default: yaml
+  app_name:
+    description: Name of the Watchdog app; unique in the workspace
+    default: watchdog-app
+  lakebase_project_id:
+    description: Lakebase project that holds the Watchdog app's job list; unique in the workspace
+    default: jobs-watchdog
+  lakebase_branch:
+    description: Lakebase branch the scan reads the job list from
+    default: production
+  lakebase_database:
+    description: Postgres database in that branch
+    default: watchdog
+  copilot_model:
+    description: Streaming chat model endpoint for the copilot
+    default: databricks-claude-sonnet-5-5
   demo_schedule_status:
     description: PAUSED (default) or UNPAUSED; UNPAUSED runs the demo jobs on their schedules
     default: PAUSED

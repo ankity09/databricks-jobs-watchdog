@@ -13,6 +13,7 @@ VARIABLES = {
     "catalog": ("target", "catalog"),
     "schema": ("target", "schema"),
     "region": ("target", "region"),
+    "warehouse_id": ("target", "warehouse_id"),
     "lookback_hours": ("scan", "lookback_hours"),
     "auth_mode": ("auth", "mode"),
     "secret_scope": ("auth", "secret_scope"),
@@ -24,6 +25,10 @@ VARIABLES = {
     "scan_schedule": ("scan", "schedule"),
     "scan_schedule_status": ("scan", "schedule_status"),
     "retention_days": ("scan", "retention_days"),
+    "config_source": ("scan", "config_source"),
+    "app_name": ("app", "name"),
+    "lakebase_project_id": ("app", "lakebase_project_id"),
+    "copilot_model": ("app", "copilot_model"),
     # demo_schedule_status has no accelerator.yaml key: set it with --var
 }
 

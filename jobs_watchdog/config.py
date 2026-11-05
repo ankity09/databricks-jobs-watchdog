@@ -17,7 +17,8 @@ CONTINUOUS_MAX_GAP_MINUTES = 30
 SEVERITIES = {"CRITICAL", "WARNING"}
 DEPENDENCY_TYPES = {"job", "child_job", "service"}
 AUTH_MODES = {"current_workspace", "service_principal"}
-ACCELERATOR_SECTIONS = ("metadata", "target", "auth", "scan", "resources", "features")
+CONFIG_SOURCES = {"yaml", "lakebase"}
+ACCELERATOR_SECTIONS = ("metadata", "target", "auth", "scan", "app", "resources", "features")
 
 # keys a job entry may set; defaults may set any of them except the names and patterns
 JOB_KEYS = {

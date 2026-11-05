@@ -1,0 +1,10 @@
+jobs:
+  - job_name: daily_revenue_report
+    schedule_type: scheduled
+    max_gap_minutes: 1500
+  - job_name: daily_revenue_export
+    schedule_type: triggered
+dependencies:
+  - job_name: daily_revenue_export
+    depends_on: daily_revenue_report
+    dependency_type: child_job

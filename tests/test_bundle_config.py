@@ -12,6 +12,9 @@ SCAN_FILE = repo_root() / "resources" / "watchdog_scan.job.yml"
 CLEANUP_FILE = repo_root() / "resources" / "watchdog_cleanup.job.yml"
 EXAMPLE_CONFIG = repo_root() / "config" / "monitored_jobs.example.yml"
 CUSTOM_CHECK = repo_root() / "notebooks" / "09_custom_check_example.py"
+APP_FILE = repo_root() / "resources" / "watchdog_app.app.yml"
+LAKEBASE_FILE = repo_root() / "resources" / "watchdog_lakebase.yml"
+EXPERIMENT_FILE = repo_root() / "resources" / "watchdog_copilot.experiment.yml"
 
 # Demo job schedules as Quartz cron expressions, in UTC.
 DEMO_SCHEDULES = {
@@ -361,3 +364,54 @@ def test_example_config_pins_one_environment_by_job_id():
     assert enrich.settings_for("lower").job_ids == ()
     assert "job_ids" in EXAMPLE_CONFIG.read_text().split("\ndefaults:")[0]  # documented in the header
 
+
+
+def load_app():
+    return yaml.safe_load(APP_FILE.read_text())["resources"]["apps"]["watchdog_app"]
+
+
+def test_the_app_uses_the_variables_and_only_the_sql_user_scope():
+    app = load_app()
+    assert app["name"] == "${var.app_name}"
+    assert app["source_code_path"] == "../app"
+    assert app["user_api_scopes"] == ["sql"]
+
+
+def test_the_app_resources_carry_the_appkit_keys_and_permissions():
+    resources = {r["name"]: r for r in load_app()["resources"]}
+    assert set(resources) == {"sql-warehouse", "postgres", "job", "agents-serving-endpoint",
+                              "agents-mlflow-experiment"}
+    assert resources["sql-warehouse"]["sql_warehouse"] == {"id": "${var.warehouse_id}", "permission": "CAN_USE"}
+    assert resources["job"]["job"] == {"id": "${resources.jobs.watchdog_scan.id}", "permission": "CAN_MANAGE_RUN"}
+    assert resources["agents-serving-endpoint"]["serving_endpoint"] == {"name": "${var.copilot_model}",
+                                                                        "permission": "CAN_QUERY"}
+    assert resources["postgres"]["postgres"]["permission"] == "CAN_CONNECT_AND_CREATE"
+    assert resources["agents-mlflow-experiment"]["experiment"]["permission"] == "CAN_EDIT"
+
+
+def test_the_lakebase_project_and_database_use_the_variables():
+    resources = yaml.safe_load(LAKEBASE_FILE.read_text())["resources"]
+    project = resources["postgres_projects"]["watchdog_db"]
+    database = resources["postgres_databases"]["watchdog_database"]
+    assert project["project_id"] == "${var.lakebase_project_id}"
+    assert database["database_id"] == "${var.lakebase_database}"
+
+
+def test_every_app_variable_is_declared_with_the_spec_defaults():
+    variables = load_bundle()["variables"]
+    assert "default" not in variables["warehouse_id"]
+    assert variables["config_source"]["default"] == "yaml"
+    assert variables["app_name"]["default"] == "watchdog-app"
+    assert variables["lakebase_project_id"]["default"] == "jobs-watchdog"
+    assert variables["lakebase_branch"]["default"] == "production"
+    assert variables["lakebase_database"]["default"] == "watchdog"
+    assert variables["copilot_model"]["default"] == "databricks-claude-sonnet-5-5"
+
+
+def test_accelerator_yaml_app_settings_match_the_bundle_defaults():
+    data = yaml.safe_load((repo_root() / "accelerator.yaml").read_text())
+    variables = load_bundle()["variables"]
+    assert data["scan"]["config_source"] == variables["config_source"]["default"]
+    assert data["app"]["name"] == variables["app_name"]["default"]
+    assert data["app"]["lakebase_project_id"] == variables["lakebase_project_id"]["default"]
+    assert data["app"]["copilot_model"] == variables["copilot_model"]["default"]

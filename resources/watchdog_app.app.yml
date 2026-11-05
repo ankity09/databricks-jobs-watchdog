@@ -1,0 +1,33 @@
+# The Watchdog app. bundle deploy creates or updates it; bundle run watchdog_app
+# deploys the code and starts it. Queries run as the person signed in (the sql
+# user scope); Lakebase, Scan now and the model run as the app.
+resources:
+  apps:
+    watchdog_app:
+      name: ${var.app_name}
+      description: "Watchdog: job monitoring, the monitored-jobs list and a read-only copilot"
+      source_code_path: ../app
+      user_api_scopes:
+        - sql
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+        - name: postgres
+          postgres:
+            branch: ${resources.postgres_projects.watchdog_db.name}/branches/${var.lakebase_branch}
+            database: ${resources.postgres_databases.watchdog_database.name}
+            permission: CAN_CONNECT_AND_CREATE
+        - name: job
+          job:
+            id: ${resources.jobs.watchdog_scan.id}
+            permission: CAN_MANAGE_RUN
+        - name: agents-serving-endpoint
+          serving_endpoint:
+            name: ${var.copilot_model}
+            permission: CAN_QUERY
+        - name: agents-mlflow-experiment
+          experiment:
+            experiment_id: ${resources.experiments.watchdog_copilot.id}
+            permission: CAN_EDIT

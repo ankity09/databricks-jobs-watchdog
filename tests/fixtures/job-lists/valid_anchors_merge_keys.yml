@@ -1,0 +1,4 @@
+jobs:
+  - &common {job_name: orders_ingest, max_gap_minutes: 60, owner: platform-team}
+  - <<: *common
+    job_name: orders_enrich
