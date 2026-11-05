@@ -63,8 +63,8 @@ def test_every_task_notebook_exists():
 
 def test_job_parameters_match_the_notebook_widgets():
     names = {parameter["name"] for parameter in load_job()["parameters"]}
-    # retention_days is only for the cleanup job
-    assert names == set(WIDGETS) - {"retention_days"}
+    # retention_days is only for the cleanup job, app_name only for the app access job
+    assert names == set(WIDGETS) - {"retention_days", "app_name"}
 
 
 def test_phase_1_runs_the_setup_scan_and_validation_notebooks_but_not_the_explore_ones():
@@ -629,3 +629,27 @@ def test_genie_resource_header_says_tables_must_exist_first():
     header = "".join(line for line in GENIE_FILE.read_text().splitlines(True) if line.startswith("#"))
     assert "scripts/deploy_regions.py" in header
     assert "must exist before the first deploy" in header
+
+
+ACCESS_FILE = repo_root() / "resources" / "watchdog_app_access.job.yml"
+
+
+def load_access_job():
+    return yaml.safe_load(ACCESS_FILE.read_text())["resources"]["jobs"]["watchdog_app_access"]
+
+
+def test_the_app_access_job_runs_notebook_11_on_demand_on_serverless():
+    job = load_access_job()
+    assert "schedule" not in job and job["max_concurrent_runs"] == 1
+    (task,) = job["tasks"]
+    assert task["notebook_task"]["notebook_path"] == "../notebooks/11_grant_app_access.py"
+    assert (ACCESS_FILE.parent / task["notebook_task"]["notebook_path"]).resolve().is_file()
+    assert not {"job_cluster_key", "existing_cluster_id", "new_cluster"} & set(task)
+    assert "watchdog_app_access" in included_jobs()
+
+
+def test_the_app_access_job_takes_the_app_and_lakebase_names_from_the_bundle_variables():
+    parameters = {p["name"]: p["default"] for p in load_access_job()["parameters"]}
+    names = ("app_name", "lakebase_project_id", "lakebase_branch", "lakebase_database")
+    assert parameters == {name: f"${{var.{name}}}" for name in names}
+    assert set(parameters) <= set(WIDGETS) and set(parameters) <= set(load_bundle()["variables"])

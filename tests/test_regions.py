@@ -171,7 +171,15 @@ def test_deploy_steps_validate_deploy_run_without_the_table_step():
         ["databricks", "bundle", "validate", "--strict", "-t", "production"],
         ["databricks", "bundle", "deploy", "-t", "production"],
         ["databricks", "bundle", "run", "watchdog_app", "-t", "production"],
+        ["databricks", "bundle", "run", "watchdog_app_access", "-t", "production"],
     ]
+
+
+def test_deploy_steps_give_the_app_access_to_a_kept_job_list_last_unless_told_not_to():
+    steps = deploy_steps(region(), validate_only=False, run_app=False, ensure_tables=False)
+    assert [s.label for s in steps][-1] == "app access"
+    steps = deploy_steps(region(), validate_only=False, run_app=True, ensure_tables=False, app_access=False)
+    assert [s.label for s in steps][-1] == "run app"
 
 
 def test_deploy_steps_add_the_profile_to_every_command():
@@ -184,8 +192,8 @@ def test_deploy_steps_validate_only_is_just_the_validate_and_never_touches_table
     assert argv(steps) == [["databricks", "bundle", "validate", "--strict", "-t", "production"]]
 
 
-def test_deploy_steps_no_app_run_stops_after_the_deploy():
-    steps = deploy_steps(region(), validate_only=False, run_app=False, ensure_tables=False)
+def test_deploy_steps_no_app_run_leaves_out_the_app_run():
+    steps = deploy_steps(region(), validate_only=False, run_app=False, ensure_tables=False, app_access=False)
     assert [s.argv[1:3] for s in steps] == [["bundle", "validate"], ["bundle", "deploy"]]
 
 
@@ -193,8 +201,8 @@ def test_deploy_steps_validate_first_then_tables_then_deploy():
     steps = deploy_steps(region(), validate_only=False, run_app=True)
     labels = [s.label for s in steps]
     assert labels[0] == "validate"
-    assert labels[-2:] == ["deploy", "run app"]
-    assert all(label.startswith("tables") for label in labels[1:-2])
+    assert labels[-3:] == ["deploy", "run app", "app access"]
+    assert all(label.startswith("tables") for label in labels[1:-3])
 
 
 def test_ensure_tables_runs_every_setup_file_in_sorted_order_with_named_parameters():

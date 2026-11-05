@@ -14,6 +14,9 @@ deploy section; see docs/multi-region.md. For each region, in turn:
      this off
   3. databricks bundle deploy -t production
   4. databricks bundle run watchdog_app -t production; --no-app-run skips it
+  5. databricks bundle run watchdog_app_access -t production: after a teardown
+     and a new deploy, it gives the new app access to the job list the teardown
+     kept, and otherwise changes nothing; --skip-app-access skips it
 
 --validate-only runs step 1 and nothing else. A failed step skips the rest of
 that region and the script carries on with the next one. It prints a summary
@@ -110,7 +113,8 @@ def deploy_region(region, args, results):
     if env.pop("DATABRICKS_CONFIG_PROFILE", None):
         print(f"[{region.name}] ignoring DATABRICKS_CONFIG_PROFILE from the environment; "
               f"this region deploys to {region.host}.", file=sys.stderr, flush=True)
-    steps = deploy_steps(region, args.validate_only, not args.no_app_run, not args.skip_ensure_tables)
+    steps = deploy_steps(region, args.validate_only, not args.no_app_run, not args.skip_ensure_tables,
+                         not args.skip_app_access)
     failed = False
     for step in steps:
         if failed:
@@ -142,6 +146,8 @@ def main(argv=None):
     parser.add_argument("--no-app-run", action="store_true", help="deploy the bundle but do not run bundle run watchdog_app")
     parser.add_argument("--skip-ensure-tables", action="store_true",
                         help="do not create the Watchdog tables and views before the deploy")
+    parser.add_argument("--skip-app-access", action="store_true",
+                        help="do not run the watchdog_app_access job after the deploy")
     args = parser.parse_args(argv)
     try:
         regions = load_regions(args.paths, only=args.only)

@@ -166,12 +166,15 @@ def _ensure_tables_steps(region):
     return steps
 
 
-def deploy_steps(region, validate_only, run_app, ensure_tables=True):
+def deploy_steps(region, validate_only, run_app, ensure_tables=True, app_access=True):
     """The commands for one region, in order.
 
     validate, then (unless validate_only) the Watchdog tables and views a fresh
     region lacks, which the copilot's Genie agent needs before the first
-    deploy, then bundle deploy, then bundle run watchdog_app.
+    deploy, then bundle deploy, then bundle run watchdog_app, then the
+    watchdog_app_access job: after a teardown and a new deploy, it gives the
+    new app access to the job list the teardown kept (it changes nothing
+    otherwise).
     """
     profile = _profile_args(region)
     steps = [Step("validate", ["databricks", "bundle", "validate", "--strict", "-t", TARGET] + profile)]
@@ -182,4 +185,6 @@ def deploy_steps(region, validate_only, run_app, ensure_tables=True):
     steps.append(Step("deploy", ["databricks", "bundle", "deploy", "-t", TARGET] + profile))
     if run_app:
         steps.append(Step("run app", ["databricks", "bundle", "run", "watchdog_app", "-t", TARGET] + profile))
+    if app_access:
+        steps.append(Step("app access", ["databricks", "bundle", "run", "watchdog_app_access", "-t", TARGET] + profile))
     return steps

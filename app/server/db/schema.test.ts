@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ensureSchema } from "./schema";
+import { ensureSchema, schemaErrorLog, schemaGate } from "./schema";
 
 function fakeClient() {
   return { query: vi.fn().mockResolvedValue({ rows: [] }), release: vi.fn() };
@@ -50,5 +50,49 @@ describe("ensureSchema", () => {
     await done;
     expect(pool.connect).toHaveBeenCalledTimes(2);
     expect(statements(client)).toContain("COMMIT");
+  });
+});
+
+describe("schemaGate", () => {
+  const pool = fakePool(fakeClient());
+
+  it("runs the schema check once it has worked, and not again", async () => {
+    const ensure = vi.fn().mockResolvedValue(undefined);
+    const gate = schemaGate(pool, { ensure });
+    await gate.ready();
+    await gate.ready();
+    expect(ensure).toHaveBeenCalledTimes(1);
+  });
+
+  it("tries again on a later request after a failure, but not more than once per wait", async () => {
+    let now = 1_000;
+    const ensure = vi.fn().mockRejectedValueOnce(new Error("timeout exceeded when trying to connect")).mockResolvedValue(undefined);
+    const gate = schemaGate(pool, { ensure, retryAfterMs: 10_000, now: () => now });
+    await expect(gate.ready()).rejects.toThrow("timeout");
+    await expect(gate.ready()).rejects.toThrow("timeout");
+    expect(ensure).toHaveBeenCalledTimes(1);
+    now += 10_000;
+    await gate.ready();
+    expect(ensure).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks the database once for requests that arrive together", async () => {
+    const ensure = vi.fn().mockResolvedValue(undefined);
+    const gate = schemaGate(pool, { ensure });
+    await Promise.all([gate.ready(), gate.ready(), gate.ready()]);
+    expect(ensure).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("schemaErrorLog", () => {
+  it("names the access job when the app's service principal was refused", () => {
+    const denied = Object.assign(new Error("permission denied for schema watchdog_app"), { code: "42501" });
+    expect(schemaErrorLog(denied)).toContain("watchdog_app_access");
+    expect(schemaErrorLog(denied)).toContain("42501");
+  });
+  it("says the job list tries again for any other failure", () => {
+    expect(schemaErrorLog(new Error("connect ECONNREFUSED"))).toBe(
+      "[lakebase] Could not create the watchdog_app schema: connect ECONNREFUSED. The job list tries again on its next request.",
+    );
   });
 });

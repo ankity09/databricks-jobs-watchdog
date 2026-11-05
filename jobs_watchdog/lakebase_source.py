@@ -122,12 +122,17 @@ def current_username(api):
     return name
 
 
-def _fetch_latest(api, target, connect):
+def open_branch(api, target, connect):
+    """A connection to the target's database as the identity the API client runs as (a context manager, as psycopg's is)."""
     endpoint_name, host = read_write_endpoint(api, target)
     password = database_credential(api, endpoint_name)
     user = current_username(api)
-    with connect(host=host, port=5432, dbname=target.database, user=user, password=password,
-                 sslmode="require", connect_timeout=30) as connection:
+    return connect(host=host, port=5432, dbname=target.database, user=user, password=password,
+                   sslmode="require", connect_timeout=30)
+
+
+def _fetch_latest(api, target, connect):
+    with open_branch(api, target, connect) as connection:
         with connection.cursor() as cursor:
             cursor.execute(_QUERY)
             return cursor.fetchone()

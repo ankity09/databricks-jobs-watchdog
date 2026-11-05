@@ -7,7 +7,7 @@
 # with a region file to tear down one region's Watchdog (docs/multi-region.md).
 #
 # Default: `databricks bundle destroy` for the target, which deletes the
-# watchdog_phase_1, watchdog_scan and watchdog_cleanup jobs (and, for -t demo,
+# watchdog_phase_1, watchdog_scan, watchdog_cleanup and watchdog_app_access jobs (and, for -t demo,
 # the four demo jobs), the Watchdog app (watchdog_app), the copilot's MLflow
 # experiment and the bundle's workspace files. It does not delete the dashboard
 # from notebook 08; move that to the trash in the workspace yourself.
@@ -118,6 +118,10 @@ if ! $drop_lakebase; then
   echo "  databricks bundle deployment bind watchdog_db projects/${lakebase_project} -t ${target} --auto-approve"
   echo "  databricks bundle deployment bind watchdog_owner ${branch}/roles/watchdog-owner -t ${target} --auto-approve"
   echo "  databricks bundle deployment bind watchdog_database ${branch}/databases/${BUNDLE_VAR_lakebase_database:-watchdog} -t ${target} --auto-approve"
+  echo "Then deploy, start the app, and give the new app's service principal access to the kept list:"
+  echo "  databricks bundle deploy -t ${target}"
+  echo "  databricks bundle run watchdog_app -t ${target}"
+  echo "  databricks bundle run watchdog_app_access -t ${target}"
 fi
 
 if $drop_lakebase; then

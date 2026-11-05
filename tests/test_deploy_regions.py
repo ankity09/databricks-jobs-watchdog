@@ -114,8 +114,9 @@ def test_a_full_deploy_creates_tables_then_deploys_then_runs_the_app(sandbox):
     assert result.returncode == 0, result.stdout + result.stderr
     kinds = [" ".join(call.split(" ")[:2]) for call in calls]
     assert kinds[0] == "bundle validate"
-    assert kinds[-2:] == ["bundle deploy", "bundle run"]
-    middle = kinds[1:-2]
+    assert kinds[-3:] == ["bundle deploy", "bundle run", "bundle run"]
+    assert bundle_calls(calls)[-1] == "bundle run watchdog_app_access -t production"
+    middle = kinds[1:-3]
     assert middle and set(middle) == {"api post"}
     first_deploy = kinds.index("bundle deploy")
     assert all(kind == "api post" for kind in kinds[1:first_deploy])
@@ -136,11 +137,16 @@ def test_skip_ensure_tables_leaves_out_the_api_calls(sandbox):
     assert result.returncode == 0, result.stdout + result.stderr
     assert not any(call.startswith("api ") for call in calls)
     assert bundle_calls(calls) == ["bundle validate --strict -t production", "bundle deploy -t production",
-                                   "bundle run watchdog_app -t production"]
+                                   "bundle run watchdog_app -t production",
+                                   "bundle run watchdog_app_access -t production"]
 
 
-def test_no_app_run_stops_after_the_deploy(sandbox):
+def test_no_app_run_leaves_out_the_app_run_and_skip_app_access_the_access_job(sandbox):
     result, calls = run(sandbox, str(sandbox / "regions" / "accelerator.lower.yaml"), "--no-app-run")
+    assert result.returncode == 0
+    assert bundle_calls(calls)[-2:] == ["bundle deploy -t production", "bundle run watchdog_app_access -t production"]
+    result, calls = run(sandbox, str(sandbox / "regions" / "accelerator.lower.yaml"), "--no-app-run",
+                        "--skip-app-access")
     assert result.returncode == 0
     assert bundle_calls(calls)[-1] == "bundle deploy -t production"
 

@@ -196,6 +196,14 @@ def test_a_plain_teardown_prints_how_to_bind_the_kept_lakebase_resources(sandbox
     assert "branches/production/databases/watchdog" in result.stdout
 
 
+def test_the_hint_ends_with_giving_the_new_app_access_to_the_kept_list(sandbox):
+    out = run_with_input(sandbox, "", "-y")[0].stdout
+    steps = ["bundle deployment bind watchdog_database", "databricks bundle deploy -t dev",
+             "databricks bundle run watchdog_app -t dev", "databricks bundle run watchdog_app_access -t dev"]
+    assert all(step in out for step in steps)
+    assert [out.index(step) for step in steps] == sorted(out.index(step) for step in steps)
+
+
 def test_dropping_the_lakebase_project_prints_no_bind_hint(sandbox):
     result, _ = run_with_input(sandbox, "", "--drop-lakebase", "-y")
     assert "bundle deployment bind" not in result.stdout

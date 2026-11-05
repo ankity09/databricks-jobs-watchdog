@@ -3,7 +3,7 @@ import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { MemoryVersionRepo } from "./memory-repo";
 import { createJobListRouter } from "./routes";
-import { createJobListStore } from "./store";
+import { createJobListStore, type JobListStore } from "./store";
 
 /** The fields the tests read from a response body; the routes' contract fixes their types. */
 interface Body {
@@ -206,5 +206,42 @@ describe("job-list routes", () => {
     const res = await request(app()).post("/api/job-list/import/preview").send({ yaml: bomb });
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: "yaml", message: "The YAML file uses too many aliases." });
+  });
+});
+
+const denied = () => Object.assign(new Error("permission denied for schema watchdog_app"), { code: "42501" });
+
+function appWith(store: JobListStore, ready?: () => Promise<void>) {
+  const server = express();
+  server.use("/api/job-list", createJobListRouter(store, { ready }));
+  return server;
+}
+
+describe("when the app cannot use its schema", () => {
+  it("says what to do, with 503, when the startup check was refused for lack of a privilege", async () => {
+    const res = await request(appWith(createJobListStore(new MemoryVersionRepo()), () => Promise.reject(denied())))
+      .get("/api/job-list");
+    expect(res.status).toBe(503);
+    expect(body(res).error).toBe("no_access");
+    expect(body(res).message).toContain("watchdog_app_access");
+  });
+
+  it("answers 503 not_ready when the database did not answer, and lets the request through once it is ready", async () => {
+    let ready: () => Promise<void> = () => Promise.reject(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }));
+    const server = appWith(createJobListStore(new MemoryVersionRepo()), () => ready());
+    const first = await request(server).get("/api/job-list");
+    expect(first.status).toBe(503);
+    expect(body(first).error).toBe("not_ready");
+    expect(JSON.stringify(first.body)).not.toContain("ECONNREFUSED");
+    ready = () => Promise.resolve();
+    expect((await request(server).get("/api/job-list")).status).toBe(200);
+  });
+
+  it("says the same when a query is refused later, for example after a grant was taken back", async () => {
+    const store = createJobListStore(new MemoryVersionRepo());
+    const refusing: JobListStore = { ...store, latest: () => Promise.reject(denied()) };
+    const res = await request(appWith(refusing)).get("/api/job-list");
+    expect(res.status).toBe(503);
+    expect(body(res).error).toBe("no_access");
   });
 });

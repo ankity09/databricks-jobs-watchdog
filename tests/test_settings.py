@@ -137,3 +137,11 @@ def test_lakebase_widgets_have_defaults_and_are_checked(tmp_path):
     with pytest.raises(ValueError, match="lakebase_database"):
         read_settings({"lakebase_database": "my db"}, tmp_path)
     assert read_settings({"lakebase_database": "watchdog"}, tmp_path).lakebase_database == "watchdog"
+
+
+def test_app_name_defaults_to_the_bundle_s_and_is_checked(tmp_path):
+    assert widget_defaults(tmp_path)["app_name"] == "watchdog-app"
+    assert read_settings({"app_name": "watchdog-eu"}, tmp_path).app_name == "watchdog-eu"
+    for bad in ("Watchdog", "watchdog app", "-watchdog", "w", "a" * 31):
+        with pytest.raises(ValueError, match="app_name"):
+            read_settings({"app_name": bad}, tmp_path)

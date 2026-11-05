@@ -1,7 +1,7 @@
 import { analytics, createApp, genie, jobs, lakebase, server } from "@databricks/appkit";
 import { registerAppConfigRoute } from "./app-config";
 import { genieConversations, registerCopilotRoutes } from "./copilot/routes";
-import { ensureSchema } from "./db/schema";
+import { schemaErrorLog, schemaGate } from "./db/schema";
 import { registerIdentityRoutes } from "./identity";
 import { registerJobListRoutes } from "./joblist/routes";
 import { registerScanRoutes } from "./scan/routes";
@@ -18,16 +18,17 @@ await createApp({
     genie({ spaces: { default: process.env.DATABRICKS_GENIE_SPACE_ID } }),
   ],
   async onPluginsReady(appkit) {
+    const schema = schemaGate(appkit.lakebase.pool);
     try {
-      await ensureSchema(appkit.lakebase.pool);
+      await schema.ready();
     } catch (error) {
-      // Keep serving: Monitoring and the copilot work without Lakebase, and the job list routes report the error.
-      console.error("[lakebase] Could not create the watchdog_app schema:", error instanceof Error ? error.message : error);
+      // Keep serving: Monitoring and the copilot work without Lakebase, and the job list tries again on each request.
+      console.error(schemaErrorLog(error));
     }
     appkit.server.extend((app) => {
       registerIdentityRoutes(app);
       registerAppConfigRoute(app, appkit);
-      registerJobListRoutes(app, { pool: appkit.lakebase.pool });
+      registerJobListRoutes(app, { pool: appkit.lakebase.pool, ready: () => schema.ready() });
       registerCopilotRoutes(app, { conversations: genieConversations(appkit) });
       registerScanRoutes(app);
     });
