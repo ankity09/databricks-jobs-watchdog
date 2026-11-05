@@ -18,7 +18,10 @@ SELECT job_name,
        -- check name, so the reason stays the same from one refresh to the next.
        max_by(error_summary, struct(CASE status WHEN 'FAILED' THEN 3 WHEN 'WARNING' THEN 2 WHEN 'UNKNOWN' THEN 1 ELSE 0 END, source = 'JOBS_API', check_id)) AS top_error,
        max(run_start_time) AS last_run_start,
-       max_by(run_page_url, run_start_time) AS last_run_url,
+       -- The newest run's link. That run's system-tables and Jobs API rows tie on the start time, and only one may
+       -- have the link, so among rows that tie a link wins. Only rows with a start time count, so the link is
+       -- never an older run's.
+       max_by(run_page_url, struct(run_start_time, run_page_url IS NOT NULL)) FILTER (WHERE run_start_time IS NOT NULL) AS last_run_url,
        max(observed_at) AS observed_at
 FROM IDENTIFIER(:catalog || '.' || :schema || '.findings_latest')
 WHERE :refresh >= 0
