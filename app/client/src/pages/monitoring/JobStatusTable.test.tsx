@@ -171,4 +171,23 @@ describe("the job status table", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(button).toHaveFocus();
   });
+
+  it("shows why the checks did not load, with Retry, and no skeleton left pulsing", async () => {
+    setClock("2026-11-05T16:10:00Z");
+    let fail = true;
+    const api = mockApi({ queries: { job_status: STATUS_ROWS, job_checks: () => (fail ? { error: "Query execution failed", errorCode: "BAD_REQUEST" } : ORDERS_INGEST_CHECKS) } });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "orders_ingest in example-stage" }));
+    const panel = await screen.findByRole("dialog", { name: "orders_ingest" });
+    const alert = await within(panel).findByRole("alert");
+    expect(alert).toHaveTextContent("Could not load the checks");
+    expect(panel.querySelector('[data-slot="skeleton"]')).toBeNull();
+
+    fail = false;
+    await user.click(within(alert).getByRole("button", { name: "Retry" }));
+    expect(await within(panel).findByRole("heading", { name: "task_failures" })).toBeInTheDocument();
+    const refreshes = api.callsTo("job_checks").map((call) => Number(call.params.refresh));
+    expect(refreshes.at(-1)).toBeGreaterThan(refreshes[0] ?? 0);
+  });
 });

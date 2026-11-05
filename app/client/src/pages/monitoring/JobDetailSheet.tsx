@@ -185,6 +185,9 @@ export function JobDetailSheet({ job, workspaceId, jobId, open, onOpenChange, fo
   }, [job, workspaceId, status]);
 
   const workspaceName = facts?.workspace_name ?? null;
+  // Skeletons only while the checks load: after an error, or with no checks, the facts say "Not set".
+  const loadingChecks = mine === null && checks.problem === null;
+  const pending = (width: string) => (loadingChecks ? <Skeleton className={`motion-reduce:animate-none mt-1 h-4 ${width}`} /> : NOT_SET);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -207,7 +210,7 @@ export function JobDetailSheet({ job, workspaceId, jobId, open, onOpenChange, fo
       >
         <SheetHeader className="gap-2 border-b border-border px-5 pt-5 pb-4">
           <div className="flex flex-wrap items-center gap-2 pr-8">
-            {status ? <StatusBadge status={status} /> : <Skeleton className="motion-reduce:animate-none h-[22px] w-16" />}
+            {status ? <StatusBadge status={status} /> : loadingChecks ? <Skeleton className="motion-reduce:animate-none h-[22px] w-16" /> : null}
             {severity ? <span className="text-xs text-muted-foreground">{SEVERITY_LABEL[severity]} severity</span> : null}
           </div>
           <SheetTitle className="font-mono text-lg leading-6 font-medium break-all">{job ?? ""}</SheetTitle>
@@ -225,16 +228,16 @@ export function JobDetailSheet({ job, workspaceId, jobId, open, onOpenChange, fo
             <Fact label="Job ID" mono>
               {jobId ?? NOT_SET}
             </Fact>
-            <Fact label="Environment">{facts ? (facts.environment ?? NOT_SET) : <Skeleton className="motion-reduce:animate-none mt-1 h-4 w-20" />}</Fact>
-            <Fact label="Owner">{facts ? (facts.owner ?? NOT_SET) : <Skeleton className="motion-reduce:animate-none mt-1 h-4 w-24" />}</Fact>
-            <Fact label="Schedule">{facts ? (facts.schedule_type ?? NOT_SET) : <Skeleton className="motion-reduce:animate-none mt-1 h-4 w-20" />}</Fact>
+            <Fact label="Environment">{facts ? (facts.environment ?? NOT_SET) : pending("w-20")}</Fact>
+            <Fact label="Owner">{facts ? (facts.owner ?? NOT_SET) : pending("w-24")}</Fact>
+            <Fact label="Schedule">{facts ? (facts.schedule_type ?? NOT_SET) : pending("w-20")}</Fact>
             {facts?.parent_job ? (
               <Fact label="Started by" mono>
                 {facts.parent_job}
               </Fact>
             ) : null}
             <Fact label="Scanned" mono>
-              {newestObserved ? formatUtc(newestObserved) : <Skeleton className="motion-reduce:animate-none mt-1 h-4 w-32" />}
+              {newestObserved ? formatUtc(newestObserved) : pending("w-32")}
             </Fact>
           </dl>
 
