@@ -34,7 +34,7 @@ import { type KeyboardEvent, type ReactNode, type RefObject, useCallback, useEff
 import { Link } from "react-router";
 import { impactOf } from "../../../../shared/joblist/impact";
 import type { Change, JobListDocument, RuleIssue } from "../../../../shared/joblist/types";
-import { useJobList } from "../../hooks/useJobList";
+import { type ReloadJobList, useJobList } from "../../hooks/useJobList";
 import { useLiveStatus } from "../../hooks/useLiveStatus";
 import { useRefreshKey } from "../../hooks/useRefreshKey";
 import { PageHeader } from "../../layout/PageHeader";
@@ -42,7 +42,9 @@ import { type Downstream, type GraphEdge, type GraphNode, buildGraph, downstream
 import { statusTone } from "../../lib/status";
 import { cn } from "../../lib/utils";
 import { AddLinkDialog, AddServiceDialog } from "./AddLinkDialog";
+import { ConfigBanner } from "./ConfigBanner";
 import { JobNode, LinkEdge, MapLegend, MapMarkers, SectionNode, ServiceNode } from "./MapElements";
+import { ReloadButton } from "./ReloadButton";
 import {
   type EdgeHighlight,
   type LinkFlowEdge,
@@ -545,7 +547,8 @@ export function DependencyMapPage() {
         description="How the monitored jobs depend on each other and on services. Select a box to see what a failure there affects."
         actions={headerActions}
       />
-      {problem ? <SaveProblem problem={problem} onReload={() => void reload().then(() => setProblem(null))} /> : null}
+      <ConfigBanner savedVersion={state ? state.version : undefined} />
+      {problem ? <SaveProblem problem={problem} onReload={reload} onReloaded={() => setProblem(null)} /> : null}
       {notice ? (
         <p role="status" className="-mt-2 font-mono text-xs text-muted-foreground">
           {notice}
@@ -826,21 +829,21 @@ function Inspector({ box, document, downstream, links, saving, panelRef, onRemov
 
 interface SaveProblemProps {
   problem: Problem;
-  onReload: () => void;
+  onReload: ReloadJobList;
+  /** Runs once the newest job list has loaded, which clears the conflict. */
+  onReloaded: () => void;
 }
 
 /** A save the server refused: a conflict with Reload, the rule issues, or another failure. */
-function SaveProblem({ problem, onReload }: SaveProblemProps) {
+function SaveProblem({ problem, onReload, onReloaded }: SaveProblemProps) {
   if (problem.kind === "conflict") {
     return (
       <Alert variant="destructive">
         <AlertTitle>Someone else changed the job list since you opened it.</AlertTitle>
         <AlertDescription className="flex flex-wrap items-center gap-3">
           <span>Reload to see their change, then try again.</span>
-          <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={onReload}>
-            <RotateCw className="size-3.5" aria-hidden="true" />
-            Reload
-          </Button>
+          {/* A reload that fails says so and keeps the conflict, so the next save cannot go out from the old version. */}
+          <ReloadButton onReload={onReload} onReloaded={onReloaded} />
         </AlertDescription>
       </Alert>
     );

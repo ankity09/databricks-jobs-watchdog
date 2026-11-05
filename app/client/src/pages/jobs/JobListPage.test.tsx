@@ -59,15 +59,19 @@ function sse(rows: unknown[]): Response {
   return new Response(`data: ${JSON.stringify({ type: "result", data: rows })}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
 }
 
-/** The job list, the app config, live status over SSE, and POST /api/job-list/changes answering with `post`. */
-function mockApi(state: JobListState, post?: (body: unknown) => Response) {
+/**
+ * The job list, the app config, live status over SSE, and POST /api/job-list/changes answering with `post`.
+ * Other analytics queries answer with their rows in `queries`, or none.
+ */
+function mockApi(state: JobListState, post?: (body: unknown) => Response, queries: Record<string, unknown[]> = {}) {
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = urlOf(input);
     if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
     if (url === "/api/job-list") return Promise.resolve(json(200, state));
     if (url.startsWith("/api/analytics/query/job_live_status"))
       return Promise.resolve(sse([{ job_name: "orders_ingest", status: "FAILED" }]));
-    if (url.startsWith("/api/analytics/query/")) return Promise.resolve(sse([]));
+    const query = /^\/api\/analytics\/query\/([^/?]+)/.exec(url);
+    if (query) return Promise.resolve(sse(queries[decodeURIComponent(query[1])] ?? []));
     if (url === "/api/job-list/changes" && post)
       return Promise.resolve(post(JSON.parse(typeof init?.body === "string" ? init.body : "null")));
     return Promise.resolve(json(404, { error: "not_found", message: url }));
@@ -276,5 +280,54 @@ describe("JobListPage", () => {
     expect(await screen.findByRole("heading", { name: "Add job" })).toBeInTheDocument();
     expect(screen.getByLabelText("Job name")).toHaveValue("picked_job");
     expect(screen.getByText("9007199254740993")).toBeInTheDocument();
+  });
+
+  it("adds a job from the workspace: the pick opens the editor in create mode with its draft", async () => {
+    setClock("2026-11-05T17:30:00Z");
+    const picked = {
+      workspace_id: "1111111111111111",
+      workspace_name: "example-prod",
+      job_id: "9007199254740993",
+      name: "[dev dana_lee] Nightly Billing Rollup",
+      trigger_type: "CONTINUOUS",
+      paused: "false",
+      creator_user_name: "dana@example.com",
+      change_time: "2026-11-05T09:00:00.000Z",
+    };
+    mockApi(SAVED, undefined, { region_jobs: [picked] });
+    renderPage();
+    await screen.findByRole("button", { name: "Edit orders_enrich" });
+    await userEvent.click(screen.getByRole("button", { name: "Add from workspace" }));
+    const picker = await screen.findByRole("dialog", { name: "Add from workspace" });
+    await userEvent.type(within(picker).getByRole("searchbox", { name: "Search jobs by name" }), "billing");
+    await userEvent.click(await within(picker).findByRole("button", { name: "Add [dev dana_lee] Nightly Billing Rollup from example-prod" }));
+
+    expect(await screen.findByRole("heading", { name: "Add job" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Add from workspace" })).toBeNull();
+    expect(screen.getByLabelText("Job name")).toHaveValue("nightly_billing_rollup");
+    expect(screen.getByText("9007199254740993")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Schedule type" })).toHaveTextContent("continuous");
+  });
+
+  it("shows the jobs the name pattern matches in the editor, and a hint while there is no pattern", async () => {
+    setClock("2026-11-05T18:30:00Z");
+    const matches = ["orders_ingest_eu_prod", "orders_ingest_us_prod"].map((name, i) => ({
+      workspace_id: "1111111111111111",
+      job_id: String(500 + i),
+      name,
+      match_count: "2",
+    }));
+    mockApi(SAVED, undefined, { pattern_matches: matches });
+    renderPage();
+    await screen.findByRole("button", { name: "Edit orders_enrich" });
+    await userEvent.click(screen.getByRole("button", { name: "Add job" }));
+    expect(await screen.findByRole("heading", { name: "Add job" })).toBeInTheDocument();
+    // A new job has no name yet, so there is no pattern to check.
+    expect(screen.getByText("Type a name pattern to see which jobs in this region it matches.")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("Name pattern"), "^orders_ingest_");
+    expect(await screen.findByText("Matches 2 jobs", {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByText("orders_ingest_eu_prod")).toHaveClass("font-mono");
+    expect(screen.getByText("orders_ingest_us_prod")).toBeInTheDocument();
   });
 });

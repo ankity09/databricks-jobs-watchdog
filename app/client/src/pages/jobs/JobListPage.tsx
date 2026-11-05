@@ -30,7 +30,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@databricks/appkit-ui/react";
-import { CircleAlert, CircleCheck, Download, ListChecks, Pencil, Plus, RotateCw, Search, Trash2, Upload, X } from "lucide-react";
+import { CircleAlert, CircleCheck, Download, ListChecks, Pencil, Plus, RotateCw, ScanSearch, Search, Trash2, Upload, X } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { type Change, dependencyKey, type JobEntry, type JobListDocument, type SaveResult } from "../../../../shared/joblist/types";
 import { type ReloadJobList, type SaveOutcome, useJobList } from "../../hooks/useJobList";
@@ -43,9 +43,11 @@ import { describeTarget } from "../../lib/targets";
 import { formatUtc } from "../../lib/time";
 import { cn } from "../../lib/utils";
 import { PageHeader } from "../../layout/PageHeader";
+import { AddFromWorkspaceDialog } from "./AddFromWorkspaceDialog";
 import { ConfigBanner } from "./ConfigBanner";
 import { ImportDialog } from "./ImportDialog";
 import { JobEditorSheet } from "./JobEditorSheet";
+import { PatternMatches } from "./PatternMatches";
 import { ReloadButton } from "./ReloadButton";
 
 /** What an extra toolbar action can do on this page. */
@@ -54,11 +56,36 @@ export interface JobListActions {
   openCreate(this: void, draft: JobEntry): void;
   /** The saved job list. */
   document: JobListDocument;
+  /** False until the job list has loaded; until then, document is an empty list. */
+  ready: boolean;
 }
 
 export interface JobListPageProps {
-  /** Extra buttons in the toolbar, before Import YAML. */
+  /** Extra buttons in the toolbar, before Import YAML. By default Add from workspace, the picker of the region's jobs. */
   extraActions?: ReactNode | ((actions: JobListActions) => ReactNode);
+}
+
+/** "Add from workspace": pick one of the region's jobs, and the editor opens with its name, job ID and schedule type. */
+function AddFromWorkspace({ openCreate, document, ready }: JobListActions) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)} disabled={!ready}>
+        <ScanSearch aria-hidden="true" />
+        Add from workspace
+      </Button>
+      <AddFromWorkspaceDialog open={open} onOpenChange={setOpen} document={document} onPick={openCreate} />
+    </>
+  );
+}
+
+function addFromWorkspace(actions: JobListActions): ReactNode {
+  return <AddFromWorkspace {...actions} />;
+}
+
+/** Under the editor's pattern fields: which of the region's jobs those patterns match, as the scan would match them. */
+function patternPreview(pattern: string, exclude: string): ReactNode {
+  return <PatternMatches pattern={pattern} exclude={exclude} />;
 }
 
 type Editing = { mode: "create"; draft: JobEntry } | { mode: "edit"; name: string };
@@ -88,7 +115,7 @@ function isActive(job: JobEntry, inherited: InheritedSettings): boolean {
 }
 
 /** The jobs the Watchdog monitors: each job's settings and live status, the editor, import and export. */
-export function JobListPage({ extraActions }: JobListPageProps = {}) {
+export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProps = {}) {
   const { state, loading, error, reload, save } = useJobList();
   const live = useLiveStatus();
   const [search, setSearch] = useState("");
@@ -135,7 +162,7 @@ export function JobListPage({ extraActions }: JobListPageProps = {}) {
   const editingJob = editing?.mode === "edit" ? jobs.find((job) => job.job_name === editing.name) : undefined;
   // A job someone else deleted while its editor was open: the editor closes and the page says so.
   const vanished = editing?.mode === "edit" && state !== null && editingJob === undefined ? editing.name : null;
-  const actions: JobListActions = { openCreate, document: document ?? { jobs: [] } };
+  const actions: JobListActions = { openCreate, document: document ?? { jobs: [] }, ready: state !== null };
   const extra = typeof extraActions === "function" ? extraActions(actions) : extraActions;
   const hasVersion = state !== null && state.version !== null;
 
@@ -276,6 +303,7 @@ export function JobListPage({ extraActions }: JobListPageProps = {}) {
           initial={editing?.mode === "create" ? editing.draft : (editingJob ?? { job_name: "" })}
           document={state.document}
           onSave={(entry) => apply({ kind: "upsert", target: { type: "job", name: entry.job_name }, value: entry })}
+          renderPatternPreview={patternPreview}
           onReload={reload}
         />
       ) : null}

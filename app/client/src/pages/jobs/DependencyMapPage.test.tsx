@@ -7,7 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { applyChange } from "../../../../shared/joblist/apply";
 import type { Change, JobListDocument, JobListState } from "../../../../shared/joblist/types";
 import { RefreshProvider } from "../../hooks/useRefreshKey";
-import { json, mockFetch } from "../../test/analytics-mock";
+import { type QueryAnswer, type QueryCall, json, mockFetch } from "../../test/analytics-mock";
 import { EXAMPLE_DOCUMENT } from "../../test/example-document";
 import { mockReactFlow } from "../../test/reactflow-mocks";
 import { DependencyMapPage } from "./DependencyMapPage";
@@ -31,17 +31,29 @@ const applies: SaveReply = (body, state) => {
   return json({ version: (state.version ?? 0) + 1, summary: applied.summary, document: applied.document }, 201);
 };
 
-function renderMap(document: JobListDocument = EXAMPLE_DOCUMENT, reply: SaveReply = applies) {
-  let state: JobListState = { version: 3, savedAt: "2026-11-04T10:00:00Z", savedBy: "dana@example.com", document };
+interface MapOptions {
+  /** Answers for analytics queries other than live status; null for no rows. */
+  queries?: (call: QueryCall) => QueryAnswer | null;
+  /** The saved version: null for a job list that was never saved. */
+  version?: number | null;
+}
+
+function renderMap(document: JobListDocument = EXAMPLE_DOCUMENT, reply: SaveReply = applies, options: MapOptions = {}) {
+  const version = options.version === undefined ? 3 : options.version;
+  let state: JobListState =
+    version === null
+      ? { version, savedAt: null, savedBy: null, document }
+      : { version, savedAt: "2026-11-04T10:00:00Z", savedBy: "dana@example.com", document };
   const saves: SaveBody[] = [];
   let loads = 0;
+  let loadsFail = false;
   mockFetch(
-    (call) => (call.key === "job_live_status" ? { rows: LIVE } : { rows: [] }),
+    (call) => (call.key === "job_live_status" ? { rows: LIVE } : (options.queries?.(call) ?? { rows: [] })),
     (url, init) => {
       if (url.startsWith("/api/app-config")) return json(APP_CONFIG);
       if (url === "/api/job-list" && (init?.method ?? "GET") === "GET") {
         loads += 1;
-        return json(state);
+        return loadsFail ? json({ error: "unavailable", message: "The database is waking up." }, 503) : json(state);
       }
       if (url === "/api/job-list/changes" && init?.method === "POST") {
         const body = JSON.parse(typeof init.body === "string" ? init.body : "null") as SaveBody;
@@ -65,7 +77,14 @@ function renderMap(document: JobListDocument = EXAMPLE_DOCUMENT, reply: SaveRepl
       </RefreshProvider>
     </MemoryRouter>,
   );
-  return { ...view, saves, loads: () => loads };
+  return {
+    ...view,
+    saves,
+    loads: () => loads,
+    failLoads: (fail: boolean) => {
+      loadsFail = fail;
+    },
+  };
 }
 
 function box(name: RegExp | string) {
@@ -104,7 +123,10 @@ function resizeMap(container: HTMLElement, width: number, height: number) {
 
 describe("DependencyMapPage", () => {
   beforeAll(() => mockReactFlow());
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it("draws every job and service as a box and every link as an arrow, with the live status", async () => {
     const { container } = renderMap();
@@ -437,5 +459,51 @@ describe("DependencyMapPage", () => {
     fail = false;
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(await box("watchdog_demo_fails (Failed)")).toBeInTheDocument();
+  });
+
+  it("settles into its empty state when nothing was ever saved, as the smoke test answers", async () => {
+    renderMap({ jobs: [] }, applies, { version: null });
+    expect(await screen.findByText("Nothing on the map yet")).toBeInTheDocument();
+    expect(screen.queryByText("Could not load the job list.")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("says under the header which version of the job list the scan uses", async () => {
+    // Its own minute for the refresh key, so AppKit's query store gives this test its own config_load_latest answer.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-05T19:30:00Z"));
+    const load = {
+      loaded_at: "2026-11-05T19:00:00.000Z",
+      scan_id: "7",
+      source: "lakebase",
+      source_ref: "projects/jobs-watchdog/branches/production/databases/watchdog",
+      version: "2",
+      job_count: "8",
+      status: "OK",
+      error: null,
+    };
+    renderMap(EXAMPLE_DOCUMENT, applies, { queries: (call) => (call.key === "config_load_latest" ? { rows: [load] } : null) });
+    const banner = await screen.findByText(/^Saved as version/);
+    expect(banner).toHaveTextContent("Saved as version 3. The scan is on version 2. It applies at the next scan, or click Scan now in the sidebar.");
+    const heading = screen.getByRole("heading", { level: 1, name: "Dependency map" });
+    expect(heading.compareDocumentPosition(banner) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps the conflict when its Reload fails, and says the list did not reload", async () => {
+    const user = userEvent.setup();
+    const { failLoads } = renderMap(EXAMPLE_DOCUMENT, () =>
+      json({ error: "conflict", message: "Someone else changed this since you opened it. Reload to see their change.", latestVersion: 5 }, 409),
+    );
+    fireEvent.click(await box("orders_enrich depends on orders_ingest (job link)"));
+    await user.click(await screen.findByRole("button", { name: "Remove link" }));
+    const alert = await screen.findByRole("alert");
+    failLoads(true);
+    await user.click(within(alert).getByRole("button", { name: "Reload" }));
+    expect(await within(alert).findByText("The job list did not reload. The database is waking up.")).toBeInTheDocument();
+    expect(within(alert).getByText("Someone else changed the job list since you opened it.")).toBeInTheDocument();
+
+    failLoads(false);
+    await user.click(within(alert).getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(screen.queryByText("Someone else changed the job list since you opened it.")).toBeNull());
   });
 });
