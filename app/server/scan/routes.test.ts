@@ -163,7 +163,8 @@ describe("GET /api/scan/latest-run", () => {
     expect(body(res).message).toContain("DATABRICKS_JOB_ID");
   });
 
-  it("names the service principal when the Jobs API refuses it", async () => {
+  it("names the service principal when the Jobs API refuses it, and logs the detail instead of sending it", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const api: ScanJobsApi = {
       listRuns: () => ({
         [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(Object.assign(new Error("PERMISSION_DENIED: no view permission"), { statusCode: 403 })) }),
@@ -174,10 +175,12 @@ describe("GET /api/scan/latest-run", () => {
     expect(res.status).toBe(403);
     expect(body(res).error).toBe("forbidden");
     expect(body(res).message).toContain("service principal");
-    expect(body(res).message).toContain("PERMISSION_DENIED");
+    expect(body(res).message).not.toContain("PERMISSION_DENIED");
+    expect(body(res).message).not.toContain("no view permission");
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("[scan]"), expect.stringContaining("no view permission"));
   });
 
-  it("answers 502 with the reason when the Jobs API fails", async () => {
+  it("answers 502 with fixed text when the Jobs API fails, and logs the reason", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const api: ScanJobsApi = {
       listRuns: () => ({ [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(new Error("socket hang up")) }) }),
@@ -185,7 +188,8 @@ describe("GET /api/scan/latest-run", () => {
     };
     const res = await request(appWith(api)).get("/api/scan/latest-run");
     expect(res.status).toBe(502);
-    expect(res.body).toEqual({ error: "jobs_api", message: "The Jobs API did not answer: socket hang up" });
+    expect(res.body).toEqual({ error: "jobs_api", message: "The Jobs API did not answer. Try again in a moment." });
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("[scan]"), "socket hang up");
     error.mockRestore();
   });
 
@@ -222,15 +226,31 @@ describe("GET /api/scan/runs/:runId", () => {
     expect(jobs.api.getRun).toHaveBeenCalledTimes(2);
   });
 
-  it("answers 404 for a run of another job, and for a run that does not exist", async () => {
+  it("answers the same 404 for a run of another job, a run that does not exist, and a run the service principal may not see", async () => {
     const jobs = fakeJobs([scanRun(90, "RUNNING", { job_id: 999 })]);
     const app = appWith(jobs.api);
     const other = await request(app).get("/api/scan/runs/90");
+    const missing = await request(app).get("/api/scan/runs/91");
     expect(other.status).toBe(404);
     expect(body(other).error).toBe("not_found");
-    const missing = await request(app).get("/api/scan/runs/91");
     expect(missing.status).toBe(404);
-    expect(body(missing).error).toBe("not_found");
+    expect(missing.body).toEqual(other.body);
+    expect(JSON.stringify(other.body)).not.toContain("90");
+    for (const statusCode of [401, 403, 404, 400]) {
+      const refused: ScanJobsApi = { listRuns: vi.fn(), getRun: vi.fn().mockRejectedValue(Object.assign(new Error("PERMISSION_DENIED: secret detail"), { statusCode })) };
+      const res = await request(appWith(refused)).get("/api/scan/runs/92");
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual(other.body);
+    }
+  });
+
+  it("still answers 502 with fixed text when getRun fails for another reason", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const api: ScanJobsApi = { listRuns: vi.fn(), getRun: vi.fn().mockRejectedValue(new Error("socket hang up")) };
+    const res = await request(appWith(api)).get("/api/scan/runs/92");
+    expect(res.status).toBe(502);
+    expect(JSON.stringify(res.body)).not.toContain("socket");
+    error.mockRestore();
   });
 
   it.each(["abc", "0", "1.5", "-3", "99999999999999999999"])("answers 400 for the run ID %s, without asking the Jobs API", async (runId) => {

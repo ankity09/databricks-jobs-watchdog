@@ -13,7 +13,8 @@ import type express from "express";
  *                            there is one, else its newest run; null when the
  *                            job has never run.
  * GET /api/scan/runs/:runId  { run }: one run of the scan job, for polling it
- *                            (404 for a run of another job).
+ *                            (404 for a run of another job, a run that does not exist, or one the
+ *                            app may not read: one answer, so a run ID cannot be probed).
  */
 
 /** A run as these routes send it. Times are ISO 8601 in UTC; end_time is null until the run ends. */
@@ -111,22 +112,29 @@ function statusCodeOf(error: unknown): number | null {
   return typeof error.statusCode === "number" ? error.statusCode : null;
 }
 
-function sendJobsError(res: express.Response, error: unknown, notFoundMessage?: string): void {
+const RUN_NOT_FOUND = "The scan job has no such run.";
+
+/**
+ * Sends a Jobs API failure as fixed text and logs the detail. With `runLookup`,
+ * a refusal (401, 403) answers like a missing run, so a caller cannot tell a
+ * run of another job from one that does not exist.
+ */
+function sendJobsError(res: express.Response, error: unknown, runLookup = false): void {
   const code = statusCodeOf(error);
   const message = error instanceof Error ? error.message : String(error);
-  if (notFoundMessage && (code === 400 || code === 404)) {
-    res.status(404).json({ error: "not_found", message: notFoundMessage });
-    return;
-  }
-  if (code === 401 || code === 403) {
-    res.status(403).json({
-      error: "forbidden",
-      message: `The app's service principal cannot read the scan job's runs. Give it CAN MANAGE RUN on the job (the app's job resource). ${message}`,
-    });
+  if (runLookup && (code === 400 || code === 401 || code === 403 || code === 404)) {
+    res.status(404).json({ error: "not_found", message: RUN_NOT_FOUND });
     return;
   }
   console.error("[scan] The Jobs API call failed:", message);
-  res.status(502).json({ error: "jobs_api", message: `The Jobs API did not answer: ${message}` });
+  if (code === 401 || code === 403) {
+    res.status(403).json({
+      error: "forbidden",
+      message: "The app's service principal cannot read the scan job's runs. Give it CAN MANAGE RUN on the job (the app's job resource).",
+    });
+    return;
+  }
+  res.status(502).json({ error: "jobs_api", message: "The Jobs API did not answer. Try again in a moment." });
 }
 
 function sendNoScanJob(res: express.Response): void {
@@ -170,12 +178,12 @@ export function registerScanRoutes(app: express.Application, options: ScanRouteO
       const api = await jobsApi();
       const run = await api.getRun({ run_id: runId });
       if (run.job_id !== jobId) {
-        res.status(404).json({ error: "not_found", message: `Run ${runId} is not a run of the scan job.` });
+        res.status(404).json({ error: "not_found", message: RUN_NOT_FOUND });
         return;
       }
       res.json({ run: toScanRun(run, runId) });
     } catch (error) {
-      sendJobsError(res, error, `The scan job has no run ${runId}.`);
+      sendJobsError(res, error, true);
     }
   });
 }
