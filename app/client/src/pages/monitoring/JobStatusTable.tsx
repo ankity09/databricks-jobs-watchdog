@@ -73,7 +73,7 @@ function LastRun({ row, now }: { row: JobStatusRow; now: Date }) {
       rel="noreferrer"
       onClick={stopRowClick}
       title={`${formatUtc(row.last_run_start)}. Opens the run in a new tab.`}
-      className="inline-flex items-center gap-0.5 rounded-sm font-mono text-xs text-foreground tabular-nums underline-offset-2 outline-none hover:text-primary hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="inline-flex items-center gap-0.5 rounded-sm font-mono text-xs text-foreground tabular-nums underline-offset-2 outline-none hover:text-primary hover:underline focus-visible:ring-[3px] focus-visible:ring-ring"
     >
       {ago}
       <ArrowUpRight className="size-3 text-muted-foreground" aria-hidden="true" />
@@ -110,7 +110,7 @@ const JobRow = memo(function JobRow({ row, selected, onOpen, now }: JobRowProps)
               event.stopPropagation();
               onOpen(row, event.currentTarget);
             }}
-            className="max-w-full truncate rounded-sm text-left font-mono text-[13px] font-medium text-foreground outline-none group-hover:underline group-hover:decoration-border group-hover:underline-offset-4 focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            className="max-w-full truncate rounded-sm text-left font-mono text-[13px] font-medium text-foreground outline-none group-hover:underline group-hover:decoration-border group-hover:underline-offset-4 focus-visible:ring-[3px] focus-visible:ring-ring"
           >
             {row.job_name}
           </button>

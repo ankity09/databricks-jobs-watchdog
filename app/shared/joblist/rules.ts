@@ -12,7 +12,8 @@
  * - Deliberate divergence: a count setting (max_gap_minutes and the like) above 9007199254740991
  *   is rejected as too large, because it could not be stored as a number; Python has no limit.
  *   IDs (job_ids, workspace_id) are strings of any length.
- * - A section that is not a list gets the issue "... must be a list"; Python fails differently.
+ * - A section that is not a list gets the issue "X must be a list". This wording differs from the Python
+ *   loader on purpose: Python fails with an unrelated error there, and the form needs a message that names the section.
  * The rules accept the raw parse (integers as bigint, floats marked), so messages
  * print values the way Python does; normalizeDocument is for storage afterwards.
  */
@@ -283,9 +284,8 @@ function parseJob(c: Collector, raw: unknown, index: number, defaults: Obj, labe
   if (scheduleType === "scheduled" && (maxGap === null || maxGap === undefined)) {
     c.add(`${base}.max_gap_minutes`, `job ${name}: scheduled jobs need max_gap_minutes`);
   }
-  if (scheduleType === "continuous") {
-    optionalInt(c, `${base}.max_gap_minutes`, get(own, "max_gap_minutes"), name, "max_gap_minutes");
-  }
+  // Python checks a continuous job's own max_gap_minutes a second time. The merged check above already covers
+  // it (the job's own value wins over defaults), so the same issue is not emitted twice.
   if (scheduleType === "triggered") {
     const gapLabels = pySorted(Object.keys(environments).filter((label) => {
       const values = environments[label];

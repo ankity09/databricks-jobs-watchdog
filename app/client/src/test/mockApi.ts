@@ -25,6 +25,8 @@ export interface MockApiOptions {
   /** Other routes. Return undefined to fall through to a 404. */
   routes?: (url: string, init: RequestInit | undefined) => Response | Promise<Response> | undefined;
   config?: AppConfig;
+  /** Answers /api/app-config in place of the config, such as an error. Called on every request. */
+  configResponse?: () => Response | undefined;
 }
 
 export interface MockApi {
@@ -66,7 +68,7 @@ export function mockApi(options: MockApiOptions = {}): MockApi {
     "fetch",
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = urlOf(input);
-      if (url.startsWith("/api/app-config")) return Promise.resolve(json(options.config ?? TEST_CONFIG));
+      if (url.startsWith("/api/app-config")) return Promise.resolve(options.configResponse?.() ?? json(options.config ?? TEST_CONFIG));
       const query = /^\/api\/analytics\/query\/([^/?]+)/.exec(url);
       if (query?.[1]) {
         const key = decodeURIComponent(query[1]);

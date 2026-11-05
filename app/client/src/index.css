@@ -34,9 +34,9 @@
   --secondary-foreground: #1B3139;
   --accent-foreground: #1B3139;
   --primary: #FF3621;
-  --ring: #FF3621;
+  --ring: #2272B4;
   --sidebar-primary: #FF3621;
-  --sidebar-ring: #FF3621;
+  --sidebar-ring: #2272B4;
   --primary-foreground: #FFFFFF;
   --sidebar-primary-foreground: #FFFFFF;
   --secondary: #EEEDE9;
@@ -71,9 +71,9 @@
     --secondary-foreground: #1B3139;
     --accent-foreground: #1B3139;
     --primary: #FF3621;
-    --ring: #FF3621;
+    --ring: #2272B4;
     --sidebar-primary: #FF3621;
-    --sidebar-ring: #FF3621;
+    --sidebar-ring: #2272B4;
     --primary-foreground: #FFFFFF;
     --sidebar-primary-foreground: #FFFFFF;
     --secondary: #EEEDE9;
@@ -101,4 +101,13 @@ html {
 
 .dark {
   color-scheme: light;
+}
+
+/*
+ * Focus rings at full strength. AppKit's components focus with `ring-ring/50`, a 50% blue that is
+ * about 2:1 on white, too faint for a button with no border. This rule is outside every @layer, so it
+ * beats the utilities in Tailwind's layers. Controls marked invalid keep their red ring.
+ */
+[data-slot]:focus-visible:not([aria-invalid="true"]) {
+  --tw-ring-color: var(--ring);
 }

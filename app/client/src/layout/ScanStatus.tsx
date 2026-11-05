@@ -186,7 +186,7 @@ export function ScanStatus(): JSX.Element {
                   role="img"
                   aria-label={detail}
                   tabIndex={0}
-                  className="flex size-8 items-center justify-center rounded-md outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  className="flex size-8 items-center justify-center rounded-md outline-none focus-visible:ring-[3px] focus-visible:ring-ring"
                 >
                   {loading ? <Skeleton className="motion-reduce:animate-none size-2 rounded-full" /> : <LiveDot fresh={fresh} />}
                 </span>

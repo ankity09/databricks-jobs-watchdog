@@ -46,6 +46,9 @@ function PageSkeleton() {
   );
 }
 
+/** Stands in for the time when no filter reads it. */
+const NO_CLOCK = new Date(0);
+
 /**
  * Monitoring: how many jobs are failed, warning, unknown and healthy, one row
  * per job and workspace from the newest scans (filterable), the detail panel
@@ -63,7 +66,10 @@ export function MonitoringPage() {
 
   const sorted = useMemo(() => (status.rows === null ? [] : sortJobs(status.rows)), [status.rows]);
   // The counts follow every filter except the status, so each count says how many clicking it would show.
-  const scoped = useMemo(() => filterJobs(sorted, { ...filters, status: null }, now), [sorted, filters, now]);
+  // Only the last-run filter reads the time. Without it the clock is a fixed date, so the minute tick leaves
+  // `scoped` and `visible` alone and the history strip does not rebuild its cells.
+  const filterNow = filters.lastRun === null ? NO_CLOCK : now;
+  const scoped = useMemo(() => filterJobs(sorted, { ...filters, status: null }, filterNow), [sorted, filters, filterNow]);
   const visible = useMemo(() => (filters.status === null ? scoped : scoped.filter((row) => row.status === filters.status)), [scoped, filters.status]);
   const counts = useMemo(() => countByStatus(scoped), [scoped]);
   const options = useMemo(() => filterOptions(sorted), [sorted]);

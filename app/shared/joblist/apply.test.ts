@@ -55,10 +55,8 @@ describe("applyChange: jobs", () => {
       .toThrow("a job cannot be renamed: delete it and add it again");
   });
   it("deletes a job and its links, keeping a service of the same name", () => {
-    const doc = base();
-    doc.dependencies?.push({ job_name: "orders_enrich", depends_on: "orders_ingest", dependency_type: "service", notes: "x" });
     const r = applyChange(
-      { ...doc, dependencies: [
+      { ...base(), dependencies: [
         { job_name: "orders_enrich", depends_on: "orders_ingest" },
         { job_name: "orders_ingest", depends_on: "orders_enrich", dependency_type: "child_job" },
         { job_name: "orders_enrich", depends_on: "orders_ingest", dependency_type: "service" },

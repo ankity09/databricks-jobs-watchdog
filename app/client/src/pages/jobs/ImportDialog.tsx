@@ -193,7 +193,7 @@ function ImportForm({ baseVersion, onReload, onImported, onClose }: ImportFormPr
             <div className="flex min-w-0 items-center gap-2">
               {fileName ? <span className="truncate font-mono text-xs text-muted-foreground">{fileName}</span> : null}
               <label
-                className={cn(buttonVariants({ variant: "outline", size: "sm" }), "focus-within:ring-[3px] focus-within:ring-ring/50")}
+                className={cn(buttonVariants({ variant: "outline", size: "sm" }), "focus-within:ring-[3px] focus-within:ring-ring")}
               >
                 <FileUp aria-hidden="true" />
                 Choose file

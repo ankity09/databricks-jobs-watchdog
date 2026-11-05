@@ -75,9 +75,12 @@ export function categoryLabel(category: string | null): string | null {
   return CATEGORIES[category] ?? category;
 }
 
-/** A long commit hash in a code version cut to its first 7 characters: "feat/x@bf44b3b". Anything else stays as it is. */
+/**
+ * A long commit hash in a code version cut to its first 7 characters: "feat/x@bf44b3b". Anything else stays as
+ * it is, including an all-digit version such as a build timestamp ("20261105123456").
+ */
 export function shortCodeVersion(version: string): string {
-  return version.replace(/(^|@)([0-9a-f]{7})[0-9a-f]{5,33}$/i, "$1$2");
+  return version.replace(/(^|@)(?![0-9]+$)([0-9a-f]{7})[0-9a-f]{5,33}$/i, "$1$2");
 }
 
 /** "31 s", "4 min 12 s", "2 h 5 min". */

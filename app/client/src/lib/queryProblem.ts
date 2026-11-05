@@ -27,7 +27,7 @@ export function describeProblem(problem: QueryProblem, location: string | null):
   const where = location ?? "the Watchdog schema";
   switch (problem.kind) {
     case "config":
-      return { title: "Could not load the app settings", detail: `${problem.message} The app needs them to find the Watchdog tables.` };
+      return { title: "Could not load the app settings", detail: problem.message };
     case "no-catalog":
       return {
         title: "No catalog set",

@@ -8,6 +8,10 @@ describe("shortCodeVersion", () => {
     ["main@f6509ec", "main@f6509ec"],
     ["v1.4.2", "v1.4.2"],
     ["release@2026-11-05", "release@2026-11-05"],
+    ["20261105123456", "20261105123456"],
+    ["build@20261105123456", "build@20261105123456"],
+    ["1234567890123456789012345678901234567890", "1234567890123456789012345678901234567890"],
+    ["feat/x@bf44b3b58bc3445812bf9aa3dba88d096eee9186", "feat/x@bf44b3b"],
   ])("shortens %s to %s", (version, short) => {
     expect(shortCodeVersion(version)).toBe(short);
   });

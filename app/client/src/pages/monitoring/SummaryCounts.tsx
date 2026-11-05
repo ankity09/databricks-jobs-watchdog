@@ -26,7 +26,7 @@ export function SummaryCounts({ counts, selected, onSelect }: SummaryCountsProps
             onClick={() => onSelect(pressed ? null : status)}
             className={cn(
               "flex items-center justify-between gap-4 rounded-lg border border-border bg-card px-4 py-3 text-left shadow-xs transition-colors",
-              "outline-none hover:bg-muted/60 focus-visible:ring-[3px] focus-visible:ring-ring/50",
+              "outline-none hover:bg-muted/60 focus-visible:ring-[3px] focus-visible:ring-ring",
               pressed && TONE_SELECTED[tone],
             )}
           >

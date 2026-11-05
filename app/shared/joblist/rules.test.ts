@@ -49,9 +49,25 @@ describe("issue paths and collection", () => {
     expect(validateDocument({ jobs: [] }, "x.yml")[0].message).toBe("x.yml lists no jobs");
     expect(validateDocument({ jobs: [] })[0].message).toBe("the job list lists no jobs");
   });
-  it("a JavaScript-only regex gap is reported as not compiling", () => {
+  it("a Python-only regex pattern is reported as not compiling", () => {
     const issues = validateDocument(doc([{ job_name: "a", max_gap_minutes: 5, job_name_regex: "(?P<x>a)" }]));
     expect(issues[0].message).toContain("job_name_regex does not compile");
+  });
+});
+
+describe("a continuous job", () => {
+  const issuesFor = (text: string) => validateDocument(parse(text, pythonYamlOptions) as Record<string, unknown>);
+  it("with an invalid own max_gap_minutes gets that issue once", () => {
+    const issues = issuesFor("jobs:\n  - job_name: stream_a\n    schedule_type: continuous\n    max_gap_minutes: -5\n");
+    expect(issues.map((i) => i.message)).toEqual(["job stream_a: max_gap_minutes must be a whole number of zero or more, got -5"]);
+  });
+  it("with an invalid own max_gap_minutes over a valid default gets that issue once", () => {
+    const issues = issuesFor("defaults:\n  max_gap_minutes: 30\njobs:\n  - job_name: stream_a\n    schedule_type: continuous\n    max_gap_minutes: 1.5\n");
+    expect(issues).toHaveLength(1);
+  });
+  it("with an invalid default gap and none of its own gets that issue once", () => {
+    const issues = issuesFor("defaults:\n  max_gap_minutes: -1\njobs:\n  - job_name: stream_a\n    schedule_type: continuous\n");
+    expect(issues).toHaveLength(1);
   });
 });
 

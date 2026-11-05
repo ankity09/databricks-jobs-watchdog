@@ -188,4 +188,23 @@ describe("job-list routes", () => {
     expect(res.body).toEqual({ jobName: "orders_ingest", parentJob: null, affectsDirectly: ["orders_enrich"], affectsInAll: ["orders_enrich"] });
     expect((await request(a).get("/api/job-list/impact/nope")).status).toBe(404);
   });
+
+  it("answers a body that is not JSON with 400 bad_request", async () => {
+    const res = await request(app()).post("/api/job-list/changes").set("Content-Type", "application/json").send("{not json");
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "bad_request", message: "The request body is not valid JSON." });
+  });
+
+  it("answers a body over 2 MB with 413 too_large", async () => {
+    const res = await request(app()).post("/api/job-list/import/preview").send({ yaml: "x".repeat(2 * 1024 * 1024 + 1024) });
+    expect(res.status).toBe(413);
+    expect(res.body).toEqual({ error: "too_large", message: "The request is larger than 2 MB." });
+  });
+
+  it("answers a YAML alias bomb with the yaml error, not a 500", async () => {
+    const bomb = "a: &a [x, x, x, x, x, x, x, x, x]\nb: &b [*a, *a, *a, *a, *a, *a, *a, *a, *a]\nc: &c [*b, *b, *b, *b, *b, *b, *b, *b, *b]\nd: &d [*c, *c, *c, *c, *c, *c, *c, *c, *c]\ne: &e [*d, *d, *d, *d, *d, *d, *d, *d, *d]\nf: &f [*e, *e, *e, *e, *e, *e, *e, *e, *e]\njobs: []\n";
+    const res = await request(app()).post("/api/job-list/import/preview").send({ yaml: bomb });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "yaml", message: "The YAML file uses too many aliases." });
+  });
 });

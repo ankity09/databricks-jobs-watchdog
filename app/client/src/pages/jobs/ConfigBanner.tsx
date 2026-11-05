@@ -46,8 +46,8 @@ export interface ConfigBannerProps {
  * retried task can write the same FAILED row more than once.
  */
 export function ConfigBanner({ savedVersion }: ConfigBannerProps) {
-  const { config, error: configError } = useAppConfig();
   const { refresh, bump } = useRefreshKey();
+  const { config, error: configError } = useAppConfig(refresh);
   const ready = config !== null && config.catalog !== "";
   const parameters = useMemo(
     () => ({ catalog: sql.string(config?.catalog ?? ""), schema: sql.string(config?.schema ?? ""), refresh: sql.int(refresh) }),
@@ -64,7 +64,7 @@ export function ConfigBanner({ savedVersion }: ConfigBannerProps) {
   if (failed) {
     return (
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
-        <p>The app could not check which job-list version the scan uses.</p>
+        <p>{configError ? configError.message : "The app could not check which job-list version the scan uses."}</p>
         <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2" onClick={() => bump()}>
           <RotateCw className="size-3.5" aria-hidden="true" />
           Retry

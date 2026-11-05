@@ -256,6 +256,25 @@ describe("the copilot page", () => {
     expect(genieCalls[1].method).toBe("GET");
   });
 
+  it("says so when Retry for the rows fails too, and drops the message when a later Retry works", async () => {
+    const user = userEvent.setup();
+    const first = messageResult({ conversationId: "conv-7", messageId: "msg-1", question: "Which jobs failed?", text: "Two failed.", sql: "SELECT 1", attachmentId: "att-1" });
+    genieAnswers = [
+      sseResponse([first, sseEvent("error", { error: "Failed to fetch query result" })]),
+      sseResponse([sseEvent("error", { error: "Failed to fetch query result" })]),
+      sseResponse([first, queryResult("att-1", ["job_name"], [["orders_ingest"]])]),
+    ];
+    await renderAt("/copilot/conv-7");
+    await screen.findByText("Two failed.");
+    await user.click(screen.getByRole("button", { name: "Show SQL" }));
+    expect(screen.queryByText("Could not load the rows.")).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Could not load the rows.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(screen.queryByText("Could not load the rows.")).not.toBeInTheDocument();
+  });
+
   it("uses the query's description as the answer when Genie sent no text", async () => {
     genieAnswers = [sseResponse([messageResult({ conversationId: "conv-7", messageId: "msg-1", question: "Which jobs failed?", sql: "SELECT 1" })])];
     await renderAt("/copilot/conv-7");

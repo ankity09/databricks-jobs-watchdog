@@ -67,17 +67,29 @@ export function createPgVersionRepo(pool: LakebasePool): VersionRepo {
     },
     transaction: async <T>(fn: (tx: VersionTx) => Promise<T>): Promise<T> => {
       const client = await withRetry(() => pool.connect());
+      // Set when COMMIT or ROLLBACK fails: the connection may be broken, so the pool must drop it, not reuse it.
+      let broken: Error | undefined;
       try {
         await client.query("BEGIN");
         await client.query(LOCK_SQL);
         const result = await fn(txFor(client));
-        await client.query("COMMIT");
+        try {
+          await client.query("COMMIT");
+        } catch (error) {
+          broken = error instanceof Error ? error : new Error("COMMIT failed");
+          throw error;
+        }
         return result;
       } catch (error) {
-        await client.query("ROLLBACK").catch(() => undefined);
+        if (!broken) {
+          await client.query("ROLLBACK").catch((rollbackError: unknown) => {
+            broken = rollbackError instanceof Error ? rollbackError : new Error("ROLLBACK failed");
+          });
+        }
         throw error;
       } finally {
-        client.release();
+        if (broken) client.release(broken);
+        else client.release();
       }
     },
   };
