@@ -180,7 +180,7 @@ describe("SettingsPage", () => {
     await waitFor(
       () => {
         expect(retries).toHaveAccessibleDescription(
-          /max_retries must be a whole number of zero or more, got -1 \(used by orders_ingest and orders_enrich\)/,
+          /max_retries must be a whole number of zero or more, got '-1' \(used by orders_ingest and orders_enrich\)/,
         );
         expect(exclude).toHaveAccessibleDescription(/job_name_exclude_regex does not compile/);
       },
@@ -584,5 +584,88 @@ describe("SettingsPage label form keeps what it shows as stored", () => {
       target: { type: "workspace", key: " example-padded " },
       value: { workspace_name: " example-padded ", environment: "production", notes: "" },
     });
+  });
+});
+
+describe("SettingsPage round 2", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("after a conflict's Reload, a new label saves from the newest version and keeps what was typed", async () => {
+    setClock("2026-11-06T16:30:00Z");
+    const server = jobListServer(DOC, 4);
+    mockServer(server);
+    renderPage();
+    const labels = await screen.findByRole("region", { name: "Workspace labels" });
+    await userEvent.click(within(labels).getByRole("button", { name: "Add label" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a workspace label" });
+    // Meanwhile someone else labels example-dev and removes the label of example-prod.
+    server.saveAsSomeoneElse({ kind: "upsert", target: { type: "workspace", key: "example-dev" }, value: { workspace_name: "example-dev", environment: "lower" } });
+    server.saveAsSomeoneElse({ kind: "delete", target: { type: "workspace", key: "example-prod" } });
+
+    const name = within(dialog).getByLabelText("Workspace name");
+    await userEvent.type(name, "example-dev");
+    await userEvent.type(within(dialog).getByLabelText("Environment label"), "lower");
+    const add = within(dialog).getByRole("button", { name: "Add label" });
+    await waitFor(() => expect(add).toBeEnabled(), { timeout: 3000 });
+    await userEvent.click(add);
+    expect(await within(dialog).findByText("Someone else changed this label since you opened it.")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(within(dialog).getByText(/workspace example-dev is listed twice/)).toBeInTheDocument(), { timeout: 3000 });
+    expect(within(dialog).getByLabelText("Environment label")).toHaveValue("lower");
+
+    // A workspace that had a label when the form opened, and has none now, saves from the newest version.
+    await userEvent.clear(name);
+    await userEvent.type(name, "example-prod");
+    await waitFor(() => expect(add).toBeEnabled(), { timeout: 3000 });
+    await userEvent.click(add);
+    expect(await screen.findByText(/^Saved version 7: Labeled workspace example-prod as lower/)).toBeInTheDocument();
+    expect(server.saves.map((body) => body.baseVersion)).toEqual([4, 6]);
+  });
+
+  /** Someone else changes the default owner; this page saves a label, whose answer brings the change. */
+  async function newerDefaultsArrive(server: ReturnType<typeof jobListServer>) {
+    server.saveAsSomeoneElse({ kind: "upsert", target: { type: "defaults" }, value: { owner: "data-platform", max_gap_minutes: 60 } });
+    const labels = screen.getByRole("region", { name: "Workspace labels" });
+    const edit = within(labels).getByRole("button", { name: "Edit the label for 1111111111111111" });
+    await userEvent.click(edit);
+    const dialog = await screen.findByRole("dialog", { name: "Edit the label for 1111111111111111" });
+    await userEvent.clear(within(dialog).getByLabelText("Notes"));
+    await userEvent.type(within(dialog).getByLabelText("Notes"), "Dev team");
+    const save = within(dialog).getByRole("button", { name: "Save label" });
+    await waitFor(() => expect(save).toBeEnabled(), { timeout: 3000 });
+    await userEvent.click(save);
+    await screen.findByText("Saved version 6: Changed notes on workspace 1111111111111111.");
+    return edit;
+  }
+
+  it("says so when newer defaults start the form again, and keeps focus in it when it had focus", async () => {
+    setClock("2026-11-06T17:30:00Z");
+    const server = jobListServer(DOC, 4);
+    mockServer(server);
+    renderPage();
+    const defaults = await screen.findByRole("region", { name: "Defaults" });
+    await userEvent.type(within(defaults).getByLabelText("Owner"), "-eu");
+    await newerDefaultsArrive(server);
+    // The edit kept the form as it was. Undo leaves no edits, so the form starts again from the newer defaults.
+    expect(within(screen.getByRole("region", { name: "Defaults" })).getByLabelText("Owner")).toHaveValue("platform-team-eu");
+    await userEvent.click(within(screen.getByRole("region", { name: "Defaults" })).getByRole("button", { name: "Undo changes" }));
+    await waitFor(() => expect(within(screen.getByRole("region", { name: "Defaults" })).getByLabelText("Owner")).toHaveValue("data-platform"));
+    expect(screen.getByText("This form now shows the newest saved values.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("region", { name: "Defaults" })).toHaveFocus());
+  });
+
+  it("says so when newer defaults start a form without edits, and leaves focus where the person has it", async () => {
+    setClock("2026-11-06T18:30:00Z");
+    const server = jobListServer(DOC, 4);
+    mockServer(server);
+    renderPage();
+    await screen.findByRole("region", { name: "Defaults" });
+    const edit = await newerDefaultsArrive(server);
+    await waitFor(() => expect(within(screen.getByRole("region", { name: "Defaults" })).getByLabelText("Owner")).toHaveValue("data-platform"));
+    expect(screen.getByText("This form now shows the newest saved values.")).toBeInTheDocument();
+    await waitFor(() => expect(edit).toHaveFocus());
   });
 });

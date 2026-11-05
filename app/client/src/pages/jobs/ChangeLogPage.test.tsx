@@ -292,3 +292,72 @@ describe("ChangeLogPage", () => {
     expect(screen.getByRole("link", { name: "Go to the job list" })).toHaveAttribute("href", "/jobs");
   });
 });
+
+describe("ChangeLogPage keeps focus through a load", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** The versions route answers each load in turn: held until `answer(ok)`. */
+  function mockLoads() {
+    const waiting: Array<(ok: boolean) => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = urlOf(input);
+        if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
+        if (url.startsWith("/api/job-list/versions?")) {
+          return new Promise<Response>((resolve) =>
+            waiting.push((ok) =>
+              resolve(ok ? json(200, { versions: [V2, V1].map(summary) }) : json(500, { error: "server", message: "The job list could not be read or saved. Try again." })),
+            ),
+          );
+        }
+        if (url.startsWith("/api/analytics/query/")) {
+          return Promise.resolve(new Response('data: {"type":"result","data":[]}\n\n', { headers: { "Content-Type": "text/event-stream" } }));
+        }
+        return Promise.resolve(json(404, { error: "not_found", message: url }));
+      }),
+    );
+    return {
+      async answer(ok: boolean) {
+        await waitFor(() => expect(waiting.length).toBeGreaterThan(0));
+        waiting.shift()?.(ok);
+      },
+    };
+  }
+
+  it("moves focus from Retry to the versions while they load, and back to Retry when they fail again", async () => {
+    const loads = mockLoads();
+    renderPage();
+    await loads.answer(false);
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    retry.focus();
+    await userEvent.keyboard("{Enter}");
+    const area = screen.getByRole("region", { name: "Versions" });
+    await waitFor(() => expect(area).toHaveFocus());
+    await loads.answer(false);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toHaveFocus());
+
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(area).toHaveFocus());
+    await loads.answer(true);
+    expect(await screen.findByRole("button", { name: "Changed 2 settings on orders_ingest: max_gap_minutes, owner" })).toBeInTheDocument();
+    expect(area).toHaveFocus();
+  });
+
+  it("keeps Refresh focusable while it loads, and focus on it when the refresh fails", async () => {
+    const loads = mockLoads();
+    renderPage();
+    await loads.answer(true);
+    const refresh = await screen.findByRole("button", { name: "Refresh" });
+    refresh.focus();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(refresh).toHaveAttribute("aria-busy", "true"));
+    expect(refresh).not.toBeDisabled();
+    expect(refresh).toHaveFocus();
+    await loads.answer(false);
+    expect(await screen.findByText("The newest versions did not load. The job list could not be read or saved. Try again.")).toBeInTheDocument();
+    expect(refresh).toHaveFocus();
+  });
+});

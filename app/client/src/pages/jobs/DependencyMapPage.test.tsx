@@ -211,6 +211,20 @@ describe("DependencyMapPage", () => {
     await waitFor(() => expect(link).toHaveFocus());
   });
 
+  it("says politely which box Enter selected and what a failure there affects, and keeps focus on the box", async () => {
+    const user = userEvent.setup();
+    renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    ingest.focus();
+    await user.keyboard("{Enter}");
+    const panel = await screen.findByRole("region", { name: "orders_ingest" });
+    const affects = within(panel).getByText(/^A failure here affects/).textContent ?? "";
+    const said = await screen.findByText(`Selected orders_ingest. ${affects}`);
+    expect(said).toHaveAttribute("aria-live", "polite");
+    expect(said).toHaveClass("sr-only");
+    expect(ingest).toHaveFocus();
+  });
+
   it("keeps focus on a link when Escape is pressed with no menu open", async () => {
     const user = userEvent.setup();
     renderMap();

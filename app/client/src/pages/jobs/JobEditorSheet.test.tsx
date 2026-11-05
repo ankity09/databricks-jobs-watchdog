@@ -122,7 +122,7 @@ describe("JobEditorSheet", () => {
     act(() => {
       vi.advanceTimersByTime(210);
     });
-    expect(field("Max retries")).toHaveAccessibleDescription(/max_retries must be a whole number of zero or more, got -1/);
+    expect(field("Max retries")).toHaveAccessibleDescription(/max_retries must be a whole number of zero or more, got '-1'/);
   });
 
   it("keeps Save off until something changes, and while there are issues", async () => {
@@ -219,6 +219,27 @@ describe("JobEditorSheet", () => {
     await vi.waitFor(() => expect(gap).toHaveAccessibleDescription(/max_gap_minutes must be a whole number of zero or more, got '1e'/));
     expect(gap).toHaveValue("1e");
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  });
+
+  it.each(["0x1E", "0b11", "+5", "5."])("refuses %s in a number field next to the field, instead of saving another number", async (typed) => {
+    const { onSave } = renderSheet();
+    const gap = field("Max gap (minutes)");
+    await userEvent.clear(gap);
+    await userEvent.type(gap, typed);
+    const message = new RegExp(`max_gap_minutes must be a whole number of zero or more, got '${typed.replace(/[.+]/g, "\\$&")}'`);
+    await vi.waitFor(() => expect(gap).toHaveAccessibleDescription(message));
+    expect(gap).toHaveValue(typed);
+    const save = screen.getByRole("button", { name: "Save changes" });
+    expect(save).toBeDisabled();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("refuses a number too large to keep every digit", async () => {
+    renderSheet();
+    const gap = field("Max gap (minutes)");
+    await userEvent.clear(gap);
+    await userEvent.type(gap, "12345678901234567890");
+    await vi.waitFor(() => expect(gap).toHaveAccessibleDescription(/max_gap_minutes is too large \(at most 9007199254740991\), got 12345678901234567890/));
   });
 
   it("makes the job name read-only in edit mode, with the rename hint", () => {

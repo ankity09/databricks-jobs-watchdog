@@ -63,6 +63,8 @@ function changeFor(saved: DefaultsEntry | undefined, next: DefaultsEntry): Chang
 type Problem = { kind: "conflict" } | { kind: "error"; message: string };
 
 const RELOADED = "This form now shows the newest saved values. Make your change again.";
+/** When a newer version brought other defaults, and the form had no edits to lose. */
+const NEWER = "This form now shows the newest saved values.";
 
 /** "a", "a and b", "a, b and c", or "a, b and 6 more jobs". */
 function jobList(jobs: string[]): string {
@@ -114,8 +116,9 @@ export function DefaultsForm({ document, version, onSave, onSaved, onReload }: D
     setFocus(next.focus);
     setRevision((n) => n + 1);
   }, []);
-  // A newer version starting the form again leaves focus where the person has it.
-  const outdated = useCallback(() => restart({ notice: null, focus: null }), [restart]);
+  // A newer version starts the form again and says so. Focus stays where the person has it, or on the card
+  // when it was in the form, which goes away under it.
+  const outdated = useCallback((focusInside: boolean) => restart({ notice: NEWER, focus: focusInside ? "card" : null }), [restart]);
   return (
     <DefaultsFields
       key={revision}
@@ -139,8 +142,8 @@ interface DefaultsFieldsProps extends DefaultsFormProps {
   notice: string | null;
   focus: FocusOnStart;
   onReloaded: () => void;
-  /** A newer version has other defaults, and the form has no edits: it starts again from them. */
-  onOutdated: () => void;
+  /** A newer version has other defaults, and the form has no edits: it starts again from them. `focusInside` says whether the form had focus. */
+  onOutdated: (focusInside: boolean) => void;
 }
 
 function DefaultsFields({ document, version, notice, focus, onSave, onSaved, onReload, onReloaded, onOutdated }: DefaultsFieldsProps) {
@@ -148,6 +151,9 @@ function DefaultsFields({ document, version, notice, focus, onSave, onSaved, onR
   // The form starts again after a reload or a save; focus moves to the notice that says so, or to the card.
   const noticeRef = useRef<HTMLParagraphElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  // Whether focus is in the form. It stays true when focus drops to the page body, as when a button the person
+  // just used turns off (Undo changes), and turns false when the person moves focus somewhere else.
+  const focusHere = useRef(false);
   useEffect(() => {
     if (focus === "notice") noticeRef.current?.focus();
     else if (focus === "card") cardRef.current?.focus();
@@ -176,7 +182,10 @@ function DefaultsFields({ document, version, notice, focus, onSave, onSaved, onR
   // Edits stay until they are saved or undone; without edits, the form shows the newest defaults.
   const outdated = !dirty && !deepEqual(document.defaults ?? {}, saved ?? {});
   useEffect(() => {
-    if (outdated) onOutdated();
+    if (!outdated) return;
+    const active = window.document.activeElement;
+    const inside = cardRef.current?.contains(active) === true || (focusHere.current && active === window.document.body);
+    onOutdated(inside);
   }, [outdated, onOutdated]);
   const update = (patch: Partial<JobFormValues>) => {
     setValues((current) => ({ ...current, ...patch }));
@@ -201,6 +210,12 @@ function DefaultsFields({ document, version, notice, focus, onSave, onSaved, onR
   return (
     <Card
       ref={cardRef}
+      onFocus={() => {
+        focusHere.current = true;
+      }}
+      onBlur={(event) => {
+        if (event.relatedTarget instanceof Node && !event.currentTarget.contains(event.relatedTarget)) focusHere.current = false;
+      }}
       tabIndex={-1}
       className="gap-4 py-5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
       role="region"

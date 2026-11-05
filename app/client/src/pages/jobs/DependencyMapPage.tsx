@@ -234,6 +234,8 @@ export function DependencyMapPage() {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
+  // Said politely when a box is selected, for people who select one from the keyboard; focus stays on the box.
+  const [announcement, setAnnouncement] = useState("");
 
   const mapRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -295,7 +297,9 @@ export function DependencyMapPage() {
   const activate = (box: GraphNode) => {
     setMenuEdge(null);
     if (link.step === "off") {
-      setSelectedId((current) => (current === box.id ? null : box.id));
+      const selecting = selectedId !== box.id;
+      setSelectedId(selecting ? box.id : null);
+      setAnnouncement(selecting && document ? `Selected ${box.name}. ${affectsText(downstreamOf(document, box).jobs.length)}` : "");
       return;
     }
     setLink((mode) => {
@@ -581,6 +585,9 @@ export function DependencyMapPage() {
         />
       ) : null}
       {body}
+      <p aria-live="polite" className="sr-only">
+        {announcement}
+      </p>
       {document ? (
         <>
           <AddLinkDialog

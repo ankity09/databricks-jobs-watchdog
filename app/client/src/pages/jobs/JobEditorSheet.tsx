@@ -259,7 +259,7 @@ function EditorForm({
   // The save sends that version: when the job changed since (a switch saved after the form opened), the server
   // refuses it instead of saving the old values over the change.
   const [base] = useState(initial);
-  const [openedAt] = useOpenedVersion(version);
+  const [openedAt, takeNewest] = useOpenedVersion(version);
   const [labels] = useState(() => environmentLabels(document, initial));
   const [startValues] = useState(() => toFormValues(initial, labels));
   const [values, setValues] = useState<JobFormValues>(startValues);
@@ -606,6 +606,8 @@ function EditorForm({
           onReload={onReload}
           onReloaded={() => {
             setProblem(null);
+            // A new job keeps what was typed, and saves from the version it now checks against (an edit starts again).
+            takeNewest();
             onReloaded();
           }}
         />

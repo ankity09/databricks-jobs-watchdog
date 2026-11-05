@@ -31,7 +31,7 @@ import {
   TooltipTrigger,
 } from "@databricks/appkit-ui/react";
 import { CircleAlert, CircleCheck, Download, ListChecks, Pencil, Plus, RotateCw, ScanSearch, Search, Trash2, Upload, X } from "lucide-react";
-import { type ReactNode, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { type Change, dependencyKey, type JobEntry, type JobListDocument, type SaveResult } from "../../../../shared/joblist/types";
 import { type ReloadJobList, type SaveOutcome, useJobList, useOpenedVersion } from "../../hooks/useJobList";
 import { type LiveStatus, useLiveStatus } from "../../hooks/useLiveStatus";
@@ -149,6 +149,15 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
   const openedFrom = (element: HTMLElement | null) => {
     opener.current = element;
   };
+  // The first import replaces the empty state, and with it the Import YAML button that gets focus back when the
+  // dialog closes: once the list arrives, focus goes to its search field instead.
+  const focusSearchWhenListed = useRef(false);
+  useEffect(() => {
+    const field = searchField.current;
+    if (!focusSearchWhenListed.current || !field) return;
+    focusSearchWhenListed.current = false;
+    field.focus();
+  }, [state]);
 
   const document = state?.document ?? null;
   const jobs = useMemo(() => document?.jobs ?? [], [document]);
@@ -390,8 +399,11 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
         returnFocus={returnFocus}
         onImported={(result) => {
           saved(result);
+          if (state !== null && state.version === null && jobs.length === 0) focusSearchWhenListed.current = true;
           // An import's result has no savedAt or savedBy; a reload brings them.
-          void reload();
+          void reload().then((failure) => {
+            if (failure) focusSearchWhenListed.current = false;
+          });
         }}
       />
     </>

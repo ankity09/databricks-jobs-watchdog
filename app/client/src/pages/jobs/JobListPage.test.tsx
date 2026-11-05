@@ -574,3 +574,87 @@ describe("JobListPage gives focus back when a sheet or dialog closes", () => {
     await waitFor(() => expect(add).toHaveFocus());
   });
 });
+
+describe("JobListPage round 2", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("after a conflict's Reload, a new job saves from the newest version and keeps what was typed", async () => {
+    setClock("2026-11-06T15:30:00Z");
+    const server = jobListServer(DOC, 12);
+    mockServer(server);
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "Add job" }));
+    const name = await screen.findByLabelText("Job name");
+    // Meanwhile someone else adds nightly_rollup and deletes daily_revenue_export.
+    server.saveAsSomeoneElse({ kind: "upsert", target: { type: "job", name: "nightly_rollup" }, value: { job_name: "nightly_rollup", max_gap_minutes: 60 } });
+    server.saveAsSomeoneElse({ kind: "delete", target: { type: "job", name: "daily_revenue_export" } });
+
+    await userEvent.type(name, "nightly_rollup");
+    await userEvent.type(screen.getByLabelText("Max gap (minutes)"), "60");
+    const add = screen.getByRole("button", { name: "Add job" });
+    await waitFor(() => expect(add).toBeEnabled());
+    await userEvent.click(add);
+    expect(await screen.findByText("Someone else changed this job since you opened it.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Reload" }));
+    // The form keeps what was typed, and now knows that name is taken.
+    await waitFor(() => expect(name).toHaveAccessibleDescription(/duplicate job_name 'nightly_rollup'/), { timeout: 3000 });
+    expect(screen.getByLabelText("Max gap (minutes)")).toHaveValue("60");
+
+    // A name that was in the list when the form opened, and is gone now, saves from the newest version.
+    await userEvent.clear(name);
+    await userEvent.type(name, "daily_revenue_export");
+    await waitFor(() => expect(add).toBeEnabled(), { timeout: 3000 });
+    await userEvent.click(add);
+    expect(await screen.findByText(/^Saved version 15: Added job daily_revenue_export/)).toBeInTheDocument();
+    expect(server.saves.map((body) => body.baseVersion)).toEqual([12, 14]);
+  });
+
+  it("after the first import, gives focus to the search field once the list arrives", async () => {
+    setClock("2026-11-06T19:30:00Z");
+    let imported = false;
+    const list: { release?: () => void } = {};
+    const preview = {
+      document: DOC,
+      diff: [{ target: "job:orders_ingest", kind: "added", fields: [] }],
+      issues: [],
+      summary: "Imported 3 jobs, 2 links and 2 workspace labels from YAML",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = urlOf(input);
+        if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
+        if (url === "/api/job-list") {
+          if (!imported) return Promise.resolve(json(200, EMPTY));
+          // The list after the import arrives late, after the dialog has closed.
+          return new Promise<Response>((resolve) => {
+            list.release = () => resolve(json(200, { ...SAVED, version: 1 }));
+          });
+        }
+        if (url === "/api/job-list/import/preview") return Promise.resolve(json(200, preview));
+        if (url === "/api/job-list/import") {
+          imported = true;
+          return Promise.resolve(json(201, { version: 1, summary: preview.summary, document: DOC }));
+        }
+        if (url.startsWith("/api/analytics/query/")) return Promise.resolve(sse([]));
+        return Promise.resolve(json(404, { error: "not_found", message: url }));
+      }),
+    );
+    renderPage();
+    const empty = (await screen.findByText("No jobs yet. Import your monitored-jobs YAML file, or add a job.")).closest('[data-slot="empty"]');
+    if (!(empty instanceof HTMLElement)) throw new Error("no empty state");
+    await userEvent.click(within(empty).getByRole("button", { name: "Import YAML" }));
+    const dialog = await screen.findByRole("dialog", { name: "Import YAML" });
+    await userEvent.click(within(dialog).getByLabelText("YAML"));
+    await userEvent.paste("jobs:\n  - job_name: orders_ingest\n    max_gap_minutes: 60\n");
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Import" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import YAML" })).toBeNull());
+    await waitFor(() => expect(list.release).toBeDefined());
+    list.release?.();
+    const search = await screen.findByRole("searchbox", { name: "Search jobs by name" });
+    await waitFor(() => expect(search).toHaveFocus());
+  });
+});

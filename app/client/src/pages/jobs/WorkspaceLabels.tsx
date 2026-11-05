@@ -366,7 +366,7 @@ function entryFrom(base: WorkspaceEntry, id: string, name: string, environment: 
 function LabelForm({ mode, initial, document, version, suggestions, notice, onSave, onSaved, onReload, onReloaded, onCancel }: LabelFormProps) {
   // The label and the version the form opened at (a reload starts the form again).
   const [base] = useState(initial);
-  const [openedAt] = useOpenedVersion(version);
+  const [openedAt, takeNewest] = useOpenedVersion(version);
   const idsList = useId();
   const namesList = useId();
   const labelsList = useId();
@@ -543,6 +543,8 @@ function LabelForm({ mode, initial, document, version, suggestions, notice, onSa
               onReload={onReload}
               onReloaded={() => {
                 setProblem(null);
+                // A new label keeps what was typed, and saves from the version it now checks against (an edit starts again).
+                takeNewest();
                 onReloaded();
               }}
             />

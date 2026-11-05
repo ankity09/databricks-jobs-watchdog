@@ -99,10 +99,11 @@ describe("job form values", () => {
     expect(toEntry({ ...off, exclude_off: false }, empty)).not.toHaveProperty("job_name_exclude_regex");
   });
 
-  it("keeps an invalid number as typed, so the rules can say what is wrong", () => {
+  it("keeps anything but plain digits as the text typed, so the rules can say what is wrong", () => {
     const values = toFormValues({ job_name: "a" }, []);
-    expect(toEntry({ ...values, max_gap_minutes: "1.5" }, { job_name: "a" }).max_gap_minutes).toBe(1.5);
-    expect(toEntry({ ...values, max_gap_minutes: "-3" }, { job_name: "a" }).max_gap_minutes).toBe(-3);
+    const gap = (typed: string): unknown => toEntry({ ...values, max_gap_minutes: typed }, { job_name: "a" }).max_gap_minutes;
+    expect(gap(" 90 ")).toBe(90);
+    for (const typed of ["1.5", "-3", "0x1E", "0b11", "+5", "5.", "1e3", "12345678901234567890"]) expect(gap(typed)).toBe(typed);
   });
 
   it("sets an environment override only where a field is set, and drops empty labels", () => {

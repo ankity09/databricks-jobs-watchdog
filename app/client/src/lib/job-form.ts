@@ -135,14 +135,15 @@ export function toFormValues(entry: JobEntry, labels: string[]): JobFormValues {
 }
 
 /**
- * A number field: empty is unset; a number is kept as typed, valid or not, for the rules to judge; other text
- * (such as "1e") is kept as text, which the rules refuse next to the field, so it is never saved as empty.
+ * A number field: empty is unset, and plain digits are the number they show. Any other text ("1e", "0x1E",
+ * "+5", "5.", "-1", or digits past the largest safe number) is kept as text, which the shared rules refuse next
+ * to the field, so a field never saves as empty or as another number than the one it shows.
  */
 function numberOf(text: string): number | string | undefined {
   const trimmed = text.trim();
   if (trimmed === "") return undefined;
   const n = Number(trimmed);
-  return Number.isFinite(n) ? n : trimmed;
+  return /^\d+$/.test(trimmed) && Number.isSafeInteger(n) ? n : trimmed;
 }
 
 /** True when the saved value blocks a default (null or ""), so an empty field keeps it and the default does not apply. */
