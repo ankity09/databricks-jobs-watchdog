@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -217,10 +217,147 @@ describe("ChangeLogPage", () => {
     expect(olderButton()).not.toBeInTheDocument();
   });
 
+  it("shows the changes of a version whose stored workspace name and job name are not text", async () => {
+    // Saved before the server stored text as text: workspace_name: 2024 (and no ID) and job_name: 20241105, as parsed.
+    const stored = JSON.parse(
+      JSON.stringify({
+        ...V2,
+        version: 3,
+        summary: "Labeled workspace 2024 as lower",
+        changeKind: "create",
+        changeTarget: "workspace:2024",
+        document: { workspaces: [{ workspace_name: 2024, environment: "lower" }], jobs: [...V2.document.jobs, { job_name: 20241105, max_gap_minutes: 60 }] },
+      }),
+    ) as VersionDetail;
+    mockApi([V1, V2, stored]);
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "Labeled workspace 2024 as lower" }));
+    const sheet = await screen.findByRole("dialog", { name: "Version 3" });
+    expect(await within(sheet).findByRole("table", { name: "Workspace label 2024" })).toBeInTheDocument();
+    expect(within(sheet).getByRole("table", { name: "Job 20241105" })).toBeInTheDocument();
+  });
+
+  it("shows the skeleton while Retry loads, and offers Retry when the newest versions do not load", async () => {
+    let answer: "fail" | "ok" | "hold" = "fail";
+    const held: Array<() => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = urlOf(input);
+        if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
+        if (url.startsWith("/api/job-list/versions?")) {
+          const ok = () => json(200, { versions: [V2, V1].map(summary) });
+          if (answer === "fail") return Promise.resolve(json(500, { error: "server", message: "The job list could not be read or saved. Try again." }));
+          if (answer === "ok") return Promise.resolve(ok());
+          return new Promise<Response>((resolve) => held.push(() => resolve(ok())));
+        }
+        if (url.startsWith("/api/analytics/query/")) {
+          return Promise.resolve(new Response('data: {"type":"result","data":[]}\n\n', { headers: { "Content-Type": "text/event-stream" } }));
+        }
+        return Promise.resolve(json(404, { error: "not_found", message: url }));
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText("The change log did not load. The job list could not be read or saved. Try again.")).toBeInTheDocument();
+    answer = "hold";
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByLabelText("Loading the change log")).toBeInTheDocument();
+    expect(screen.queryByText(/The change log did not load/)).not.toBeInTheDocument();
+    held.shift()?.();
+    expect(await screen.findByRole("button", { name: "Changed 2 settings on orders_ingest: max_gap_minutes, owner" })).toBeInTheDocument();
+
+    // A refresh that fails keeps the versions, says so, and offers Retry beside the message.
+    answer = "fail";
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    const line = await screen.findByText("The newest versions did not load. The job list could not be read or saved. Try again.");
+    answer = "ok";
+    await userEvent.click(within(line).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByText(/The newest versions did not load/)).not.toBeInTheDocument());
+  });
+
+  it("gives focus back to the version's summary when its changes close", async () => {
+    mockApi([V1, V2]);
+    renderPage();
+    const summaryButton = await screen.findByRole("button", { name: "Changed 2 settings on orders_ingest: max_gap_minutes, owner" });
+    await userEvent.click(summaryButton);
+    await screen.findByRole("dialog", { name: "Version 2" });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(summaryButton).toHaveFocus());
+  });
+
   it("names the next step when nothing is saved yet", async () => {
     mockApi([]);
     renderPage();
     expect(await screen.findByText("No versions yet. Import your job list or add a job on the Job list page.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Go to the job list" })).toHaveAttribute("href", "/jobs");
+  });
+});
+
+describe("ChangeLogPage keeps focus through a load", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** The versions route answers each load in turn: held until `answer(ok)`. */
+  function mockLoads() {
+    const waiting: Array<(ok: boolean) => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = urlOf(input);
+        if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
+        if (url.startsWith("/api/job-list/versions?")) {
+          return new Promise<Response>((resolve) =>
+            waiting.push((ok) =>
+              resolve(ok ? json(200, { versions: [V2, V1].map(summary) }) : json(500, { error: "server", message: "The job list could not be read or saved. Try again." })),
+            ),
+          );
+        }
+        if (url.startsWith("/api/analytics/query/")) {
+          return Promise.resolve(new Response('data: {"type":"result","data":[]}\n\n', { headers: { "Content-Type": "text/event-stream" } }));
+        }
+        return Promise.resolve(json(404, { error: "not_found", message: url }));
+      }),
+    );
+    return {
+      async answer(ok: boolean) {
+        await waitFor(() => expect(waiting.length).toBeGreaterThan(0));
+        waiting.shift()?.(ok);
+      },
+    };
+  }
+
+  it("moves focus from Retry to the versions while they load, and back to Retry when they fail again", async () => {
+    const loads = mockLoads();
+    renderPage();
+    await loads.answer(false);
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    retry.focus();
+    await userEvent.keyboard("{Enter}");
+    const area = screen.getByRole("region", { name: "Versions" });
+    await waitFor(() => expect(area).toHaveFocus());
+    await loads.answer(false);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toHaveFocus());
+
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(area).toHaveFocus());
+    await loads.answer(true);
+    expect(await screen.findByRole("button", { name: "Changed 2 settings on orders_ingest: max_gap_minutes, owner" })).toBeInTheDocument();
+    expect(area).toHaveFocus();
+  });
+
+  it("keeps Refresh focusable while it loads, and focus on it when the refresh fails", async () => {
+    const loads = mockLoads();
+    renderPage();
+    await loads.answer(true);
+    const refresh = await screen.findByRole("button", { name: "Refresh" });
+    refresh.focus();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(refresh).toHaveAttribute("aria-busy", "true"));
+    expect(refresh).not.toBeDisabled();
+    expect(refresh).toHaveFocus();
+    await loads.answer(false);
+    expect(await screen.findByText("The newest versions did not load. The job list could not be read or saved. Try again.")).toBeInTheDocument();
+    expect(refresh).toHaveFocus();
   });
 });

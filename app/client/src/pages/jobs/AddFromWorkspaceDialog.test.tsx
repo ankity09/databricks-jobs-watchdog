@@ -105,12 +105,17 @@ describe("AddFromWorkspaceDialog", () => {
     ["the warehouse refuses the statement", { error: "Query execution failed", errorCode: "BAD_REQUEST" }],
     ["the code says PERMISSION_DENIED", { error: "Query execution failed", errorCode: "PERMISSION_DENIED" }],
     ["the message says INSUFFICIENT_PERMISSIONS", { error: "[INSUFFICIENT_PERMISSIONS] Insufficient privileges" }],
-  ])("says the person has no access when %s", async (_case, failure) => {
+  ])("says the person has no access when %s, and Retry searches again once access is granted", async (_case, failure) => {
     const user = userEvent.setup();
-    renderDialog(() => failure);
-    await user.type(screen.getByRole("searchbox", { name: "Search jobs by name" }), `x${_case.length}`);
+    let granted = false;
+    const { calls } = renderDialog(() => (granted ? { rows: ROWS } : failure));
+    const term = `x${_case.length}`;
+    await user.type(screen.getByRole("searchbox", { name: "Search jobs by name" }), term);
     expect(await screen.findByText(NO_ACCESS)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    granted = true;
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("row", { name: /orders_ingest_prod/ })).toBeInTheDocument();
+    expect(searches(calls)).toEqual([term, term]);
   });
 
   it("offers Retry for other failures, and searches again", async () => {

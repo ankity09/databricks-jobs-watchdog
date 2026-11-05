@@ -18,7 +18,7 @@ import {
   TableRow,
 } from "@databricks/appkit-ui/react";
 import { CircleAlert, History, RotateCw } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import type { ChangeKind, VersionSummary } from "../../../../shared/joblist/types";
 import { type ApiError, toApiError } from "../../lib/api";
@@ -45,6 +45,8 @@ interface VersionsState {
   versions: VersionSummary[] | null;
   /** The newest page did not load. */
   error: ApiError | null;
+  /** The newest page is loading: at first, after Retry and after Refresh. */
+  loading: boolean;
   /** Older versions can exist past the oldest one shown. */
   more: boolean;
   older: { loading: boolean; error: ApiError | null };
@@ -64,22 +66,23 @@ function withNewest(current: VersionsState, page: VersionSummary[]): VersionsSta
   const newestShown = shown[0]?.version;
   const oldestNew = page[page.length - 1]?.version;
   if (newestShown === undefined || oldestNew === undefined || !moreAfter(page) || oldestNew > newestShown) {
-    return { versions: page, error: null, more: moreAfter(page), older: OLDER_IDLE };
+    return { versions: page, error: null, loading: false, more: moreAfter(page), older: OLDER_IDLE };
   }
   const byVersion = new Map(shown.map((v) => [v.version, v]));
   for (const v of page) byVersion.set(v.version, v);
-  return { ...current, versions: [...byVersion.values()].sort((a, b) => b.version - a.version), error: null };
+  return { ...current, versions: [...byVersion.values()].sort((a, b) => b.version - a.version), error: null, loading: false };
 }
 
 /** The saved versions, newest first, 50 at a time. A failed load keeps the versions already shown. */
 function useVersions() {
-  const [state, setState] = useState<VersionsState>({ versions: null, error: null, more: false, older: OLDER_IDLE });
+  const [state, setState] = useState<VersionsState>({ versions: null, error: null, loading: true, more: false, older: OLDER_IDLE });
   const reload = useCallback(async () => {
+    setState((current) => ({ ...current, loading: true }));
     try {
       const page = await listVersions(PAGE);
       setState((current) => withNewest(current, page));
     } catch (error) {
-      setState((current) => ({ ...current, error: toApiError(error) }));
+      setState((current) => ({ ...current, error: toApiError(error), loading: false }));
     }
   }, []);
   const loadOlder = useCallback(async (before: number) => {
@@ -104,8 +107,26 @@ function useVersions() {
 
 /** Every saved version of the job list: who saved it, when, and what changed. */
 export function ChangeLogPage() {
-  const { versions, error, more, older, reload, loadOlder } = useVersions();
+  const { versions, error, loading, more, older, reload, loadOlder } = useVersions();
   const [open, setOpen] = useState<VersionSummary | null>(null);
+  // Focus goes back to the version's summary when its changes close, else to Refresh (a refresh replaced the rows).
+  const opener = useRef<HTMLElement | null>(null);
+  const refreshButton = useRef<HTMLButtonElement>(null);
+  // A Retry press moves focus to the versions while they load (the Retry goes), and back to Retry when the load
+  // fails again; after a load that works, focus stays on the versions.
+  const versionsArea = useRef<HTMLDivElement>(null);
+  const retryButton = useRef<HTMLButtonElement>(null);
+  const retried = useRef(false);
+  const retry = () => {
+    retried.current = true;
+    versionsArea.current?.focus();
+    void reload();
+  };
+  useEffect(() => {
+    if (!retried.current || loading) return;
+    retried.current = false;
+    if (error) retryButton.current?.focus();
+  }, [loading, error]);
   // After older versions load, focus moves to the first of them (its index in the table).
   const table = useRef<HTMLDivElement>(null);
   const focusAt = useRef<number | null>(null);
@@ -118,7 +139,7 @@ export function ChangeLogPage() {
 
   let body: ReactNode;
   if (versions === null) {
-    body = error ? <LoadError message={error.message} onRetry={() => void reload()} /> : <TableSkeleton />;
+    body = error && !loading ? <LoadError message={error.message} retryRef={retryButton} onRetry={retry} /> : <TableSkeleton />;
   } else if (versions.length === 0) {
     body = (
       <Empty className="flex-none border border-dashed border-border bg-muted/40 md:py-14">
@@ -138,11 +159,14 @@ export function ChangeLogPage() {
     );
   } else {
     body = (
-      <section className="flex flex-col gap-2" aria-label="Versions">
-        {error ? (
-          <p className="flex items-center gap-1.5 text-xs text-destructive">
+      <div className="flex flex-col gap-2">
+        {error && !loading ? (
+          <p role="status" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-destructive">
             <CircleAlert className="size-3.5" aria-hidden="true" />
             The newest versions did not load. {error.message}
+            <Button ref={retryButton} variant="link" size="sm" className="h-auto p-0 text-xs" onClick={retry}>
+              Retry
+            </Button>
           </p>
         ) : null}
         <div ref={table} className="overflow-hidden rounded-md border border-border">
@@ -158,7 +182,14 @@ export function ChangeLogPage() {
             </TableHeader>
             <TableBody>
               {versions.map((version) => (
-                <TableRow key={version.version} className="cursor-pointer" onClick={() => setOpen(version)}>
+                <TableRow
+                  key={version.version}
+                  className="cursor-pointer"
+                  onClick={(event) => {
+                    opener.current = event.currentTarget.querySelector<HTMLElement>("button[data-summary]");
+                    setOpen(version);
+                  }}
+                >
                   <TableCell className="px-3 py-2 font-mono">{version.version}</TableCell>
                   <TableCell className="px-3 py-2 font-mono text-xs text-muted-foreground">{formatUtc(version.savedAt)}</TableCell>
                   <TableCell className="max-w-56 truncate px-3 py-2 font-mono text-xs" title={version.savedBy}>
@@ -172,6 +203,7 @@ export function ChangeLogPage() {
                       title={version.summary}
                       onClick={(event) => {
                         event.stopPropagation();
+                        opener.current = event.currentTarget;
                         setOpen(version);
                       }}
                     >
@@ -217,7 +249,7 @@ export function ChangeLogPage() {
             </p>
           ) : null}
         </div>
-      </section>
+      </div>
     );
   }
 
@@ -228,32 +260,54 @@ export function ChangeLogPage() {
         description="Every saved version of the job list: who saved it, when, and what changed. Click a version to see its changes."
         actions={
           versions !== null ? (
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void reload()}>
+            // Not disabled while it loads: a disabled button would drop the focus of the person who pressed it.
+            <Button
+              ref={refreshButton}
+              variant="outline"
+              size="sm"
+              className="gap-1.5 aria-disabled:cursor-default aria-disabled:opacity-60"
+              aria-disabled={loading}
+              aria-busy={loading}
+              onClick={() => {
+                if (!loading) void reload();
+              }}
+            >
               <RotateCw aria-hidden="true" />
-              Refresh
+              {loading ? "Refreshing..." : "Refresh"}
             </Button>
           ) : null
         }
       />
       <ConfigBanner savedVersion={versions === null ? undefined : (versions[0]?.version ?? null)} />
-      {body}
+      {/* tabIndex -1: focus waits here while the versions load. */}
+      <div
+        ref={versionsArea}
+        role="region"
+        aria-label="Versions"
+        aria-busy={loading}
+        tabIndex={-1}
+        className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {body}
+      </div>
       <VersionDiffSheet
         version={open}
         onOpenChange={(next) => {
           if (!next) setOpen(null);
         }}
+        returnFocus={[opener, refreshButton]}
       />
     </>
   );
 }
 
-function LoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
+function LoadError({ message, retryRef, onRetry }: { message: string; retryRef: RefObject<HTMLButtonElement | null>; onRetry: () => void }) {
   return (
     <Alert variant="destructive" className="border-destructive/40">
       <CircleAlert aria-hidden="true" />
       <AlertDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <p>The change log did not load. {message}</p>
-        <Button variant="outline" size="sm" className="gap-1.5" onClick={onRetry}>
+        <Button ref={retryRef} variant="outline" size="sm" className="gap-1.5" onClick={onRetry}>
           <RotateCw aria-hidden="true" />
           Retry
         </Button>

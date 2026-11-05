@@ -16,7 +16,7 @@ function urlOf(input: RequestInfo | URL): string {
  * answers it, so the test sees each render while the query is loading.
  */
 function mockApi() {
-  const waiting: Array<(rows: unknown[]) => void> = [];
+  const waiting: Array<(event: unknown) => void> = [];
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
@@ -24,21 +24,23 @@ function mockApi() {
         return Promise.resolve(new Response(JSON.stringify(CONFIG), { headers: { "Content-Type": "application/json" } }));
       }
       return new Promise<Response>((resolve) => {
-        waiting.push((rows) => {
-          const event = `data: ${JSON.stringify({ type: "result", data: rows })}\n\n`;
-          resolve(new Response(event, { headers: { "Content-Type": "text/event-stream" } }));
+        waiting.push((event) => {
+          resolve(new Response(`data: ${JSON.stringify(event)}\n\n`, { headers: { "Content-Type": "text/event-stream" } }));
         });
       });
     }),
   );
+  const send = async (event: unknown) => {
+    await waitFor(() => expect(waiting.length).toBeGreaterThan(0));
+    await act(async () => {
+      waiting.shift()?.(event);
+      await new Promise((resolve) => setTimeout(resolve, 0)); // let the answer stream in
+    });
+  };
   return {
-    async answer(rows: unknown[]) {
-      await waitFor(() => expect(waiting.length).toBeGreaterThan(0));
-      await act(async () => {
-        waiting.shift()?.(rows);
-        await new Promise((resolve) => setTimeout(resolve, 0)); // let the answer stream in
-      });
-    },
+    answer: (rows: unknown[]) => send({ type: "result", data: rows }),
+    /** The query fails as AppKit sends a failed statement: a generic message and the warehouse's code. */
+    fail: (error: string, errorCode: string) => send({ type: "error", error, errorCode }),
   };
 }
 
@@ -71,7 +73,30 @@ describe("useLiveStatus", () => {
     expect(result.current.loading).toBe(false);
     const beforeData = renders.slice(0, renders.findIndex((r) => r.byJob.size > 0));
     expect(beforeData.length).toBeGreaterThan(0);
-    expect(beforeData.filter((r) => !r.loading && r.error === null)).toEqual([]);
+    expect(beforeData.filter((r) => !r.loading && r.problem === null)).toEqual([]);
+  });
+
+  it("drops a row of an unexpected shape and keeps the others", async () => {
+    setClock("2026-11-05T12:30:00Z");
+    const api = mockApi();
+    const { result } = renderHook(() => useLiveStatus(), { wrapper: RefreshProvider });
+    await api.answer([
+      { job_name: "orders_ingest", status: "FAILED" },
+      { job_name: null, status: "WARNING" },
+    ]);
+    await waitFor(() => expect(result.current.byJob.get("orders_ingest")).toBe("FAILED"));
+    expect(result.current.byJob.size).toBe(1);
+    expect(result.current.problem).toBeNull();
+  });
+
+  it("names the problem and where the tables are when the query fails, as Monitoring does", async () => {
+    setClock("2026-11-05T13:30:00Z");
+    const api = mockApi();
+    const { result } = renderHook(() => useLiveStatus(), { wrapper: RefreshProvider });
+    await api.fail("Query execution failed", "BAD_REQUEST");
+    await waitFor(() => expect(result.current.problem).toEqual({ kind: "query", message: "Query execution failed", code: "BAD_REQUEST" }));
+    expect(result.current.location).toBe("main.watchdog");
+    expect(result.current.loading).toBe(false);
   });
 
   it("keeps the previous statuses while a refresh loads", async () => {

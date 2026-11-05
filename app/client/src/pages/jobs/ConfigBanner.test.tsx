@@ -2,7 +2,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RefreshProvider } from "../../hooks/useRefreshKey";
+import { RefreshProvider, useRefreshKey } from "../../hooks/useRefreshKey";
 import { ConfigBanner } from "./ConfigBanner";
 
 const CONFIG = { catalog: "main", schema: "watchdog", region: "us-east-2", appName: "watchdog-app", lakebaseProject: "jobs-watchdog" };
@@ -12,16 +12,31 @@ function urlOf(input: RequestInfo | URL): string {
   return input instanceof URL ? input.href : input.url;
 }
 
-/** /api/app-config, and every analytics query answering over SSE with `event`. */
-function mockApi(event: unknown) {
+/** /api/app-config, and every analytics query answering over SSE with what `answer` returns, call by call. */
+function mockAnswers(answer: () => unknown) {
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     if (urlOf(input).startsWith("/api/app-config")) {
       return Promise.resolve(new Response(JSON.stringify(CONFIG), { headers: { "Content-Type": "application/json" } }));
     }
-    return Promise.resolve(new Response(`data: ${JSON.stringify(event)}\n\n`, { headers: { "Content-Type": "text/event-stream" } }));
+    return Promise.resolve(new Response(`data: ${JSON.stringify(answer())}\n\n`, { headers: { "Content-Type": "text/event-stream" } }));
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+/** Every analytics query answers with `event`. */
+function mockApi(event: unknown) {
+  return mockAnswers(() => event);
+}
+
+/** A button that runs every query again, as Retry and the 5-minute refresh do. */
+function RefreshButton() {
+  const { bump } = useRefreshKey();
+  return (
+    <button type="button" onClick={bump}>
+      Refresh now
+    </button>
+  );
 }
 
 const rows = (list: unknown[]) => ({ type: "result", data: list });
@@ -140,13 +155,35 @@ describe("ConfigBanner", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Saved as version 12. The scan is on version 11.");
   });
 
-  it("offers Retry when the loads cannot be read", async () => {
+  it("names the schema and the grants when the loads cannot be read, as Monitoring does, and offers Retry", async () => {
     setClock("2026-11-05T16:30:00Z");
     const fetchMock = mockApi({ type: "error", error: "Query execution failed", errorCode: "BAD_REQUEST" });
     renderBanner(12);
-    expect(await screen.findByText("The app could not check which job-list version the scan uses.")).toBeInTheDocument();
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Could not check which job-list version the scan uses. The query on main.watchdog failed. If no scan has run yet, click Scan now to create the tables. Otherwise, ask the owner of main.watchdog for USE CATALOG, USE SCHEMA and SELECT on it.",
+    );
     const before = fetchMock.mock.calls.length;
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it("keeps the last answer when a refresh fails", async () => {
+    setClock("2026-11-05T17:30:00Z");
+    let fail = false;
+    const fetchMock = mockAnswers(() => (fail ? { type: "error", error: "Query execution failed", errorCode: "BAD_REQUEST" } : rows([load({ version: "11" })])));
+    render(
+      <RefreshProvider>
+        <ConfigBanner savedVersion={12} />
+        <RefreshButton />
+      </RefreshProvider>,
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent("Saved as version 12. The scan is on version 11.");
+    fail = true;
+    const before = fetchMock.mock.calls.length;
+    await userEvent.click(screen.getByRole("button", { name: "Refresh now" }));
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(before));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.getByRole("status")).toHaveTextContent("Saved as version 12. The scan is on version 11.");
+    expect(screen.queryByText(/Could not check/)).not.toBeInTheDocument();
   });
 });

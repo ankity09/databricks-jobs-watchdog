@@ -29,7 +29,7 @@ import {
   useReactFlow,
   useStore,
 } from "@xyflow/react";
-import { Link2, Network, RotateCw, Server, X } from "lucide-react";
+import { CircleAlert, Link2, Network, RotateCw, Server, X } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import { impactOf } from "../../../../shared/joblist/impact";
@@ -44,6 +44,7 @@ import { cn } from "../../lib/utils";
 import { AddLinkDialog, AddServiceDialog } from "./AddLinkDialog";
 import { ConfigBanner } from "./ConfigBanner";
 import { JobNode, LinkEdge, MapLegend, MapMarkers, SectionNode, ServiceNode } from "./MapElements";
+import { QueryProblemLine } from "./QueryProblemLine";
 import { ReloadButton } from "./ReloadButton";
 import {
   type EdgeHighlight,
@@ -222,6 +223,8 @@ export function DependencyMapPage() {
   const live = useLiveStatus();
   const { bump } = useRefreshKey();
   const document = state?.document ?? null;
+  // The version on screen: a change made on the map is made from it.
+  const version = state?.version ?? null;
   const graph = useMemo(() => (document ? buildGraph(document, live.byJob) : null), [document, live.byJob]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -231,6 +234,8 @@ export function DependencyMapPage() {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
+  // Said politely when a box is selected, for people who select one from the keyboard; focus stays on the box.
+  const [announcement, setAnnouncement] = useState("");
 
   const mapRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -257,12 +262,13 @@ export function DependencyMapPage() {
     return () => window.cancelAnimationFrame(frame);
   }, [refocus]);
 
+  /** Saves one change made on the map; `baseVersion` is the version on screen when it was made. */
   const runSave = useCallback(
-    async (change: Change): Promise<boolean> => {
+    async (change: Change, baseVersion: number | null): Promise<boolean> => {
       setSaving(true);
       setProblem(null);
       setNotice(null);
-      const outcome = await save(change);
+      const outcome = await save(change, baseVersion);
       setSaving(false);
       if (outcome.ok) {
         setNotice(`Saved version ${outcome.result.version}: ${outcome.result.summary}.`);
@@ -291,7 +297,9 @@ export function DependencyMapPage() {
   const activate = (box: GraphNode) => {
     setMenuEdge(null);
     if (link.step === "off") {
-      setSelectedId((current) => (current === box.id ? null : box.id));
+      const selecting = selectedId !== box.id;
+      setSelectedId(selecting ? box.id : null);
+      setAnnouncement(selecting && document ? `Selected ${box.name}. ${affectsText(downstreamOf(document, box).jobs.length)}` : "");
       return;
     }
     setLink((mode) => {
@@ -348,6 +356,9 @@ export function DependencyMapPage() {
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Escape") return;
     const from = event.target instanceof Node ? event.target : null;
+    // React Flow takes focus off a link on Escape, which would drop it on the page body: the link keeps it.
+    const fromLink = event.target instanceof Element ? event.target.closest(".react-flow__edge") : null;
+    if (fromLink instanceof SVGElement || fromLink instanceof HTMLElement) fromLink.focus();
     if (link.step !== "off") {
       setLink({ step: "off" });
       // From the banner, which goes with the mode: back to Add link.
@@ -368,7 +379,7 @@ export function DependencyMapPage() {
   const removeLink = (edgeId: string, from: "menu" | "panel") => {
     const panelStays = from === "panel" && graph !== null && selected !== null && staysWithout(graph, edgeId, selected.id);
     const after: FocusTarget = panelStays ? { kind: "panel" } : graph ? focusAfterRemoving(graph, edgeId) : { kind: "map" };
-    void runSave(unlinkChange(edgeId)).then((saved) => {
+    void runSave(unlinkChange(edgeId), version).then((saved) => {
       setMenuEdge(null);
       // When the save fails, the link is still there: focus goes back to where the removal started.
       setRefocus(saved ? after : from === "menu" ? { kind: "link", id: edgeId } : { kind: "panel" });
@@ -407,7 +418,7 @@ export function DependencyMapPage() {
   } else if (state === null) {
     body = (
       <Alert variant="destructive">
-        <AlertTitle>Could not load the job list.</AlertTitle>
+        <AlertTitle>The job list did not load.</AlertTitle>
         <AlertDescription className="flex flex-wrap items-center gap-3">
           <span>{error?.message}</span>
           <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={loading} onClick={() => void reload()}>
@@ -554,22 +565,29 @@ export function DependencyMapPage() {
           {notice}
         </p>
       ) : null}
-      {state !== null && error !== null ? (
-        <Alert variant="destructive">
-          <AlertTitle>Could not reload the job list.</AlertTitle>
-          <AlertDescription>{error.message} The map shows the version loaded before.</AlertDescription>
-        </Alert>
-      ) : null}
-      {live.error && graph ? (
-        <p className="-mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-          Live status is unavailable, so every job shows Unknown. {live.error}
-          <Button variant="ghost" size="sm" className="h-6 gap-1 px-1.5 text-xs" onClick={() => bump()}>
-            <RotateCw className="size-3" aria-hidden="true" />
+      {state !== null && error !== null && !loading ? (
+        // The map on screen loaded, but a later load did not: the same line as on the job list.
+        <p role="status" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-destructive">
+          <CircleAlert className="size-3.5" aria-hidden="true" />
+          The newest job list did not load. {error.message} The map shows the version loaded before.
+          <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => void reload()}>
             Retry
           </Button>
         </p>
       ) : null}
+      {live.problem && graph ? (
+        <QueryProblemLine
+          title={live.stale ? "Live status did not refresh" : "Live status is not available"}
+          problem={live.problem}
+          location={live.location}
+          note={live.stale ? "The map shows the statuses from before." : "Every job shows Unknown until it loads."}
+          onRetry={bump}
+        />
+      ) : null}
       {body}
+      <p aria-live="polite" className="sr-only">
+        {announcement}
+      </p>
       {document ? (
         <>
           <AddLinkDialog
@@ -581,8 +599,8 @@ export function DependencyMapPage() {
             target={link.step === "type" ? { kind: link.target.kind, name: link.target.name } : null}
             document={document}
             saving={saving}
-            returnFocus={addLinkRef}
-            onSave={(change) => void runSave(change).then(() => setLink({ step: "off" }))}
+            returnFocus={[addLinkRef]}
+            onSave={(change) => void runSave(change, version).then(() => setLink({ step: "off" }))}
           />
           <AddServiceDialog
             open={serviceOpen}
@@ -592,8 +610,8 @@ export function DependencyMapPage() {
             document={document}
             defaultJob={selected?.kind === "job" ? selected.name : null}
             saving={saving}
-            returnFocus={addServiceRef}
-            onSave={(change) => void runSave(change).then(() => setServiceOpen(false))}
+            returnFocus={[addServiceRef]}
+            onSave={(change) => void runSave(change, version).then(() => setServiceOpen(false))}
           />
         </>
       ) : null}

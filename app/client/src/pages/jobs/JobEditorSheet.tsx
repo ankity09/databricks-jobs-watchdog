@@ -34,10 +34,11 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { deepEqual } from "../../../../shared/joblist/apply";
 import type { JobEntry, JobListDocument, RuleIssue } from "../../../../shared/joblist/types";
 import { useDebouncedCheck } from "../../hooks/useDebouncedCheck";
-import type { ReloadJobList, SaveOutcome } from "../../hooks/useJobList";
+import { type ReloadJobList, type SaveOutcome, useOpenedVersion } from "../../hooks/useJobList";
 import { toApiError } from "../../lib/api";
 import { draftIssues, jobIssues } from "../../lib/draft";
 import {
+  blocksDefault,
   effectivePatterns,
   environmentLabels,
   INHERIT,
@@ -58,6 +59,7 @@ import { EnvironmentOverridesFields } from "./EnvironmentOverridesFields";
 import { FormRow } from "./FormRow";
 import { JobIdsInput } from "./JobIdsInput";
 import { ReloadButton } from "./ReloadButton";
+import { type ReturnFocus, useReturnFocus } from "./returnFocus";
 
 export interface JobEditorSheetProps {
   open: boolean;
@@ -67,7 +69,10 @@ export interface JobEditorSheetProps {
   initial: JobEntry;
   /** The saved job list the draft is checked against. */
   document: JobListDocument;
-  onSave: (entry: JobEntry) => Promise<SaveOutcome>;
+  /** The version `document` is; null when nothing is saved yet. */
+  version: number | null;
+  /** Saves the entry. `baseVersion` is the version the form opened at, so the server refuses the save when the job changed since. */
+  onSave: (entry: JobEntry, baseVersion: number | null) => Promise<SaveOutcome>;
   /**
    * Rendered under the pattern fields with the patterns the scan would use, and
    * the entry's job IDs, which the scan uses instead where they apply (Task 7
@@ -80,6 +85,8 @@ export interface JobEditorSheetProps {
    * a conflict asks to close the form and open the job again.
    */
   onReload?: ReloadJobList;
+  /** Where focus goes when the sheet closes: the control that opened it, then fallbacks (see useReturnFocus). */
+  returnFocus?: ReturnFocus;
 }
 
 /**
@@ -93,18 +100,34 @@ export function JobEditorSheet({
   mode,
   initial,
   document,
+  version,
   onSave,
   renderPatternPreview,
   onReload,
+  returnFocus,
 }: JobEditorSheetProps) {
   // Bumped after a reload in edit mode, so the form starts again from the newest saved job.
   const [revision, setRevision] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // The page also closes the sheet itself (the job was deleted meanwhile), so each opening clears what the last one said.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setNotice(null);
+      setConfirmDiscard(false);
+    }
+  }
   const dirty = useRef(false);
   const onDirtyChange = useCallback((value: boolean) => {
     dirty.current = value;
   }, []);
+  // "Keep editing" gives focus back to where it was in the sheet when the question opened.
+  const content = useRef<HTMLDivElement>(null);
+  const discardFrom = useRef<HTMLElement | null>(null);
+  const backToPage = useReturnFocus(returnFocus);
+  const backToSheet = useReturnFocus([discardFrom, content]);
 
   const close = () => {
     setNotice(null);
@@ -113,8 +136,13 @@ export function JobEditorSheet({
     onOpenChange(false);
   };
   const requestClose = () => {
-    if (dirty.current) setConfirmDiscard(true);
-    else close();
+    if (!dirty.current) {
+      close();
+      return;
+    }
+    const active = window.document.activeElement;
+    discardFrom.current = active instanceof HTMLElement ? active : null;
+    setConfirmDiscard(true);
   };
   const reloaded = () => {
     if (mode !== "edit") return;
@@ -125,7 +153,7 @@ export function JobEditorSheet({
   const name = initial.job_name;
   return (
     <Sheet open={open} onOpenChange={(next) => (next ? onOpenChange(true) : requestClose())}>
-      <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-3xl">
+      <SheetContent ref={content} side="right" className="w-full gap-0 p-0 sm:max-w-3xl" onCloseAutoFocus={backToPage}>
         <SheetHeader className="border-b border-border px-6 py-4">
           <SheetTitle className="text-base">{mode === "edit" ? `Edit ${name}` : "Add job"}</SheetTitle>
           <SheetDescription>
@@ -140,6 +168,7 @@ export function JobEditorSheet({
           mode={mode}
           initial={initial}
           document={document}
+          version={version}
           onSave={onSave}
           renderPatternPreview={renderPatternPreview}
           onReload={onReload}
@@ -151,7 +180,7 @@ export function JobEditorSheet({
         />
       </SheetContent>
       <AlertDialog open={confirmDiscard} onOpenChange={setConfirmDiscard}>
-        <AlertDialogContent>
+        <AlertDialogContent onCloseAutoFocus={backToSheet}>
           <AlertDialogHeader>
             <AlertDialogTitle>Discard your changes?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -173,7 +202,8 @@ interface EditorFormProps {
   mode: "create" | "edit";
   initial: JobEntry;
   document: JobListDocument;
-  onSave: (entry: JobEntry) => Promise<SaveOutcome>;
+  version: number | null;
+  onSave: (entry: JobEntry, baseVersion: number | null) => Promise<SaveOutcome>;
   renderPatternPreview?: (pattern: string, exclude: string, jobIds: EntryJobIds) => ReactNode;
   onReload?: ReloadJobList;
   onReloaded: () => void;
@@ -184,6 +214,9 @@ interface EditorFormProps {
 }
 
 type Problem = { kind: "conflict" } | { kind: "error"; message: string };
+
+/** The placeholder of an empty field whose saved null (or "" for text) switches the default off. */
+const DEFAULT_OFF = "None, the default is ignored";
 
 /** "Max gap" on screen; "Max gap (minutes)" for assistive tech, which hears the unit the description gives sighted readers. */
 function minutes(text: string): ReactNode {
@@ -212,6 +245,7 @@ function EditorForm({
   mode,
   initial,
   document,
+  version,
   onSave,
   renderPatternPreview,
   onReload,
@@ -221,8 +255,11 @@ function EditorForm({
   onCancel,
   onDone,
 }: EditorFormProps) {
-  // The entry and labels the form opened with. A reload remounts the form, so they are read once.
+  // The entry, labels and version the form opened with. A reload remounts the form, so they are read once.
+  // The save sends that version: when the job changed since (a switch saved after the form opened), the server
+  // refuses it instead of saving the old values over the change.
   const [base] = useState(initial);
+  const [openedAt, takeNewest] = useOpenedVersion(version);
   const [labels] = useState(() => environmentLabels(document, initial));
   const [startValues] = useState(() => toFormValues(initial, labels));
   const [values, setValues] = useState<JobFormValues>(startValues);
@@ -235,6 +272,17 @@ function EditorForm({
 
   // Issues the server returned on save; shown until the next change.
   const [server, setServer] = useState<{ entry: JobEntry; issues: RuleIssue[] } | null>(null);
+  // The job ID fields (the job's, then one per environment) that hold text they refused: Save waits for them.
+  const [refusedIds, setRefusedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const idsRefused = useCallback((where: string, refused: boolean) => {
+    setRefusedIds((current) => {
+      if (current.has(where) === refused) return current;
+      const next = new Set(current);
+      if (refused) next.add(where);
+      else next.delete(where);
+      return next;
+    });
+  }, []);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -269,12 +317,12 @@ function EditorForm({
     // Check the entry as it is now, in case the last change was less than 200 ms ago.
     const issues = check(entry);
     setChecked({ value: entry, issues });
-    if (issues.length > 0) return;
+    if (issues.length > 0 || refusedIds.size > 0) return;
     setSaving(true);
     setProblem(null);
     let outcome: SaveOutcome;
     try {
-      outcome = await onSave(entry);
+      outcome = await onSave(entry, openedAt);
     } catch (error) {
       outcome = { ok: false, conflict: false, issues: [], message: toApiError(error).message };
     }
@@ -290,15 +338,20 @@ function EditorForm({
     }
   };
 
-  const blocked = !changed || shownIssues.length > 0 || saving || problem?.kind === "conflict";
+  const blocked = !changed || shownIssues.length > 0 || refusedIds.size > 0 || saving || problem?.kind === "conflict";
   const gapDescription =
     scheduleType === "scheduled"
       ? "The longest allowed time between run starts, in minutes. A scheduled job needs one."
       : scheduleType === "continuous"
         ? "The longest time with no run in progress, in minutes. Empty means 30."
         : "Leave it empty: a triggered job has no schedule check.";
+  // A saved null (or "" for text) switches the default off; an empty field keeps it so.
+  const textPlaceholder = (key: "owner" | "notes", fallback: string): string => {
+    if (blocksDefault(base, key)) return DEFAULT_OFF;
+    return inherited[key] ? `From defaults: ${inherited[key]}` : fallback;
+  };
   const numberPlaceholder = (key: NumberKey): string => {
-    if (Object.prototype.hasOwnProperty.call(base, key) && Reflect.get(base, key) === null) return "None, the default is ignored";
+    if (Object.prototype.hasOwnProperty.call(base, key) && Reflect.get(base, key) === null) return DEFAULT_OFF;
     if (key === "max_gap_minutes" && scheduleType === "continuous") return "30";
     if (key === "max_gap_minutes" && scheduleType === "triggered") return "Not used";
     const value = inherited.numbers[key];
@@ -418,7 +471,14 @@ function EditorForm({
             description="Optional. The exact jobs to check, by ID. Where job IDs apply, the patterns are not used."
             errors={errors("job_ids")}
           >
-            {(control) => <JobIdsInput {...control} value={values.job_ids} onChange={(ids) => update({ job_ids: ids })} />}
+            {(control) => (
+              <JobIdsInput
+                {...control}
+                value={values.job_ids}
+                onChange={(ids) => update({ job_ids: ids })}
+                onRefusedChange={(refused) => idsRefused("job", refused)}
+              />
+            )}
           </FormRow>
         </FieldSet>
 
@@ -493,7 +553,7 @@ function EditorForm({
                 <Input
                   {...control}
                   value={values.owner}
-                  placeholder={inherited.owner ? `From defaults: ${inherited.owner}` : "Not set"}
+                  placeholder={textPlaceholder("owner", "Not set")}
                   onChange={(event) => update({ owner: event.target.value })}
                 />
               )}
@@ -506,7 +566,7 @@ function EditorForm({
                 value={values.notes}
                 rows={2}
                 className="min-h-14"
-                placeholder={inherited.notes ? `From defaults: ${inherited.notes}` : "Free text for the people who read this list."}
+                placeholder={textPlaceholder("notes", "Free text for the people who read this list.")}
                 onChange={(event) => update({ notes: event.target.value })}
               />
             )}
@@ -528,12 +588,13 @@ function EditorForm({
           <EnvironmentOverridesFields
             rows={values.environments}
             onRowChange={updateRow}
+            onIdsRefused={(label, refused) => idsRefused(`environment:${label}`, refused)}
             issues={grouped.environments}
             job={{
               severity: values.severity === INHERIT ? inherited.severity : values.severity,
-              owner: values.owner.trim() || inherited.owner,
+              owner: values.owner.trim() || (blocksDefault(base, "owner") ? "" : inherited.owner),
               enabled,
-              numbers: jobNumbers(values, inherited.numbers),
+              numbers: jobNumbers(values, inherited.numbers, base),
             }}
           />
         </FieldSet>
@@ -545,6 +606,8 @@ function EditorForm({
           onReload={onReload}
           onReloaded={() => {
             setProblem(null);
+            // A new job keeps what was typed, and saves from the version it now checks against (an edit starts again).
+            takeNewest();
             onReloaded();
           }}
         />
@@ -561,13 +624,13 @@ function EditorForm({
   );
 }
 
-/** The job's own number settings, else its defaults: what an environment row shows it keeps. */
-function jobNumbers(values: JobFormValues, inherited: Partial<Record<NumberKey, number>>): Partial<Record<NumberKey, number>> {
+/** The job's own number settings, else its defaults (unless a saved null switches them off): what an environment row shows it keeps. */
+function jobNumbers(values: JobFormValues, inherited: Partial<Record<NumberKey, number>>, base: JobEntry): Partial<Record<NumberKey, number>> {
   const numbers: Partial<Record<NumberKey, number>> = {};
   for (const key of NUMBER_KEYS) {
     const text = values[key].trim();
     const own = text === "" ? Number.NaN : Number(text);
-    const value = Number.isFinite(own) ? own : inherited[key];
+    const value = Number.isFinite(own) ? own : blocksDefault(base, key) ? undefined : inherited[key];
     if (value !== undefined) numbers[key] = value;
   }
   return numbers;
@@ -604,10 +667,10 @@ function NumberRow({ name, description, values, errors, placeholder, update }: N
       {(control) => (
         <Input
           {...control}
-          type="number"
+          // Text, not type="number": a number field hands over "" for text such as "1e", which would save as empty.
+          type="text"
           inputMode="numeric"
-          min={0}
-          step={1}
+          autoComplete="off"
           className="font-mono"
           value={values[name]}
           placeholder={placeholder(name)}

@@ -31,30 +31,37 @@ import {
   TooltipTrigger,
 } from "@databricks/appkit-ui/react";
 import { CircleAlert, CircleCheck, Download, ListChecks, Pencil, Plus, RotateCw, ScanSearch, Search, Trash2, Upload, X } from "lucide-react";
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { type Change, dependencyKey, type JobEntry, type JobListDocument, type SaveResult } from "../../../../shared/joblist/types";
-import { type ReloadJobList, type SaveOutcome, useJobList } from "../../hooks/useJobList";
+import { type ReloadJobList, type SaveOutcome, useJobList, useOpenedVersion } from "../../hooks/useJobList";
 import { type LiveStatus, useLiveStatus } from "../../hooks/useLiveStatus";
+import { useRefreshKey } from "../../hooks/useRefreshKey";
 import { changeIssues, linksRemovedWith } from "../../lib/draft";
-import { inheritedSettings, type InheritedSettings, pyReEscape } from "../../lib/job-form";
+import { blocksDefault, inheritedSettings, type InheritedSettings, type NumberKey, pyReEscape } from "../../lib/job-form";
 import { exportUrl } from "../../lib/joblist-api";
 import type { EntryJobIds } from "../../lib/picker";
-import { type Status, statusTone } from "../../lib/status";
+import type { Status } from "../../lib/status";
 import { describeTarget } from "../../lib/targets";
 import { formatUtc } from "../../lib/time";
 import { cn } from "../../lib/utils";
 import { PageHeader } from "../../layout/PageHeader";
+import { StatusBadge } from "../monitoring/StatusBadge";
 import { AddFromWorkspaceDialog } from "./AddFromWorkspaceDialog";
 import { ConfigBanner } from "./ConfigBanner";
 import { ImportDialog } from "./ImportDialog";
 import { JobEditorSheet } from "./JobEditorSheet";
 import { PatternMatches } from "./PatternMatches";
+import { QueryProblemLine } from "./QueryProblemLine";
 import { ReloadButton } from "./ReloadButton";
+import { type ReturnFocus, useReturnFocus } from "./returnFocus";
 
 /** What an extra toolbar action can do on this page. */
 export interface JobListActions {
-  /** Opens the editor in create mode, filled from a draft (Task 7's "Add from workspace"). */
-  openCreate(this: void, draft: JobEntry): void;
+  /**
+   * Opens the editor in create mode, filled from a draft (Task 7's "Add from workspace"). Focus goes back to
+   * `opener` when the editor closes; by default, to what has focus now.
+   */
+  openCreate(this: void, draft: JobEntry, opener?: HTMLElement | null): void;
   /** The saved job list. */
   document: JobListDocument;
   /** False until the job list has loaded; until then, document is an empty list. */
@@ -69,13 +76,21 @@ export interface JobListPageProps {
 /** "Add from workspace": pick one of the region's jobs, and the editor opens with its name, job ID and schedule type. */
 function AddFromWorkspace({ openCreate, document, ready }: JobListActions) {
   const [open, setOpen] = useState(false);
+  // The picker gives focus back to this button, and so does the editor a pick opens.
+  const button = useRef<HTMLButtonElement>(null);
   return (
     <>
-      <Button variant="outline" size="sm" onClick={() => setOpen(true)} disabled={!ready}>
+      <Button ref={button} variant="outline" size="sm" onClick={() => setOpen(true)} disabled={!ready}>
         <ScanSearch aria-hidden="true" />
         Add from workspace
       </Button>
-      <AddFromWorkspaceDialog open={open} onOpenChange={setOpen} document={document} onPick={openCreate} />
+      <AddFromWorkspaceDialog
+        open={open}
+        onOpenChange={setOpen}
+        document={document}
+        onPick={(draft) => openCreate(draft, button.current)}
+        returnFocus={[button]}
+      />
     </>
   );
 }
@@ -96,14 +111,12 @@ interface Problem {
   conflict: boolean;
 }
 
-const TONE_TEXT = {
-  destructive: "text-destructive",
-  warning: "text-warning",
-  muted: "text-muted-foreground",
-  success: "text-success",
-} as const;
-const TONE_DOT = { destructive: "bg-destructive", warning: "bg-warning", muted: "bg-muted-foreground/60", success: "bg-success" } as const;
 const COLUMNS = ["Job", "Schedule", "Limits", "Severity", "Owner", "Environments", "Enabled", "Live status"] as const;
+
+/** The element that has focus, such as the button just pressed. */
+function activeElement(): HTMLElement | null {
+  return window.document.activeElement instanceof HTMLElement ? window.document.activeElement : null;
+}
 
 function count(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
@@ -119,6 +132,7 @@ function isActive(job: JobEntry, inherited: InheritedSettings): boolean {
 export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProps = {}) {
   const { state, loading, error, reload, save } = useJobList();
   const live = useLiveStatus();
+  const { bump } = useRefreshKey();
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<Editing | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -126,6 +140,24 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
   const [notice, setNotice] = useState<string | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [toggling, setToggling] = useState<Record<string, boolean>>({});
+  // Where focus goes when the editor, the delete question or the import closes: the control that opened it, else
+  // the search field (the control went with its row, or with the empty state), else Add job.
+  const opener = useRef<HTMLElement | null>(null);
+  const searchField = useRef<HTMLInputElement>(null);
+  const addJob = useRef<HTMLButtonElement>(null);
+  const returnFocus: ReturnFocus = [opener, searchField, addJob];
+  const openedFrom = (element: HTMLElement | null) => {
+    opener.current = element;
+  };
+  // The first import replaces the empty state, and with it the Import YAML button that gets focus back when the
+  // dialog closes: once the list arrives, focus goes to its search field instead.
+  const focusSearchWhenListed = useRef(false);
+  useEffect(() => {
+    const field = searchField.current;
+    if (!focusSearchWhenListed.current || !field) return;
+    focusSearchWhenListed.current = false;
+    field.focus();
+  }, [state]);
 
   const document = state?.document ?? null;
   const jobs = useMemo(() => document?.jobs ?? [], [document]);
@@ -140,15 +172,19 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
     setProblem(null);
     setNotice(`Saved version ${result.version}: ${result.summary}.`);
   };
-  const apply = async (change: Change): Promise<SaveOutcome> => {
-    const outcome = await save(change);
+  const apply = async (change: Change, baseVersion: number | null): Promise<SaveOutcome> => {
+    const outcome = await save(change, baseVersion);
     if (outcome.ok) saved(outcome.result);
     return outcome;
   };
 
-  const toggle = async (job: JobEntry, next: boolean) => {
+  // The switch saves the job as this version shows it, so it sends this version.
+  const toggle = async (job: JobEntry, next: boolean, baseVersion: number | null) => {
     setToggling((current) => ({ ...current, [job.job_name]: next }));
-    const outcome = await apply({ kind: "upsert", target: { type: "job", name: job.job_name }, value: { ...job, enabled: next } });
+    const outcome = await apply(
+      { kind: "upsert", target: { type: "job", name: job.job_name }, value: { ...job, enabled: next } },
+      baseVersion,
+    );
     setToggling(({ [job.job_name]: _done, ...rest }) => rest);
     if (outcome.ok) return;
     if (outcome.conflict)
@@ -159,7 +195,10 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
     else setProblem({ conflict: false, message: outcome.issues[0]?.message ?? outcome.message });
   };
 
-  const openCreate = (draft: JobEntry) => setEditing({ mode: "create", draft });
+  const openCreate = (draft: JobEntry, from: HTMLElement | null = activeElement()) => {
+    openedFrom(from);
+    setEditing({ mode: "create", draft });
+  };
   const editingJob = editing?.mode === "edit" ? jobs.find((job) => job.job_name === editing.name) : undefined;
   // A job someone else deleted while its editor was open: the editor closes and the page says so.
   const vanished = editing?.mode === "edit" && state !== null && editingJob === undefined ? editing.name : null;
@@ -170,7 +209,15 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
   const toolbar = (
     <>
       {extra}
-      <Button variant="outline" size="sm" onClick={() => setImporting(true)} disabled={state === null}>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={(event) => {
+          openedFrom(event.currentTarget);
+          setImporting(true);
+        }}
+        disabled={state === null}
+      >
         <Upload aria-hidden="true" />
         Import YAML
       </Button>
@@ -187,7 +234,7 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
           Export YAML
         </Button>
       )}
-      <Button size="sm" onClick={() => openCreate({ job_name: "" })} disabled={state === null}>
+      <Button ref={addJob} size="sm" onClick={(event) => openCreate({ job_name: "" }, event.currentTarget)} disabled={state === null}>
         <Plus aria-hidden="true" />
         Add job
       </Button>
@@ -208,11 +255,18 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
           <EmptyDescription>No jobs yet. Import your monitored-jobs YAML file, or add a job.</EmptyDescription>
         </EmptyHeader>
         <EmptyContent className="flex-row justify-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setImporting(true)}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={(event) => {
+              openedFrom(event.currentTarget);
+              setImporting(true);
+            }}
+          >
             <Upload aria-hidden="true" />
             Import YAML
           </Button>
-          <Button size="sm" onClick={() => openCreate({ job_name: "" })}>
+          <Button size="sm" onClick={(event) => openCreate({ job_name: "" }, event.currentTarget)}>
             <Plus aria-hidden="true" />
             Add job
           </Button>
@@ -229,6 +283,7 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
               aria-hidden="true"
             />
             <Input
+              ref={searchField}
               type="search"
               aria-label="Search jobs by name"
               placeholder="Search jobs by name"
@@ -247,11 +302,14 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
             </p>
           ) : null}
         </div>
-        {live.error ? (
-          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <CircleAlert className="size-3.5" aria-hidden="true" />
-            Live status is not available: {live.error}
-          </p>
+        {live.problem ? (
+          <QueryProblemLine
+            title={live.stale ? "Live status did not refresh" : "Live status is not available"}
+            problem={live.problem}
+            location={live.location}
+            note={live.stale ? "The table shows the statuses from before." : undefined}
+            onRetry={bump}
+          />
         ) : null}
         <JobTable
           jobs={shown}
@@ -260,9 +318,15 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
           live={live}
           toggling={toggling}
           onClearSearch={() => setSearch("")}
-          onEdit={(name) => setEditing({ mode: "edit", name })}
-          onDelete={setDeleting}
-          onToggle={(job, next) => void toggle(job, next)}
+          onEdit={(name, from) => {
+            openedFrom(from);
+            setEditing({ mode: "edit", name });
+          }}
+          onDelete={(name, from) => {
+            openedFrom(from);
+            setDeleting(name);
+          }}
+          onToggle={(job, next) => void toggle(job, next, state.version)}
         />
       </section>
     );
@@ -288,7 +352,7 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
           <CircleAlert className="size-3.5" aria-hidden="true" />
           The newest job list did not load. {error.message}
           <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => void reload()}>
-            Try again
+            Retry
           </Button>
         </p>
       ) : null}
@@ -303,9 +367,11 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
           mode={editing?.mode ?? "create"}
           initial={editing?.mode === "create" ? editing.draft : (editingJob ?? { job_name: "" })}
           document={state.document}
-          onSave={(entry) => apply({ kind: "upsert", target: { type: "job", name: entry.job_name }, value: entry })}
+          version={state.version}
+          onSave={(entry, baseVersion) => apply({ kind: "upsert", target: { type: "job", name: entry.job_name }, value: entry }, baseVersion)}
           renderPatternPreview={patternPreview}
           onReload={reload}
+          returnFocus={returnFocus}
         />
       ) : null}
 
@@ -313,13 +379,15 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
         <DeleteJobDialog
           name={deleting}
           document={state.document}
+          version={state.version}
           onCancel={() => setDeleting(null)}
-          onDelete={async () => {
-            const outcome = await apply({ kind: "delete", target: { type: "job", name: deleting } });
+          onDelete={async (baseVersion) => {
+            const outcome = await apply({ kind: "delete", target: { type: "job", name: deleting } }, baseVersion);
             if (outcome.ok) setDeleting(null);
             return outcome;
           }}
           onReload={reload}
+          returnFocus={returnFocus}
         />
       ) : null}
 
@@ -328,10 +396,14 @@ export function JobListPage({ extraActions = addFromWorkspace }: JobListPageProp
         onOpenChange={setImporting}
         baseVersion={state?.version ?? null}
         onReload={reload}
+        returnFocus={returnFocus}
         onImported={(result) => {
           saved(result);
+          if (state !== null && state.version === null && jobs.length === 0) focusSearchWhenListed.current = true;
           // An import's result has no savedAt or savedBy; a reload brings them.
-          void reload();
+          void reload().then((failure) => {
+            if (failure) focusSearchWhenListed.current = false;
+          });
         }}
       />
     </>
@@ -427,8 +499,9 @@ interface JobTableProps {
   live: LiveStatus;
   toggling: Record<string, boolean>;
   onClearSearch: () => void;
-  onEdit: (name: string) => void;
-  onDelete: (name: string) => void;
+  /** `from` is the button that was pressed, which gets focus back when the editor closes. */
+  onEdit: (name: string, from: HTMLElement) => void;
+  onDelete: (name: string, from: HTMLElement) => void;
   onToggle: (job: JobEntry, next: boolean) => void;
 }
 
@@ -466,8 +539,8 @@ function JobTable({ jobs, query, inherited, live, toggling, onClearSearch, onEdi
                 inherited={inherited}
                 live={live}
                 pending={toggling[job.job_name]}
-                onEdit={() => onEdit(job.job_name)}
-                onDelete={() => onDelete(job.job_name)}
+                onEdit={(from) => onEdit(job.job_name, from)}
+                onDelete={(from) => onDelete(job.job_name, from)}
                 onToggle={(next) => onToggle(job, next)}
               />
             ))
@@ -513,17 +586,10 @@ function overrideSummary(overrides: object): string {
 }
 
 function LiveStatusCell({ status, live, active }: { status: Status | undefined; live: LiveStatus; active: boolean }) {
-  if (status) {
-    const tone = statusTone(status);
-    return (
-      <span className={cn("inline-flex items-center gap-1.5 font-mono text-[11px] font-medium", TONE_TEXT[tone])}>
-        <span className={cn("size-2 rounded-full", TONE_DOT[tone])} aria-hidden="true" />
-        {status}
-      </span>
-    );
-  }
+  // The same badge as Monitoring, so a status reads the same on every page.
+  if (status) return <StatusBadge status={status} />;
   if (live.loading) return <Skeleton className="h-3.5 w-16" />;
-  if (live.error) return <span className="text-xs text-muted-foreground">Not available</span>;
+  if (live.problem) return <span className="text-xs text-muted-foreground">Not available</span>;
   return <span className="text-xs text-muted-foreground">{active ? "Not scanned yet" : "Off"}</span>;
 }
 
@@ -532,8 +598,8 @@ interface JobRowProps {
   inherited: InheritedSettings;
   live: LiveStatus;
   pending: boolean | undefined;
-  onEdit: () => void;
-  onDelete: () => void;
+  onEdit: (from: HTMLElement) => void;
+  onDelete: (from: HTMLElement) => void;
   onToggle: (next: boolean) => void;
 }
 
@@ -544,13 +610,16 @@ interface Limit {
 
 function limitsOf(job: JobEntry, inherited: InheritedSettings): Limit[] {
   const limits: Limit[] = [];
-  const add = (name: string, own: number | undefined, fallback: number | undefined, unit: string) => {
-    const value = own ?? fallback;
+  const add = (name: string, key: NumberKey, unit: string) => {
+    // A saved null switches the default off: the job has no such limit.
+    if (blocksDefault(job, key)) return;
+    const own = job[key];
+    const value = own ?? inherited.numbers[key];
     if (typeof value === "number") limits.push({ text: `${name} ${value}${unit}`, inherited: own === undefined });
   };
-  add("runtime", job.max_runtime_minutes, inherited.numbers.max_runtime_minutes, " min");
-  add("retries", job.max_retries, inherited.numbers.max_retries, "");
-  add("attempt", job.min_attempt_minutes, inherited.numbers.min_attempt_minutes, " min");
+  add("runtime", "max_runtime_minutes", " min");
+  add("retries", "max_retries", "");
+  add("attempt", "min_attempt_minutes", " min");
   return limits;
 }
 
@@ -566,7 +635,8 @@ function JobRow({ job, inherited, live, pending, onEdit, onDelete, onToggle }: J
   const gapInherited = schedule === "scheduled" && job.max_gap_minutes === undefined;
   const limits = limitsOf(job, inherited);
   const severity = job.severity ?? inherited.severity;
-  const owner = job.owner ?? inherited.owner;
+  // A saved null or "" switches the default owner off.
+  const owner = blocksDefault(job, "owner") ? "" : (job.owner ?? inherited.owner);
   const enabled = pending ?? job.enabled ?? inherited.enabled;
   const ids = Array.isArray(job.job_ids) ? job.job_ids.length : 0;
   const pattern = job.job_name_regex || `^${pyReEscape(job.job_name)}$`;
@@ -579,7 +649,7 @@ function JobRow({ job, inherited, live, pending, onEdit, onDelete, onToggle }: J
         <button
           type="button"
           className="block max-w-full truncate rounded-xs text-left font-medium text-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={onEdit}
+          onClick={(event) => onEdit(event.currentTarget)}
         >
           {job.job_name}
         </button>
@@ -653,7 +723,7 @@ function JobRow({ job, inherited, live, pending, onEdit, onDelete, onToggle }: J
             size="icon-sm"
             className="size-7 text-muted-foreground hover:text-foreground"
             aria-label={`Edit ${job.job_name}`}
-            onClick={onEdit}
+            onClick={(event) => onEdit(event.currentTarget)}
           >
             <Pencil aria-hidden="true" />
           </Button>
@@ -662,7 +732,7 @@ function JobRow({ job, inherited, live, pending, onEdit, onDelete, onToggle }: J
             size="icon-sm"
             className="size-7 text-muted-foreground hover:text-destructive"
             aria-label={`Delete ${job.job_name}`}
-            onClick={onDelete}
+            onClick={(event) => onDelete(event.currentTarget)}
           >
             <Trash2 aria-hidden="true" />
           </Button>
@@ -675,21 +745,29 @@ function JobRow({ job, inherited, live, pending, onEdit, onDelete, onToggle }: J
 interface DeleteJobDialogProps {
   name: string;
   document: JobListDocument;
+  /** The version `document` is. */
+  version: number | null;
   onCancel: () => void;
-  onDelete: () => Promise<SaveOutcome>;
+  /** Deletes the job; `baseVersion` is the version the dialog opened at. */
+  onDelete: (baseVersion: number | null) => Promise<SaveOutcome>;
   onReload: ReloadJobList;
+  /** Where focus goes when the dialog closes (see useReturnFocus). */
+  returnFocus?: ReturnFocus;
 }
 
 /** Confirms a delete, and names the links that go with it. */
-function DeleteJobDialog({ name, document, onCancel, onDelete, onReload }: DeleteJobDialogProps) {
+function DeleteJobDialog({ name, document, version, onCancel, onDelete, onReload, returnFocus }: DeleteJobDialogProps) {
+  const onCloseAutoFocus = useReturnFocus(returnFocus);
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<SaveOutcome | null>(null);
+  // The version the dialog opened at, until a reload after a conflict shows a newer one.
+  const [openedAt, takeNewest] = useOpenedVersion(version);
   const links = useMemo(() => linksRemovedWith(document, name), [document, name]);
   const blockers = useMemo(() => changeIssues(document, { kind: "delete", target: { type: "job", name } }), [document, name]);
 
   const confirm = async () => {
     setBusy(true);
-    const result = await onDelete();
+    const result = await onDelete(openedAt);
     setBusy(false);
     if (!result.ok) setOutcome(result);
   };
@@ -704,7 +782,7 @@ function DeleteJobDialog({ name, document, onCancel, onDelete, onReload }: Delet
         if (!open) onCancel();
       }}
     >
-      <AlertDialogContent>
+      <AlertDialogContent onCloseAutoFocus={onCloseAutoFocus}>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
           <AlertDialogDescription>The Watchdog stops checking this job. The change log keeps every earlier version.</AlertDialogDescription>
@@ -731,7 +809,13 @@ function DeleteJobDialog({ name, document, onCancel, onDelete, onReload }: Delet
         {conflict ? (
           <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-destructive">
             <p className="leading-5">Someone else changed this job since you opened it.</p>
-            <ReloadButton onReload={onReload} onReloaded={() => setOutcome(null)} />
+            <ReloadButton
+              onReload={onReload}
+              onReloaded={() => {
+                setOutcome(null);
+                takeNewest();
+              }}
+            />
           </div>
         ) : null}
         {message ? (

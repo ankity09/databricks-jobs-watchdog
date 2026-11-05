@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { type ClipboardEvent, type KeyboardEvent, useId, useState } from "react";
+import { type ClipboardEvent, type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 
 export interface JobIdsInputProps {
@@ -14,6 +14,11 @@ export interface JobIdsInputProps {
   /** Set by FormControl when the field has a rule issue. */
   "aria-invalid"?: boolean | "true" | "false";
   className?: string;
+  /**
+   * Called when the field starts or stops holding text it refused (it is not part of `value`), and with false
+   * when the field goes away. The form keeps Save off meanwhile, so the text is never dropped without a word.
+   */
+  onRefusedChange?: (refused: boolean) => void;
 }
 
 /** Commas, spaces and new lines separate IDs, so a pasted list adds every ID in it. */
@@ -62,10 +67,21 @@ export function JobIdsInput({
   "aria-describedby": describedBy,
   "aria-invalid": ariaInvalid,
   className,
+  onRefusedChange,
 }: JobIdsInputProps) {
   const [text, setText] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
+  // The text left after the last commit was refused; typing in the field clears it until the next commit.
+  const [refused, setRefused] = useState(false);
   const messageId = useId();
+  const report = useRef(onRefusedChange);
+  useEffect(() => {
+    report.current = onRefusedChange;
+  });
+  useEffect(() => {
+    report.current?.(refused);
+  }, [refused]);
+  useEffect(() => () => report.current?.(false), []);
 
   const commit = (tokens: string[], keep = "") => {
     if (tokens.length === 0) {
@@ -74,6 +90,7 @@ export function JobIdsInput({
     }
     const added = addTokens(value, tokens);
     setProblem(added.problem);
+    setRefused(added.rest !== "");
     setText([added.rest, keep].filter((part) => part !== "").join(", "));
     if (added.next.length !== value.length) onChange(added.next);
   };
@@ -101,6 +118,7 @@ export function JobIdsInput({
       return;
     }
     setText(next);
+    setRefused(false);
     if (problem !== null) setProblem(null);
   };
 

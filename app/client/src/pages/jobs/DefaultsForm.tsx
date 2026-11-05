@@ -18,7 +18,7 @@ import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useStat
 import { deepEqual } from "../../../../shared/joblist/apply";
 import type { Change, DefaultsEntry, JobEntry, JobListDocument, RuleIssue, SaveResult } from "../../../../shared/joblist/types";
 import { useDebouncedCheck } from "../../hooks/useDebouncedCheck";
-import type { ReloadJobList, SaveOutcome } from "../../hooks/useJobList";
+import { type ReloadJobList, type SaveOutcome, useOpenedVersion } from "../../hooks/useJobList";
 import { changeIssues, type DefaultIssue, defaultsIssues } from "../../lib/draft";
 import {
   INHERIT,
@@ -36,7 +36,10 @@ import { ReloadButton } from "./ReloadButton";
 
 export interface DefaultsFormProps {
   document: JobListDocument;
-  onSave: (change: Change) => Promise<SaveOutcome>;
+  /** The version `document` is. */
+  version: number | null;
+  /** Saves a change; `baseVersion` is the version the form opened at. */
+  onSave: (change: Change, baseVersion: number | null) => Promise<SaveOutcome>;
   onSaved: (result: SaveResult) => void;
   onReload: ReloadJobList;
 }
@@ -60,6 +63,8 @@ function changeFor(saved: DefaultsEntry | undefined, next: DefaultsEntry): Chang
 type Problem = { kind: "conflict" } | { kind: "error"; message: string };
 
 const RELOADED = "This form now shows the newest saved values. Make your change again.";
+/** When a newer version brought other defaults, and the form had no edits to lose. */
+const NEWER = "This form now shows the newest saved values.";
 
 /** "a", "a and b", "a, b and c", or "a, b and 6 more jobs". */
 function jobList(jobs: string[]): string {
@@ -92,48 +97,72 @@ const NUMBER_LABELS: Record<NumberKey, { label: ReactNode; description: string }
   min_attempt_minutes: { label: minutes("Min attempt"), description: "Minutes. A retried attempt shorter than this is a retry loop." },
 };
 
+/** Where focus goes when the form starts again: the notice after a reload, the card after a save (its Save button goes). */
+type FocusOnStart = "notice" | "card" | null;
+
 /**
  * The defaults section: the settings every job gets unless it sets its own.
  * A change is checked against the whole list as you type, so a default that
  * would break a job is caught before it is saved.
  */
-export function DefaultsForm({ document, onSave, onSaved, onReload }: DefaultsFormProps) {
-  // Bumped after a save or a reload, so the form starts again from the newest saved defaults.
+export function DefaultsForm({ document, version, onSave, onSaved, onReload }: DefaultsFormProps) {
+  // Bumped after a save or a reload, and when a newer version changed the defaults while the form has no edits,
+  // so the form starts again from the newest saved defaults.
   const [revision, setRevision] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+  const [focus, setFocus] = useState<FocusOnStart>(null);
+  const restart = useCallback((next: { notice: string | null; focus: FocusOnStart }) => {
+    setNotice(next.notice);
+    setFocus(next.focus);
+    setRevision((n) => n + 1);
+  }, []);
+  // A newer version starts the form again and says so. Focus stays where the person has it, or on the card
+  // when it was in the form, which goes away under it.
+  const outdated = useCallback((focusInside: boolean) => restart({ notice: NEWER, focus: focusInside ? "card" : null }), [restart]);
   return (
     <DefaultsFields
       key={revision}
       document={document}
+      version={version}
       notice={notice}
+      focus={focus}
       onSave={onSave}
       onSaved={(result) => {
         onSaved(result);
-        setNotice(null);
-        setRevision((n) => n + 1);
+        restart({ notice: null, focus: "card" });
       }}
       onReload={onReload}
-      onReloaded={() => {
-        setNotice(RELOADED);
-        setRevision((n) => n + 1);
-      }}
+      onReloaded={() => restart({ notice: RELOADED, focus: "notice" })}
+      onOutdated={outdated}
     />
   );
 }
 
 interface DefaultsFieldsProps extends DefaultsFormProps {
   notice: string | null;
+  focus: FocusOnStart;
   onReloaded: () => void;
+  /** A newer version has other defaults, and the form has no edits: it starts again from them. `focusInside` says whether the form had focus. */
+  onOutdated: (focusInside: boolean) => void;
 }
 
-function DefaultsFields({ document, notice, onSave, onSaved, onReload, onReloaded }: DefaultsFieldsProps) {
+function DefaultsFields({ document, version, notice, focus, onSave, onSaved, onReload, onReloaded, onOutdated }: DefaultsFieldsProps) {
   const headingId = useId();
-  // After a reload the form starts again, and focus moves to the notice that says so.
+  // The form starts again after a reload or a save; focus moves to the notice that says so, or to the card.
   const noticeRef = useRef<HTMLParagraphElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  // Whether focus is in the form: false as soon as focus leaves it for anything, the page body too. It stays true
+  // only when the focused element goes away with no blur (browsers send none for a removed element).
+  const focusHere = useRef(false);
   useEffect(() => {
-    if (notice) noticeRef.current?.focus();
-  }, [notice]);
+    if (focus === "notice") noticeRef.current?.focus();
+    else if (focus === "card") cardRef.current?.focus();
+  }, [focus]);
+  // The defaults and the version the form opened at. A save sends that version, so when someone changed the
+  // defaults since (a label save on this page brought their change), the server refuses it instead of saving
+  // these values over theirs.
   const [saved] = useState(document.defaults);
+  const [openedAt] = useOpenedVersion(version);
   const [base] = useState(() => asEntry(document.defaults));
   const [startValues] = useState(() => toFormValues(base, []));
   const [values, setValues] = useState<JobFormValues>(startValues);
@@ -150,6 +179,14 @@ function DefaultsFields({ document, notice, onSave, onSaved, onReload, onReloade
   const grouped = useMemo(() => defaultsIssues(document, issues), [document, issues]);
   const fieldIssues = (key: string) => (grouped.fields[key] ?? []).map(fieldMessage);
   const dirty = !deepEqual(next, saved ?? {});
+  // Edits stay until they are saved or undone; without edits, the form shows the newest defaults.
+  const outdated = !dirty && !deepEqual(document.defaults ?? {}, saved ?? {});
+  useEffect(() => {
+    if (!outdated) return;
+    const active = window.document.activeElement;
+    const inside = cardRef.current?.contains(active) === true || (focusHere.current && active === window.document.body);
+    onOutdated(inside);
+  }, [outdated, onOutdated]);
   const update = (patch: Partial<JobFormValues>) => {
     setValues((current) => ({ ...current, ...patch }));
     if (problem?.kind === "error") setProblem(null);
@@ -162,7 +199,7 @@ function DefaultsFields({ document, notice, onSave, onSaved, onReload, onReloade
     if (now.length > 0) return;
     setSaving(true);
     setProblem(null);
-    const outcome = await onSave(change);
+    const outcome = await onSave(change, openedAt);
     setSaving(false);
     if (outcome.ok) onSaved(outcome.result);
     else if (outcome.conflict) setProblem({ kind: "conflict" });
@@ -171,7 +208,19 @@ function DefaultsFields({ document, notice, onSave, onSaved, onReload, onReloade
   };
 
   return (
-    <Card className="gap-4 py-5" role="region" aria-labelledby={headingId}>
+    <Card
+      ref={cardRef}
+      onFocus={() => {
+        focusHere.current = true;
+      }}
+      onBlur={(event) => {
+        if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) focusHere.current = false;
+      }}
+      tabIndex={-1}
+      className="gap-4 py-5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      role="region"
+      aria-labelledby={headingId}
+    >
       <CardHeader className="px-5">
         <CardTitle id={headingId} className="text-[15px]">
           Defaults
@@ -247,10 +296,10 @@ function DefaultsFields({ document, notice, onSave, onSaved, onReload, onReloade
               {(control) => (
                 <Input
                   {...control}
-                  type="number"
+                  // Text, not type="number": a number field hands over "" for text such as "1e", which would save as empty.
+                  type="text"
                   inputMode="numeric"
-                  min={0}
-                  step={1}
+                  autoComplete="off"
                   className="font-mono"
                   value={values[key]}
                   placeholder="Not set"

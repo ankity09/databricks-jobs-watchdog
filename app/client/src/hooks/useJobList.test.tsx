@@ -1,8 +1,12 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { Change, JobListState } from "../../../shared/joblist/types";
 import { useJobList } from "./useJobList";
+
+/** The base version in a POST /api/job-list/changes body. */
+const BaseOf = z.object({ baseVersion: z.number().nullable() });
 
 function urlOf(input: RequestInfo | URL): string {
   if (typeof input === "string") return input;
@@ -62,7 +66,7 @@ describe("useJobList", () => {
     const { result } = await loaded();
     let outcome: Awaited<ReturnType<typeof result.current.save>> | undefined;
     await act(async () => {
-      outcome = await result.current.save(change);
+      outcome = await result.current.save(change, 3);
     });
     expect(outcome).toEqual({ ok: true, result: { version: 4, summary: "Added daily_revenue_report", document } });
     expect(result.current.state?.version).toBe(4);
@@ -72,12 +76,62 @@ describe("useJobList", () => {
     expect(JSON.parse(typeof body === "string" ? body : "null")).toEqual({ baseVersion: 3, change });
   });
 
+  it("sends the base version the caller gives, not the newest version it holds", async () => {
+    // A form opened at version 3 saves after this browser saved version 4: the server must compare with 3.
+    const document = { jobs: [...saved.document.jobs, { job_name: "daily_revenue_report", severity: "CRITICAL" }] };
+    const fetchMock = mockApi(saved, json(201, { version: 4, summary: "Added daily_revenue_report", document }));
+    const { result } = await loaded();
+    await act(async () => {
+      await result.current.save(change, 3);
+    });
+    expect(result.current.state?.version).toBe(4);
+    await act(async () => {
+      await result.current.save(change, 3);
+    });
+    const bases = fetchMock.mock.calls
+      .filter(([, init]) => init?.method === "POST")
+      .map(([, init]) => BaseOf.parse(JSON.parse(typeof init?.body === "string" ? init.body : "null")).baseVersion);
+    expect(bases).toEqual([3, 3]);
+  });
+
+  it("keeps the newer version when two saves answer out of order", async () => {
+    const v4 = { jobs: [{ job_name: "orders_ingest", owner: "platform-team", enabled: false }] };
+    const v5 = { jobs: [...v4.jobs, { job_name: "daily_revenue_report" }] };
+    const answers: Array<(response: Response) => void> = [];
+    const fetchMock = mockApi(saved);
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (urlOf(input) === "/api/job-list/changes" && init?.method === "POST") {
+        return new Promise<Response>((resolve) => answers.push(resolve));
+      }
+      return Promise.resolve(json(200, saved));
+    });
+    const { result } = await loaded();
+    let first: Promise<unknown> = Promise.resolve();
+    let second: Promise<unknown> = Promise.resolve();
+    act(() => {
+      first = result.current.save(change, 3);
+      second = result.current.save(change, 3);
+    });
+    await waitFor(() => expect(answers).toHaveLength(2));
+    // The server saved the first change as version 4 and the second as 5, but the answer for 5 arrives first.
+    await act(async () => {
+      answers[1]?.(json(201, { version: 5, summary: "Added daily_revenue_report", document: v5 }));
+      await second;
+    });
+    await act(async () => {
+      answers[0]?.(json(201, { version: 4, summary: "Changed enabled on orders_ingest from unset to false", document: v4 }));
+      await first;
+    });
+    expect(result.current.state?.version).toBe(5);
+    expect(result.current.state?.document).toEqual(v5);
+  });
+
   it("reports a conflict when someone saved a newer version", async () => {
     mockApi(saved, json(409, { error: "conflict", message: "Version 5 was saved after version 3.", latestVersion: 5 }));
     const { result } = await loaded();
     let outcome: Awaited<ReturnType<typeof result.current.save>> | undefined;
     await act(async () => {
-      outcome = await result.current.save(change);
+      outcome = await result.current.save(change, 3);
     });
     expect(outcome).toEqual({ ok: false, conflict: true, latestVersion: 5 });
     expect(result.current.state).toEqual(saved);
@@ -113,7 +167,7 @@ describe("useJobList", () => {
     });
     expect(result.current.error).not.toBeNull();
     await act(async () => {
-      await result.current.save(change);
+      await result.current.save(change, 3);
     });
     expect(result.current.error).toBeNull();
   });
@@ -124,7 +178,7 @@ describe("useJobList", () => {
     const { result } = await loaded();
     let outcome: Awaited<ReturnType<typeof result.current.save>> | undefined;
     await act(async () => {
-      outcome = await result.current.save(change);
+      outcome = await result.current.save(change, 3);
     });
     expect(outcome).toEqual({ ok: false, conflict: false, issues, message: "The change breaks 1 rule." });
     expect(result.current.state).toEqual(saved);

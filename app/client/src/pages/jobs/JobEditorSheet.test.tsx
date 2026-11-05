@@ -35,22 +35,25 @@ const SAVED: SaveOutcome = {
 };
 
 function renderSheet(props: Partial<JobEditorSheetProps> = {}) {
-  const onSave = vi.fn<(entry: JobEntry) => Promise<SaveOutcome>>(() => Promise.resolve(SAVED));
+  const onSave = vi.fn<(entry: JobEntry, baseVersion: number | null) => Promise<SaveOutcome>>(() => Promise.resolve(SAVED));
   const onOpenChange = vi.fn<(open: boolean) => void>();
   const onReload = vi.fn<() => Promise<ApiError | null>>(() => Promise.resolve(null));
-  render(
+  const sheet = (more: Partial<JobEditorSheetProps>) => (
     <JobEditorSheet
       open
       onOpenChange={onOpenChange}
       mode="edit"
       initial={ORDERS_ENRICH}
       document={DOC}
+      version={12}
       onSave={onSave}
       onReload={onReload}
       {...props}
-    />,
+      {...more}
+    />
   );
-  return { onSave, onOpenChange, onReload };
+  const view = render(sheet({}));
+  return { onSave, onOpenChange, onReload, rerender: (more: Partial<JobEditorSheetProps>) => view.rerender(sheet(more)) };
 }
 
 const field = (label: string) => screen.getByLabelText(label);
@@ -80,7 +83,7 @@ describe("JobEditorSheet", () => {
       expect(field(label)).toBeInTheDocument();
     }
     expect(field("Name pattern")).toHaveValue("^orders_enrich_(web|mobile)_(prod|dev)$");
-    expect(field("Max gap (minutes)")).toHaveValue(90);
+    expect(field("Max gap (minutes)")).toHaveValue("90");
     expect(field("Owner")).toHaveValue("ingestion-team");
     expect(field("Notes")).toHaveValue("Runs hourly, once per variant.");
 
@@ -119,7 +122,7 @@ describe("JobEditorSheet", () => {
     act(() => {
       vi.advanceTimersByTime(210);
     });
-    expect(field("Max retries")).toHaveAccessibleDescription(/max_retries must be a whole number of zero or more, got -1/);
+    expect(field("Max retries")).toHaveAccessibleDescription(/max_retries must be a whole number of zero or more, got '-1'/);
   });
 
   it("keeps Save off until something changes, and while there are issues", async () => {
@@ -157,6 +160,101 @@ describe("JobEditorSheet", () => {
     expect(onSave.mock.calls[0]?.[0]).toEqual({ ...explicit, notes: "Checked by hand." });
   });
 
+  it("asks before it drops changes, and Keep editing gives focus back to the field", async () => {
+    const { onOpenChange } = renderSheet();
+    const owner = field("Owner");
+    await userEvent.type(owner, "-eu");
+    await userEvent.keyboard("{Escape}");
+    const question = await screen.findByRole("alertdialog", { name: "Discard your changes?" });
+    await userEvent.click(within(question).getByRole("button", { name: "Keep editing" }));
+    await vi.waitFor(() => expect(owner).toHaveFocus());
+    expect(owner).toHaveValue("ingestion-team-eu");
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("starts the next opening without the reload notice of the last one", async () => {
+    const { onSave, rerender } = renderSheet();
+    onSave.mockResolvedValueOnce({ ok: false, conflict: true, latestVersion: 14 });
+    await userEvent.type(field("Owner"), "-eu");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+    expect(await screen.findByText("This form now shows the newest saved values. Make your change again.")).toBeInTheDocument();
+    // The reload showed the job was deleted, so the page closes the sheet; then another job opens.
+    rerender({ open: false });
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    rerender({ open: true, initial: DOC.jobs[0] });
+    expect(await screen.findByRole("heading", { name: "Edit orders_ingest" })).toBeInTheDocument();
+    expect(screen.queryByText(/This form now shows the newest saved values/)).toBeNull();
+  });
+
+  it("says when the job's own null or empty value switches a default off, here and in each environment", async () => {
+    // null and "" as stored: the loader reads them as no value, so the default does not apply.
+    const off = JSON.parse('{"job_name": "orders_enrich", "max_gap_minutes": 90, "max_runtime_minutes": null, "owner": null, "notes": ""}') as JobEntry;
+    renderSheet({ initial: off, document: { ...DOC, defaults: { ...DOC.defaults, max_runtime_minutes: 120, notes: "Ask platform-team." }, jobs: [DOC.jobs[0], off] } });
+    expect(field("Owner")).toHaveAttribute("placeholder", "None, the default is ignored");
+    expect(field("Notes")).toHaveAttribute("placeholder", "None, the default is ignored");
+    expect(field("Max runtime (minutes)")).toHaveAttribute("placeholder", "None, the default is ignored");
+    await userEvent.click(screen.getByRole("button", { name: /production/ }));
+    expect(field("Owner in production")).toHaveAttribute("placeholder", "As the job");
+    expect(field("Max runtime (minutes) in production")).toHaveAttribute("placeholder", "As the job");
+  });
+
+  it("keeps Save off while a job ID field holds text it refused, so the text is not dropped", async () => {
+    renderSheet();
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await userEvent.type(field("Owner"), "-eu");
+    await vi.waitFor(() => expect(save).toBeEnabled());
+    await userEvent.type(field("Job IDs"), "12ab{Enter}");
+    expect(await screen.findByText("Job IDs are digits only. 12ab is not a job ID.")).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    await userEvent.clear(field("Job IDs"));
+    await vi.waitFor(() => expect(save).toBeEnabled());
+  });
+
+  it("says when a number field holds text that is not a number, instead of saving it as empty", async () => {
+    renderSheet();
+    const gap = field("Max gap (minutes)");
+    await userEvent.clear(gap);
+    await userEvent.type(gap, "1e");
+    await vi.waitFor(() => expect(gap).toHaveAccessibleDescription(/max_gap_minutes must be a whole number of zero or more, got '1e'/));
+    expect(gap).toHaveValue("1e");
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  });
+
+  it.each(["0x1E", "0b11", "+5", "5."])("refuses %s in a number field next to the field, instead of saving another number", async (typed) => {
+    const { onSave } = renderSheet();
+    const gap = field("Max gap (minutes)");
+    await userEvent.clear(gap);
+    await userEvent.type(gap, typed);
+    const message = new RegExp(`max_gap_minutes must be a whole number of zero or more, got '${typed.replace(/[.+]/g, "\\$&")}'`);
+    await vi.waitFor(() => expect(gap).toHaveAccessibleDescription(message));
+    expect(gap).toHaveValue(typed);
+    const save = screen.getByRole("button", { name: "Save changes" });
+    expect(save).toBeDisabled();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("keeps a stored -1 through an unrelated edit, with the loader's message for it", async () => {
+    // Saved under other rules: the loader reads max_retries -1 and says "got -1".
+    const stored = JSON.parse('{"job_name": "orders_enrich", "max_gap_minutes": 90, "max_retries": -1}') as JobEntry;
+    const { onSave } = renderSheet({ initial: stored, document: { ...DOC, jobs: [DOC.jobs[0], stored] } });
+    const retries = field("Max retries");
+    expect(retries).toHaveValue("-1");
+    await vi.waitFor(() => expect(retries).toHaveAccessibleDescription(/max_retries must be a whole number of zero or more, got -1$/));
+    await userEvent.type(field("Owner"), "data-team");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(retries).toHaveAccessibleDescription(/max_retries must be a whole number of zero or more, got -1$/);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("refuses a number too large to keep every digit", async () => {
+    renderSheet();
+    const gap = field("Max gap (minutes)");
+    await userEvent.clear(gap);
+    await userEvent.type(gap, "12345678901234567890");
+    await vi.waitFor(() => expect(gap).toHaveAccessibleDescription(/max_gap_minutes is too large \(at most 9007199254740991\), got 12345678901234567890/));
+  });
+
   it("makes the job name read-only in edit mode, with the rename hint", () => {
     renderSheet();
     expect(field("Job name")).toHaveAttribute("readonly");
@@ -168,11 +266,24 @@ describe("JobEditorSheet", () => {
     await userEvent.clear(field("Max retries"));
     await userEvent.clear(field("Max gap (minutes)"));
     await userEvent.type(field("Max gap (minutes)"), "120");
-    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    // On a slow machine the check can run while the gap is empty; Save turns on again once it checks 120.
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await vi.waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
     await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     const { max_retries: _gone, ...rest } = ORDERS_ENRICH;
-    expect(onSave).toHaveBeenCalledWith({ ...rest, max_gap_minutes: 120 });
+    expect(onSave).toHaveBeenCalledWith({ ...rest, max_gap_minutes: 120 }, 12);
     await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  it("saves from the version it opened at while newer versions arrive, so a changed job gets a conflict", async () => {
+    const { onSave, rerender } = renderSheet();
+    // Another save of this page lands while the form is open: the list moves on to version 13.
+    rerender({ version: 13, document: { ...DOC, jobs: [DOC.jobs[0], { ...ORDERS_ENRICH, enabled: false }] } });
+    await userEvent.type(field("Owner"), "-eu");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]?.[1]).toBe(12);
   });
 
   it("says someone else changed the job on a 409, and reloads on Reload", async () => {

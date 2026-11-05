@@ -4,8 +4,9 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { JobListDocument, JobListState } from "../../../../shared/joblist/types";
+import type { JobEntry, JobListDocument, JobListState } from "../../../../shared/joblist/types";
 import { RefreshProvider } from "../../hooks/useRefreshKey";
+import { jobListServer, type SaveBody } from "../../test/jobListServer";
 import { JobListPage, type JobListPageProps } from "./JobListPage";
 
 const CONFIG = { catalog: "main", schema: "watchdog", region: "us-east-2", appName: "watchdog-app", lakebaseProject: "jobs-watchdog" };
@@ -80,6 +81,39 @@ function mockApi(state: JobListState, post?: (body: unknown) => Response, querie
   return fetchMock;
 }
 
+/**
+ * The page against a fake server that checks every save per target, like the real store. `hold()` keeps the
+ * next save's answer back until the function it resolves with is called.
+ */
+function mockServer(server: ReturnType<typeof jobListServer>, live: unknown[] = []) {
+  let held: ((release: () => void) => void) | null = null;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = urlOf(input);
+      if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
+      if (url === "/api/job-list") return Promise.resolve(json(200, server.state()));
+      if (url.startsWith("/api/analytics/query/job_live_status")) return Promise.resolve(sse(live));
+      if (url.startsWith("/api/analytics/query/")) return Promise.resolve(sse([]));
+      if (url === "/api/job-list/changes") {
+        const body = JSON.parse(typeof init?.body === "string" ? init.body : "null") as SaveBody;
+        const hold = held;
+        held = null;
+        if (!hold) return Promise.resolve(server.answer(body));
+        return new Promise<Response>((resolve) => hold(() => resolve(server.answer(body))));
+      }
+      return Promise.resolve(json(404, { error: "not_found", message: url }));
+    }),
+  );
+  return {
+    hold(): Promise<() => void> {
+      return new Promise((resolve) => {
+        held = resolve;
+      });
+    },
+  };
+}
+
 /** Each test gets its own clock, so AppKit's query store does not share live status rows between tests. */
 function setClock(iso: string) {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -130,7 +164,8 @@ describe("JobListPage", () => {
     expect(ingest.getByText("ingestion-team")).toBeInTheDocument();
     expect(ingest.getByText("lower")).toBeInTheDocument();
     expect(ingest.getByRole("switch", { name: "Check orders_ingest" })).toBeChecked();
-    expect(await ingest.findByText("FAILED")).toBeInTheDocument();
+    // The same badge as Monitoring: an icon and the word.
+    expect(await ingest.findByText("Failed")).toBeInTheDocument();
     expect(ingest.getByRole("button", { name: "Delete orders_ingest" })).toBeInTheDocument();
 
     const enrich = within(row("orders_enrich"));
@@ -149,6 +184,21 @@ describe("JobListPage", () => {
     expect(exportRow.getByText("triggered")).toBeInTheDocument();
     expect(exportRow.getByText("^daily_revenue_export$")).toBeInTheDocument();
     expect(exportRow.getByText("Not scanned yet")).toBeInTheDocument();
+  });
+
+  it("shows no limit and no owner where the job's own null switches the default off", async () => {
+    setClock("2026-11-06T13:30:00Z");
+    // null as stored: the loader reads no runtime limit and no owner, so the defaults do not apply to this job.
+    const off = JSON.parse('{"job_name": "no_runtime_limit", "max_gap_minutes": 60, "max_runtime_minutes": null, "owner": null}') as JobEntry;
+    mockApi({ ...SAVED, document: { ...DOC, defaults: { ...DOC.defaults, max_runtime_minutes: 120 }, jobs: [...DOC.jobs, off] } });
+    renderPage();
+    await screen.findByRole("button", { name: "Edit no_runtime_limit" });
+    const cells = within(row("no_runtime_limit"));
+    expect(cells.queryByText(/^runtime /)).toBeNull();
+    expect(cells.queryByText("platform-team")).toBeNull();
+    expect(cells.getByText("Not set")).toBeInTheDocument();
+    // Another job still takes the default runtime.
+    expect(within(row("orders_ingest")).getByText("runtime 120 min")).toBeInTheDocument();
   });
 
   it("filters the jobs by name", async () => {
@@ -272,7 +322,7 @@ describe("JobListPage", () => {
     });
     await userEvent.click(await screen.findByRole("button", { name: "Edit orders_enrich" }));
     expect(await screen.findByRole("heading", { name: "Edit orders_enrich" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Max gap (minutes)")).toHaveValue(90);
+    expect(screen.getByLabelText("Max gap (minutes)")).toHaveValue("90");
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("heading", { name: "Edit orders_enrich" })).not.toBeInTheDocument());
 
@@ -346,5 +396,265 @@ describe("JobListPage", () => {
     expect(await screen.findByText("Matches 2 jobs", {}, { timeout: 3000 })).toBeInTheDocument();
     expect(screen.getByText("orders_ingest_eu_prod")).toHaveClass("font-mono");
     expect(screen.getByText("orders_ingest_us_prod")).toBeInTheDocument();
+  });
+
+  it("refuses an editor save that would undo the Enabled switch saved after the editor opened", async () => {
+    setClock("2026-11-05T20:30:00Z");
+    const server = jobListServer(DOC, 12);
+    const api = mockServer(server);
+    renderPage();
+    const toggle = await screen.findByRole("switch", { name: "Check orders_ingest" });
+    const next = api.hold();
+    await userEvent.click(toggle);
+    const release = await next;
+
+    // The editor opens from version 12 while the switch's save is on its way, then the save lands as version 13.
+    await userEvent.click(screen.getByRole("button", { name: "Edit orders_ingest" }));
+    const owner = await screen.findByLabelText("Owner");
+    release();
+    expect(await screen.findByText("Saved version 13: Changed enabled on orders_ingest from unset to false.")).toBeInTheDocument();
+
+    await userEvent.type(owner, "-eu");
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
+    expect(await screen.findByText("Someone else changed this job since you opened it.")).toBeInTheDocument();
+    expect(server.saves.map((body) => body.baseVersion)).toEqual([12, 12]);
+    expect(server.state().document.jobs.find((job) => job.job_name === "orders_ingest")?.enabled).toBe(false);
+  });
+
+  it("shows and edits a job whose stored name and notes are not text, as the loader reads them", async () => {
+    setClock("2026-11-05T21:30:00Z");
+    // Saved before the server stored text as text: YAML's job_name: 20241105 and notes: yes, as parsed.
+    const stored = JSON.parse(
+      JSON.stringify({ ...SAVED, document: { ...DOC, jobs: [...DOC.jobs, { job_name: 20241105, max_gap_minutes: 60, notes: true }] } }),
+    ) as JobListState;
+    const posts: unknown[] = [];
+    mockApi(stored, (body) => {
+      posts.push(body);
+      return json(201, { version: 13, summary: "Changed max_gap_minutes on 20241105 from 60 to 90", document: stored.document });
+    });
+    renderPage();
+    await screen.findByRole("button", { name: "Edit 20241105" });
+    const dated = within(row("20241105"));
+    expect(dated.getByText("^20241105$")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit 20241105" }));
+    expect(await screen.findByLabelText("Notes")).toHaveValue("True");
+    const gap = screen.getByLabelText("Max gap (minutes)");
+    await userEvent.clear(gap);
+    await userEvent.type(gap, "90");
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
+    await waitFor(() => expect(posts).toHaveLength(1));
+    // The notes stay, as the text the loader reads.
+    expect(posts[0]).toEqual({
+      baseVersion: 12,
+      change: { kind: "upsert", target: { type: "job", name: "20241105" }, value: { job_name: "20241105", max_gap_minutes: 90, notes: "True" } },
+    });
+  });
+
+  it("says why live status is missing as Monitoring does, names the grants, and offers Retry", async () => {
+    setClock("2026-11-05T22:30:00Z");
+    let liveCalls = 0;
+    let failLive = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = urlOf(input);
+        if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
+        if (url === "/api/job-list") return Promise.resolve(json(200, SAVED));
+        if (url.startsWith("/api/analytics/query/job_live_status")) {
+          liveCalls += 1;
+          // AppKit sends a failed statement as a generic message with the warehouse's code, as for a missing grant.
+          const event = failLive ? { type: "error", error: "Query execution failed", errorCode: "BAD_REQUEST" } : { type: "result", data: [{ job_name: "orders_ingest", status: "FAILED" }] };
+          return Promise.resolve(new Response(`data: ${JSON.stringify(event)}\n\n`, { headers: { "Content-Type": "text/event-stream" } }));
+        }
+        if (url.startsWith("/api/analytics/query/")) return Promise.resolve(sse([]));
+        return Promise.resolve(json(404, { error: "not_found", message: url }));
+      }),
+    );
+    renderPage();
+    const title = await screen.findByText("Live status is not available.");
+    const line = title.closest("[data-slot='query-problem']");
+    if (!(line instanceof HTMLElement)) throw new Error("no problem line");
+    expect(line).toHaveTextContent(
+      "Live status is not available. The query on main.watchdog failed. If no scan has run yet, click Scan now to create the tables. Otherwise, ask the owner of main.watchdog for USE CATALOG, USE SCHEMA and SELECT on it.",
+    );
+    expect(within(row("orders_ingest")).getByText("Not available")).toBeInTheDocument();
+
+    failLive = false;
+    const before = liveCalls;
+    await userEvent.click(within(line).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(liveCalls).toBeGreaterThan(before));
+    expect(await within(row("orders_ingest")).findByText("Failed")).toBeInTheDocument();
+    expect(screen.queryByText("Live status is not available.")).not.toBeInTheDocument();
+  });
+});
+
+describe("JobListPage gives focus back when a sheet or dialog closes", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("to the button that opened the editor, after Cancel and after a save", async () => {
+    setClock("2026-11-06T09:30:00Z");
+    mockApi(SAVED, () => json(201, { version: 13, summary: "Changed owner on orders_enrich from unset to data-team", document: DOC }));
+    renderPage();
+    const edit = await screen.findByRole("button", { name: "Edit orders_enrich" });
+    await userEvent.click(edit);
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(edit).toHaveFocus());
+
+    const name = screen.getByRole("button", { name: "orders_enrich" });
+    await userEvent.click(name);
+    await userEvent.type(await screen.findByLabelText("Owner"), "data-team");
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
+    await waitFor(() => expect(name).toHaveFocus());
+  });
+
+  it("to Delete after Cancel, and to the search field once the job is gone", async () => {
+    setClock("2026-11-06T10:30:00Z");
+    mockApi(SAVED, () => json(201, { version: 13, summary: "Deleted job orders_ingest and 2 links", document: { ...DOC, jobs: DOC.jobs.slice(1), dependencies: [] } }));
+    renderPage();
+    const remove = await screen.findByRole("button", { name: "Delete orders_ingest" });
+    await userEvent.click(remove);
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(remove).toHaveFocus());
+
+    await userEvent.click(remove);
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete job" }));
+    await waitFor(() => expect(screen.getByRole("searchbox", { name: "Search jobs by name" })).toHaveFocus());
+  });
+
+  it("to Import YAML when the import closes", async () => {
+    setClock("2026-11-06T11:30:00Z");
+    mockApi(SAVED);
+    renderPage();
+    const open = await screen.findByRole("button", { name: "Import YAML" });
+    await userEvent.click(open);
+    await userEvent.click(within(await screen.findByRole("dialog", { name: "Import YAML" })).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(open).toHaveFocus());
+  });
+
+  it("to Add from workspace when the picker closes, and when the editor a pick opened closes", async () => {
+    setClock("2026-11-06T12:30:00Z");
+    const picked = {
+      workspace_id: "1111111111111111",
+      workspace_name: "example-prod",
+      job_id: "9007199254740993",
+      name: "Nightly Billing Rollup",
+      trigger_type: "CONTINUOUS",
+      paused: "false",
+      creator_user_name: "someone@example.com",
+      change_time: "2026-11-05T09:00:00.000Z",
+    };
+    mockApi(SAVED, undefined, { region_jobs: [picked] });
+    renderPage();
+    const add = await screen.findByRole("button", { name: "Add from workspace" });
+    await userEvent.click(add);
+    await screen.findByRole("dialog", { name: "Add from workspace" });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(add).toHaveFocus());
+
+    await userEvent.click(add);
+    const picker = await screen.findByRole("dialog", { name: "Add from workspace" });
+    await userEvent.type(within(picker).getByRole("searchbox", { name: "Search jobs by name" }), "billing");
+    await userEvent.click(await within(picker).findByRole("button", { name: "Add Nightly Billing Rollup from example-prod" }));
+    // The editor keeps the focus the picker leaves it: it does not go back to the page while the editor is open.
+    const jobName = await screen.findByLabelText("Job name");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add from workspace" })).toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(jobName).toHaveFocus();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(add).toHaveFocus());
+  });
+});
+
+describe("JobListPage round 2", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("after a conflict's Reload, a new job saves from the newest version and keeps what was typed", async () => {
+    setClock("2026-11-06T15:30:00Z");
+    const server = jobListServer(DOC, 12);
+    mockServer(server);
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "Add job" }));
+    const name = await screen.findByLabelText("Job name");
+    // Meanwhile someone else adds nightly_rollup and deletes daily_revenue_export.
+    server.saveAsSomeoneElse({ kind: "upsert", target: { type: "job", name: "nightly_rollup" }, value: { job_name: "nightly_rollup", max_gap_minutes: 60 } });
+    server.saveAsSomeoneElse({ kind: "delete", target: { type: "job", name: "daily_revenue_export" } });
+
+    await userEvent.type(name, "nightly_rollup");
+    await userEvent.type(screen.getByLabelText("Max gap (minutes)"), "60");
+    const add = screen.getByRole("button", { name: "Add job" });
+    await waitFor(() => expect(add).toBeEnabled());
+    await userEvent.click(add);
+    expect(await screen.findByText("Someone else changed this job since you opened it.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Reload" }));
+    // The form keeps what was typed, and now knows that name is taken.
+    await waitFor(() => expect(name).toHaveAccessibleDescription(/duplicate job_name 'nightly_rollup'/), { timeout: 3000 });
+    expect(screen.getByLabelText("Max gap (minutes)")).toHaveValue("60");
+
+    // A name that was in the list when the form opened, and is gone now, saves from the newest version.
+    await userEvent.clear(name);
+    await userEvent.type(name, "daily_revenue_export");
+    await waitFor(() => expect(add).toBeEnabled(), { timeout: 3000 });
+    await userEvent.click(add);
+    expect(await screen.findByText(/^Saved version 15: Added job daily_revenue_export/)).toBeInTheDocument();
+    expect(server.saves.map((body) => body.baseVersion)).toEqual([12, 14]);
+  });
+
+  it("after the first import, gives focus to the search field once the list arrives", async () => {
+    setClock("2026-11-06T19:30:00Z");
+    let imported = false;
+    const list: { release?: () => void } = {};
+    const preview = {
+      document: DOC,
+      diff: [{ target: "job:orders_ingest", kind: "added", fields: [] }],
+      issues: [],
+      summary: "Imported 3 jobs, 2 links and 2 workspace labels from YAML",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = urlOf(input);
+        if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
+        if (url === "/api/job-list") {
+          if (!imported) return Promise.resolve(json(200, EMPTY));
+          // The list after the import arrives late, after the dialog has closed.
+          return new Promise<Response>((resolve) => {
+            list.release = () => resolve(json(200, { ...SAVED, version: 1 }));
+          });
+        }
+        if (url === "/api/job-list/import/preview") return Promise.resolve(json(200, preview));
+        if (url === "/api/job-list/import") {
+          imported = true;
+          return Promise.resolve(json(201, { version: 1, summary: preview.summary, document: DOC }));
+        }
+        if (url.startsWith("/api/analytics/query/")) return Promise.resolve(sse([]));
+        return Promise.resolve(json(404, { error: "not_found", message: url }));
+      }),
+    );
+    renderPage();
+    const empty = (await screen.findByText("No jobs yet. Import your monitored-jobs YAML file, or add a job.")).closest('[data-slot="empty"]');
+    if (!(empty instanceof HTMLElement)) throw new Error("no empty state");
+    await userEvent.click(within(empty).getByRole("button", { name: "Import YAML" }));
+    const dialog = await screen.findByRole("dialog", { name: "Import YAML" });
+    await userEvent.click(within(dialog).getByLabelText("YAML"));
+    await userEvent.paste("jobs:\n  - job_name: orders_ingest\n    max_gap_minutes: 60\n");
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Import" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import YAML" })).toBeNull());
+    await waitFor(() => expect(list.release).toBeDefined());
+    list.release?.();
+    const search = await screen.findByRole("searchbox", { name: "Search jobs by name" });
+    await waitFor(() => expect(search).toHaveFocus());
   });
 });

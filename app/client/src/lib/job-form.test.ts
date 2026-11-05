@@ -99,10 +99,11 @@ describe("job form values", () => {
     expect(toEntry({ ...off, exclude_off: false }, empty)).not.toHaveProperty("job_name_exclude_regex");
   });
 
-  it("keeps an invalid number as typed, so the rules can say what is wrong", () => {
+  it("keeps anything but plain digits as the text typed, so the rules can say what is wrong", () => {
     const values = toFormValues({ job_name: "a" }, []);
-    expect(toEntry({ ...values, max_gap_minutes: "1.5" }, { job_name: "a" }).max_gap_minutes).toBe(1.5);
-    expect(toEntry({ ...values, max_gap_minutes: "-3" }, { job_name: "a" }).max_gap_minutes).toBe(-3);
+    const gap = (typed: string): unknown => toEntry({ ...values, max_gap_minutes: typed }, { job_name: "a" }).max_gap_minutes;
+    expect(gap(" 90 ")).toBe(90);
+    for (const typed of ["1.5", "-3", "0x1E", "0b11", "+5", "5.", "1e3", "12345678901234567890"]) expect(gap(typed)).toBe(typed);
   });
 
   it("sets an environment override only where a field is set, and drops empty labels", () => {
@@ -151,6 +152,46 @@ describe("job form values", () => {
   });
 });
 
+/** A job with one setting as stored, which no YAML file that loads can hold: built with Reflect, since its type is not the entry's. */
+function storedWith(key: string, value: unknown, more: Partial<JobEntry> = {}): JobEntry {
+  const job: JobEntry = { job_name: "orders_ingest", max_gap_minutes: 60, ...more };
+  Reflect.set(job, key, value);
+  return job;
+}
+
+/** The rules' issue for a job's setting, as the editor shows it next to the field. */
+function issueFor(job: JobEntry, key: string): string | undefined {
+  return validateDocument({ jobs: [job] }).find((issue) => issue.path === `jobs[${job.job_name}].${key}`)?.message;
+}
+
+describe("a stored number the rules refuse", () => {
+  it.each([
+    ["-1", -1, "got -1"],
+    ["1.5", 1.5, "got 1.5"],
+    ["a big integer", 12345678901234567890n, "is too large (at most 9007199254740991), got 12345678901234567890"],
+    ["a string of digits", "60", "got '60'"],
+  ])("keeps %s through an unrelated edit, so the rules report it as the loader does", (_case, stored, said) => {
+    const job = storedWith("max_retries", stored);
+    const rebuilt = toEntry({ ...toFormValues(job, []), owner: "data-team" }, job);
+    expect(Reflect.get(rebuilt, "max_retries")).toBe(stored);
+    expect(issueFor(rebuilt, "max_retries")).toContain(said);
+  });
+
+  it("keeps a stored -1 in an environment through an unrelated edit", () => {
+    const job = storedWith("environments", { lower: { max_retries: -1 } });
+    const values = toFormValues(job, ["lower"]);
+    const rebuilt = toEntry({ ...values, owner: "data-team" }, job);
+    expect(rebuilt.environments).toEqual({ lower: { max_retries: -1 } });
+  });
+
+  it("reads a typed -1 as text, which the rules quote", () => {
+    const job: JobEntry = { job_name: "orders_ingest", max_gap_minutes: 60 };
+    const rebuilt = toEntry({ ...toFormValues(job, []), max_retries: "-1" }, job);
+    expect(rebuilt.max_retries).toBe("-1");
+    expect(issueFor(rebuilt, "max_retries")).toContain("got '-1'");
+  });
+});
+
 describe("the form's round trip over the job-list corpus", () => {
   const fixtures = loadableFixtures();
 
@@ -165,6 +206,31 @@ describe("the form's round trip over the job-list corpus", () => {
       expect(rebuilt, job.job_name).toEqual(job);
       expect(deepEqual(rebuilt, job), job.job_name).toBe(true);
     }
+  });
+
+  // Numbers the rules refuse cannot come from a file that loads; a version saved under other rules can hold them.
+  // The corpus has the negative one; the others are built here, at job level and in an environment.
+  const refused: [string, JobListDocument][] = [
+    ["invalid_negative_number.yml", { jobs: [storedWith("max_runtime_minutes", -5)] }],
+    ["a float", { jobs: [storedWith("max_retries", 1.5)] }],
+    ["a big integer", { jobs: [storedWith("min_attempt_minutes", 12345678901234567890n)] }],
+    ["a number too large to be exact", { jobs: [storedWith("max_runtime_minutes", 1e21)] }],
+    [
+      "an environment's -1",
+      { workspaces: [{ workspace_name: "example-staging", environment: "lower" }], jobs: [storedWith("environments", { lower: { max_retries: -1, max_gap_minutes: 1.5 } })] },
+    ],
+  ];
+
+  it.each(refused)("%s: comes back from the form unchanged", (_case, doc) => {
+    for (const job of doc.jobs) {
+      const rebuilt = toEntry(toFormValues(job, environmentLabels(doc, job)), job);
+      expect(rebuilt, job.job_name).toEqual(job);
+    }
+  });
+
+  it("finds the corpus file with the negative number, so the case above matches it", () => {
+    const raw = parse(readFileSync(join(CORPUS, "invalid_negative_number.yml"), "utf8"), pythonYamlOptions) as Record<string, unknown>;
+    expect(normalizeDocument(raw)).toEqual({ jobs: [{ job_name: "orders_ingest", max_gap_minutes: 60, max_runtime_minutes: -5 }] });
   });
 });
 

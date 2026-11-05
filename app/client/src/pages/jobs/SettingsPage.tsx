@@ -68,8 +68,8 @@ export function SettingsPage() {
   } else {
     body = (
       <div className="grid gap-6">
-        <DefaultsForm document={state.document} onSave={save} onSaved={saved} onReload={reload} />
-        <WorkspaceLabels document={state.document} onSave={save} onSaved={saved} onReload={reload} />
+        <DefaultsForm document={state.document} version={state.version} onSave={save} onSaved={saved} onReload={reload} />
+        <WorkspaceLabels document={state.document} version={state.version} onSave={save} onSaved={saved} onReload={reload} />
       </div>
     );
   }

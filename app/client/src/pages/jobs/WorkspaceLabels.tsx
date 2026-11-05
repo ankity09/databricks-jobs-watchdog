@@ -32,7 +32,7 @@ import {
   useAnalyticsQuery,
 } from "@databricks/appkit-ui/react";
 import { CircleAlert, Pencil, Plus, RotateCw, Trash2, X } from "lucide-react";
-import { useCallback, useId, useMemo, useState } from "react";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { deepEqual } from "../../../../shared/joblist/apply";
 import {
@@ -44,16 +44,20 @@ import {
   workspaceKey,
 } from "../../../../shared/joblist/types";
 import { useDebouncedCheck } from "../../hooks/useDebouncedCheck";
-import type { ReloadJobList, SaveOutcome } from "../../hooks/useJobList";
+import { type ReloadJobList, type SaveOutcome, useOpenedVersion } from "../../hooks/useJobList";
 import { useLastGood } from "../../hooks/useLastGood";
 import { useRefreshKey } from "../../hooks/useRefreshKey";
 import { changeIssues, uniqueIssues, workspaceIssues } from "../../lib/draft";
 import { FormRow } from "./FormRow";
 import { ReloadButton } from "./ReloadButton";
+import { type ReturnFocus, useReturnFocus } from "./returnFocus";
 
 export interface WorkspaceLabelsProps {
   document: JobListDocument;
-  onSave: (change: Change) => Promise<SaveOutcome>;
+  /** The version `document` is. */
+  version: number | null;
+  /** Saves a change; `baseVersion` is the version the form or dialog opened at. */
+  onSave: (change: Change, baseVersion: number | null) => Promise<SaveOutcome>;
   onSaved: (result: SaveResult) => void;
   onReload: ReloadJobList;
 }
@@ -110,13 +114,19 @@ type Editing = { mode: "create" } | { mode: "edit"; key: string; name: string };
 const RELOADED = "This form now shows the newest saved values. Make your change again.";
 
 /** The environment label of each workspace: add, edit and remove them, one change at a time. */
-export function WorkspaceLabels({ document, onSave, onSaved, onReload }: WorkspaceLabelsProps) {
+export function WorkspaceLabels({ document, version, onSave, onSaved, onReload }: WorkspaceLabelsProps) {
   const headingId = useId();
   const [editing, setEditing] = useState<Editing | null>(null);
   // Bumped after a reload in edit mode, so the form starts again from the newest saved label.
   const [revision, setRevision] = useState(0);
   const [formNotice, setFormNotice] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
+  // Where focus goes when the label form or the removal question closes: the button that opened it, else Add label
+  // (the button went with its row).
+  const opener = useRef<HTMLElement | null>(null);
+  const addLabel = useRef<HTMLButtonElement>(null);
+  const returnFocus: ReturnFocus = [opener, addLabel];
+  const onCloseAutoFocus = useReturnFocus(returnFocus);
   const workspaces = document.workspaces ?? [];
   const editingEntry = editing?.mode === "edit" ? workspaces.find((w) => workspaceKey(w) === editing.key) : undefined;
   // A label someone else removed while its form was open: the form closes and the card says so.
@@ -128,6 +138,7 @@ export function WorkspaceLabels({ document, onSave, onSaved, onReload }: Workspa
   };
   const formProps = {
     document,
+    version,
     notice: formNotice,
     onSave,
     onSaved: (result: SaveResult) => {
@@ -149,7 +160,15 @@ export function WorkspaceLabels({ document, onSave, onSaved, onReload }: Workspa
           for one label.
         </CardDescription>
         <CardAction>
-          <Button size="sm" variant="outline" onClick={() => edit({ mode: "create" })}>
+          <Button
+            ref={addLabel}
+            size="sm"
+            variant="outline"
+            onClick={(event) => {
+              opener.current = event.currentTarget;
+              edit({ mode: "create" });
+            }}
+          >
             <Plus aria-hidden="true" />
             Add label
           </Button>
@@ -215,7 +234,10 @@ export function WorkspaceLabels({ document, onSave, onSaved, onReload }: Workspa
                             size="icon-sm"
                             className="size-7 text-muted-foreground hover:text-foreground"
                             aria-label={`Edit the label for ${name}`}
-                            onClick={() => edit({ mode: "edit", key, name })}
+                            onClick={(event) => {
+                              opener.current = event.currentTarget;
+                              edit({ mode: "edit", key, name });
+                            }}
                           >
                             <Pencil aria-hidden="true" />
                           </Button>
@@ -224,7 +246,10 @@ export function WorkspaceLabels({ document, onSave, onSaved, onReload }: Workspa
                             size="icon-sm"
                             className="size-7 text-muted-foreground hover:text-destructive"
                             aria-label={`Remove the label for ${name}`}
-                            onClick={() => setRemoving(key)}
+                            onClick={(event) => {
+                              opener.current = event.currentTarget;
+                              setRemoving(key);
+                            }}
                           >
                             <Trash2 aria-hidden="true" />
                           </Button>
@@ -245,7 +270,7 @@ export function WorkspaceLabels({ document, onSave, onSaved, onReload }: Workspa
           if (!open) edit(null);
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-lg" onCloseAutoFocus={onCloseAutoFocus}>
           {editing?.mode === "create" ? (
             // A new label keeps what was typed after a reload: the check then shows whether someone added it meanwhile.
             <CreateLabelForm {...formProps} onReloaded={() => undefined} />
@@ -269,9 +294,10 @@ export function WorkspaceLabels({ document, onSave, onSaved, onReload }: Workspa
         <RemoveLabelDialog
           workspace={removingEntry}
           document={document}
+          version={version}
           onCancel={() => setRemoving(null)}
-          onRemove={async () => {
-            const outcome = await onSave({ kind: "delete", target: { type: "workspace", key: workspaceKey(removingEntry) } });
+          onRemove={async (baseVersion) => {
+            const outcome = await onSave({ kind: "delete", target: { type: "workspace", key: workspaceKey(removingEntry) } }, baseVersion);
             if (outcome.ok) {
               setRemoving(null);
               onSaved(outcome.result);
@@ -279,6 +305,7 @@ export function WorkspaceLabels({ document, onSave, onSaved, onReload }: Workspa
             return outcome;
           }}
           onReload={onReload}
+          returnFocus={returnFocus}
         />
       ) : null}
     </Card>
@@ -289,10 +316,12 @@ interface LabelFormProps {
   mode: "create" | "edit";
   initial: WorkspaceEntry;
   document: JobListDocument;
+  /** The version `document` is. */
+  version: number | null;
   suggestions: Suggestions;
   /** Shown at the top of the form, such as after a reload. */
   notice: string | null;
-  onSave: (change: Change) => Promise<SaveOutcome>;
+  onSave: (change: Change, baseVersion: number | null) => Promise<SaveOutcome>;
   onSaved: (result: SaveResult) => void;
   onReload: ReloadJobList;
   /** After a conflict's reload worked. */
@@ -310,24 +339,42 @@ function CreateLabelForm(props: Omit<LabelFormProps, "mode" | "initial" | "sugge
 
 type Problem = { kind: "conflict" } | { kind: "error"; message: string };
 
-function entryFrom(id: string, name: string, environment: string, notes: string): WorkspaceEntry {
-  return {
-    ...(id.trim() !== "" ? { workspace_id: id.trim() } : {}),
-    ...(name.trim() !== "" ? { workspace_name: name.trim() } : {}),
-    environment: environment.trim(),
-    ...(notes.trim() !== "" ? { notes: notes.trim() } : {}),
-  };
+/** Typed text, trimmed, or the stored value while its field still shows it exactly, so an untouched field saves as it was. */
+function kept(typed: string, stored: string | undefined): string | undefined {
+  if (stored !== undefined && typed === (stored ?? "")) return stored;
+  const trimmed = typed.trim();
+  return trimmed === "" ? undefined : trimmed;
 }
 
-function LabelForm({ mode, initial, document, suggestions, notice, onSave, onSaved, onReload, onReloaded, onCancel }: LabelFormProps) {
+/**
+ * The label the form describes, built on the stored one. What a field still
+ * shows unchanged is saved as stored: a name with spaces around it keeps its
+ * key (the one the save names), and empty notes stay, so an unchanged label
+ * is not a change.
+ */
+function entryFrom(base: WorkspaceEntry, id: string, name: string, environment: string, notes: string): WorkspaceEntry {
+  const entry: WorkspaceEntry = { environment: kept(environment, base.environment) ?? "" };
+  const workspaceId = kept(id, base.workspace_id);
+  const workspaceName = kept(name, base.workspace_name);
+  const text = kept(notes, base.notes);
+  if (workspaceId !== undefined) entry.workspace_id = workspaceId;
+  if (workspaceName !== undefined) entry.workspace_name = workspaceName;
+  if (text !== undefined) entry.notes = text;
+  return entry;
+}
+
+function LabelForm({ mode, initial, document, version, suggestions, notice, onSave, onSaved, onReload, onReloaded, onCancel }: LabelFormProps) {
+  // The label and the version the form opened at (a reload starts the form again).
+  const [base] = useState(initial);
+  const [openedAt, takeNewest] = useOpenedVersion(version);
   const idsList = useId();
   const namesList = useId();
   const labelsList = useId();
-  const [id, setId] = useState(initial.workspace_id ?? "");
-  const [name, setName] = useState(initial.workspace_name ?? "");
-  const [environment, setEnvironment] = useState(initial.environment);
-  const [notes, setNotes] = useState(initial.notes ?? "");
-  const entry = useMemo(() => entryFrom(id, name, environment, notes), [id, name, environment, notes]);
+  const [id, setId] = useState(base.workspace_id ?? "");
+  const [name, setName] = useState(base.workspace_name ?? "");
+  const [environment, setEnvironment] = useState(base.environment);
+  const [notes, setNotes] = useState(base.notes ?? "");
+  const entry = useMemo(() => entryFrom(base, id, name, environment, notes), [base, id, name, environment, notes]);
   const check = useCallback((candidate: WorkspaceEntry) => workspaceIssues(document, candidate, mode), [document, mode]);
   const [checked, setChecked] = useDebouncedCheck(entry, check);
   const [server, setServer] = useState<{ entry: WorkspaceEntry; issues: RuleIssue[] } | null>(null);
@@ -335,14 +382,14 @@ function LabelForm({ mode, initial, document, suggestions, notice, onSave, onSav
   const [saving, setSaving] = useState(false);
 
   const workspaces = useMemo(() => document.workspaces ?? [], [document.workspaces]);
-  const index = mode === "edit" ? workspaces.findIndex((w) => workspaceKey(w) === workspaceKey(initial)) : workspaces.length;
+  const index = mode === "edit" ? workspaces.findIndex((w) => workspaceKey(w) === workspaceKey(base)) : workspaces.length;
   const issues = server !== null && server.entry === entry ? server.issues : checked.issues;
   const at = `workspaces[${index >= 0 ? index : workspaces.length}]`;
   const fieldIssues = (key: string) => issues.filter((issue) => issue.path === `${at}.${key}`).map((issue) => issue.message);
   // Each issue once: the rules can report one twice, and the list keys on path and message.
   const listed = uniqueIssues(issues.filter((issue) => issue.path === at || issue.path === "" || issue.path.startsWith("jobs[")));
   // An edit that would save the label as it is stays off: the store would write an empty version.
-  const changed = mode === "create" || !deepEqual(entry, initial);
+  const changed = mode === "create" || !deepEqual(entry, base);
   const labels = useMemo(
     () => [...new Set(workspaces.map((w) => w.environment).filter((label) => typeof label === "string" && label !== ""))],
     [workspaces],
@@ -367,11 +414,10 @@ function LabelForm({ mode, initial, document, suggestions, notice, onSave, onSav
     if (now.length > 0) return;
     setSaving(true);
     setProblem(null);
-    const outcome = await onSave({
-      kind: "upsert",
-      target: { type: "workspace", key: workspaceKey(mode === "edit" ? initial : entry) },
-      value: entry,
-    });
+    const outcome = await onSave(
+      { kind: "upsert", target: { type: "workspace", key: workspaceKey(mode === "edit" ? base : entry) }, value: entry },
+      openedAt,
+    );
     setSaving(false);
     if (outcome.ok) onSaved(outcome.result);
     else if (outcome.conflict) setProblem({ kind: "conflict" });
@@ -383,7 +429,7 @@ function LabelForm({ mode, initial, document, suggestions, notice, onSave, onSav
   return (
     <>
       <DialogHeader>
-        <DialogTitle>{mode === "edit" ? `Edit the label for ${nameOf(initial)}` : "Add a workspace label"}</DialogTitle>
+        <DialogTitle>{mode === "edit" ? `Edit the label for ${nameOf(base)}` : "Add a workspace label"}</DialogTitle>
         <DialogDescription>
           {readOnly
             ? "To label another workspace, remove this label and add a new one."
@@ -497,6 +543,8 @@ function LabelForm({ mode, initial, document, suggestions, notice, onSave, onSav
               onReload={onReload}
               onReloaded={() => {
                 setProblem(null);
+                // A new label keeps what was typed, and saves from the version it now checks against (an edit starts again).
+                takeNewest();
                 onReloaded();
               }}
             />
@@ -522,9 +570,14 @@ function LabelForm({ mode, initial, document, suggestions, notice, onSave, onSav
 interface RemoveLabelDialogProps {
   workspace: WorkspaceEntry;
   document: JobListDocument;
+  /** The version `document` is. */
+  version: number | null;
   onCancel: () => void;
-  onRemove: () => Promise<SaveOutcome>;
+  /** Removes the label; `baseVersion` is the version the dialog opened at. */
+  onRemove: (baseVersion: number | null) => Promise<SaveOutcome>;
   onReload: ReloadJobList;
+  /** Where focus goes when the dialog closes (see useReturnFocus). */
+  returnFocus?: ReturnFocus;
 }
 
 const OVERRIDE_PATH = /^jobs\[(.+)\]\.environments\.([^.]+)$/;
@@ -554,7 +607,8 @@ function blockerSentences(issues: RuleIssue[]): string[] {
 }
 
 /** Confirms a label removal. A label that a job still sets settings for cannot go while no other workspace has it. */
-function RemoveLabelDialog({ workspace, document, onCancel, onRemove, onReload }: RemoveLabelDialogProps) {
+function RemoveLabelDialog({ workspace, document, version, onCancel, onRemove, onReload, returnFocus }: RemoveLabelDialogProps) {
+  const backToPage = useReturnFocus(returnFocus);
   const name = nameOf(workspace);
   const blockers = useMemo(
     () => changeIssues(document, { kind: "delete", target: { type: "workspace", key: workspaceKey(workspace) } }),
@@ -562,10 +616,12 @@ function RemoveLabelDialog({ workspace, document, onCancel, onRemove, onReload }
   );
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<Exclude<SaveOutcome, { ok: true }> | null>(null);
+  // The version the dialog opened at, until a reload after a conflict shows a newer one.
+  const [openedAt, takeNewest] = useOpenedVersion(version);
 
   const confirm = async () => {
     setBusy(true);
-    const outcome = await onRemove();
+    const outcome = await onRemove(openedAt);
     setBusy(false);
     if (!outcome.ok) setFailure(outcome);
   };
@@ -577,7 +633,7 @@ function RemoveLabelDialog({ workspace, document, onCancel, onRemove, onReload }
         if (!open) onCancel();
       }}
     >
-      <AlertDialogContent>
+      <AlertDialogContent onCloseAutoFocus={backToPage}>
         <AlertDialogHeader>
           <AlertDialogTitle>Remove the label for {name}?</AlertDialogTitle>
           <AlertDialogDescription>Findings from this workspace no longer carry the label {workspace.environment}.</AlertDialogDescription>
@@ -592,7 +648,13 @@ function RemoveLabelDialog({ workspace, document, onCancel, onRemove, onReload }
         {failure?.conflict ? (
           <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-destructive">
             <p className="leading-5">Someone else changed this label since you opened it.</p>
-            <ReloadButton onReload={onReload} onReloaded={() => setFailure(null)} />
+            <ReloadButton
+              onReload={onReload}
+              onReloaded={() => {
+                setFailure(null);
+                takeNewest();
+              }}
+            />
           </div>
         ) : failure ? (
           <p role="alert" className="text-sm text-destructive">

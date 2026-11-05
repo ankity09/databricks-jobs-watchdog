@@ -34,6 +34,8 @@ const applies: SaveReply = (body, state) => {
 interface MapOptions {
   /** Answers for analytics queries other than live status; null for no rows. */
   queries?: (call: QueryCall) => QueryAnswer | null;
+  /** The live status answer, when it is not the LIVE rows. */
+  live?: () => QueryAnswer;
   /** The saved version: null for a job list that was never saved. */
   version?: number | null;
 }
@@ -48,7 +50,7 @@ function renderMap(document: JobListDocument = EXAMPLE_DOCUMENT, reply: SaveRepl
   let loads = 0;
   let loadsFail = false;
   mockFetch(
-    (call) => (call.key === "job_live_status" ? { rows: LIVE } : (options.queries?.(call) ?? { rows: [] })),
+    (call) => (call.key === "job_live_status" ? (options.live?.() ?? { rows: LIVE }) : (options.queries?.(call) ?? { rows: [] })),
     (url, init) => {
       if (url.startsWith("/api/app-config")) return json(APP_CONFIG);
       if (url === "/api/job-list" && (init?.method ?? "GET") === "GET") {
@@ -206,6 +208,29 @@ describe("DependencyMapPage", () => {
     await user.keyboard("{Escape}");
     await waitFor(() => expect(menu).not.toBeInTheDocument());
     expect(ingest).toHaveAttribute("data-highlight", "selected");
+    await waitFor(() => expect(link).toHaveFocus());
+  });
+
+  it("says politely which box Enter selected and what a failure there affects, and keeps focus on the box", async () => {
+    const user = userEvent.setup();
+    renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    ingest.focus();
+    await user.keyboard("{Enter}");
+    const panel = await screen.findByRole("region", { name: "orders_ingest" });
+    const affects = within(panel).getByText(/^A failure here affects/).textContent ?? "";
+    const said = await screen.findByText(`Selected orders_ingest. ${affects}`);
+    expect(said).toHaveAttribute("aria-live", "polite");
+    expect(said).toHaveClass("sr-only");
+    expect(ingest).toHaveFocus();
+  });
+
+  it("keeps focus on a link when Escape is pressed with no menu open", async () => {
+    const user = userEvent.setup();
+    renderMap();
+    const link = await box("orders_enrich depends on orders_ingest (job link)");
+    link.focus();
+    await user.keyboard("{Escape}");
     await waitFor(() => expect(link).toHaveFocus());
   });
 
@@ -455,7 +480,7 @@ describe("DependencyMapPage", () => {
         </RefreshProvider>
       </MemoryRouter>,
     );
-    expect(await screen.findByText("Could not load the job list.")).toBeInTheDocument();
+    expect(await screen.findByText("The job list did not load.")).toBeInTheDocument();
     fail = false;
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(await box("watchdog_demo_fails (Failed)")).toBeInTheDocument();
@@ -464,7 +489,7 @@ describe("DependencyMapPage", () => {
   it("settles into its empty state when nothing was ever saved, as the smoke test answers", async () => {
     renderMap({ jobs: [] }, applies, { version: null });
     expect(await screen.findByText("Nothing on the map yet")).toBeInTheDocument();
-    expect(screen.queryByText("Could not load the job list.")).toBeNull();
+    expect(screen.queryByText("The job list did not load.")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -505,5 +530,44 @@ describe("DependencyMapPage", () => {
     failLoads(false);
     await user.click(within(alert).getByRole("button", { name: "Reload" }));
     await waitFor(() => expect(screen.queryByText("Someone else changed the job list since you opened it.")).toBeNull());
+  });
+
+  it("offers Retry when a reload fails, and says the map shows the version loaded before", async () => {
+    const user = userEvent.setup();
+    const { failLoads } = renderMap(EXAMPLE_DOCUMENT, () =>
+      json({ error: "conflict", message: "Someone else changed this since you opened it. Reload to see their change.", latestVersion: 5 }, 409),
+    );
+    fireEvent.click(await box("orders_enrich depends on orders_ingest (job link)"));
+    await user.click(await screen.findByRole("button", { name: "Remove link" }));
+    const conflict = await screen.findByRole("alert");
+    failLoads(true);
+    await user.click(within(conflict).getByRole("button", { name: "Reload" }));
+    const stale = await screen.findByText("The newest job list did not load. The database is waking up. The map shows the version loaded before.");
+    failLoads(false);
+    const line = stale.closest("[role='status']");
+    if (!(line instanceof HTMLElement)) throw new Error("no reload problem line");
+    await user.click(within(line).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByText(/The newest job list did not load/)).toBeNull());
+  });
+
+  it("says why live status is missing as Monitoring does, with Retry", async () => {
+    // Its own minute for the refresh key, so AppKit's query store gives this test its own job_live_status answer.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-05T20:30:00Z"));
+    const user = userEvent.setup();
+    let failLive = true;
+    renderMap(EXAMPLE_DOCUMENT, applies, {
+      live: () => (failLive ? { error: "Query execution failed", errorCode: "BAD_REQUEST" } : { rows: LIVE }),
+    });
+    const title = await screen.findByText("Live status is not available.");
+    const line = title.closest("[data-slot='query-problem']");
+    if (!(line instanceof HTMLElement)) throw new Error("no problem line");
+    expect(line).toHaveTextContent(
+      "Live status is not available. The query on main.watchdog failed. If no scan has run yet, click Scan now to create the tables. Otherwise, ask the owner of main.watchdog for USE CATALOG, USE SCHEMA and SELECT on it. Every job shows Unknown until it loads.",
+    );
+    failLive = false;
+    await user.click(within(line).getByRole("button", { name: "Retry" }));
+    expect(await box("watchdog_demo_fails (Failed)")).toBeInTheDocument();
+    expect(screen.queryByText("Live status is not available.")).toBeNull();
   });
 });
