@@ -95,14 +95,14 @@ const NUMBER_LABELS: Record<NumberKey, { label: ReactNode; description: string }
   min_attempt_minutes: { label: minutes("Min attempt"), description: "Minutes. A retried attempt shorter than this is a retry loop." },
 };
 
+/** Where focus goes when the form starts again: the notice after a reload, the card after a save (its Save button goes). */
+type FocusOnStart = "notice" | "card" | null;
+
 /**
  * The defaults section: the settings every job gets unless it sets its own.
  * A change is checked against the whole list as you type, so a default that
  * would break a job is caught before it is saved.
  */
-/** Where focus goes when the form starts again: the notice after a reload, the card after a save (its Save button goes). */
-type FocusOnStart = "notice" | "card" | null;
-
 export function DefaultsForm({ document, version, onSave, onSaved, onReload }: DefaultsFormProps) {
   // Bumped after a save or a reload, and when a newer version changed the defaults while the form has no edits,
   // so the form starts again from the newest saved defaults.
