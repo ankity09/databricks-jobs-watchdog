@@ -8,6 +8,10 @@
  * scan's serverless Python may be any version from 3.10 to 3.14, so a pattern
  * passes only when all of them compile it, with Python's message.
  *
+ * Like the loader, it does not check that Spark's regexp_like (Java regex), which the
+ * system-table scan matches with, can use the pattern: Python's (?P<name>...) passes
+ * both, and that scan then fails on it.
+ *
  * Differences that cannot be avoided in JavaScript:
  * - A \N{...} character name in a pattern is refused: the app has no Unicode name database to look it up.
  * - A float with no fraction (60.0) is told apart from 60 only if the YAML was

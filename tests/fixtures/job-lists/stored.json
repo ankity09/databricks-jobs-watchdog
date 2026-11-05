@@ -308,7 +308,7 @@
    },
    {
     "job_name": "orders_report",
-    "job_name_regex": "^(?P<base>orders)_report_(?P=base)$"
+    "job_name_regex": "^(?i:ORDERS)_report$"
    }
   ]
  },
