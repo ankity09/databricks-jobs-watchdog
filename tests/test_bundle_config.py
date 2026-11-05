@@ -395,7 +395,8 @@ def test_the_lakebase_project_and_database_are_protected_and_use_the_variables()
     assert project["project_id"] == "${var.lakebase_project_id}"
     role = resources["postgres_roles"]["watchdog_owner"]
     assert database["database_id"] == "${var.lakebase_database}"
-    assert role["auth_method"] == "NO_LOGIN"
+    assert "auth_method" not in role
+    assert project["enable_pg_native_login"] is False
     for resource in (project, database, role):
         assert resource["lifecycle"]["prevent_destroy"] is True
 
