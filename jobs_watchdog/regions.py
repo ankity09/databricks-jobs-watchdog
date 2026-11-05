@@ -147,8 +147,25 @@ def _statement(region, statement, parameters):
     return ["databricks", "api", "post", STATEMENTS_API, "--json", json.dumps(body)] + _profile_args(region)
 
 
+# information_schema holds names in lower case, so a schema named Watchdog must still find its view
 _VIEW_EXISTS = ("SELECT 1 FROM IDENTIFIER(:catalog || '.information_schema.views') "
-                "WHERE table_schema = :schema AND table_name = :view")
+                "WHERE table_schema = lower(:schema) AND table_name = lower(:view)")
+
+
+def workspace_target(path, profile=""):
+    """One workspace's tables target from an accelerator file: its catalog, schema and warehouse, no host."""
+    data = load_accelerator(path, require_complete=True)
+    target = data["target"]
+    if not str(target.get("warehouse_id") or "").strip():
+        raise ConfigError(f"target.warehouse_id must be set in {path}")
+    return RegionDeploy(name=Path(path).name, path=Path(path), host="", profile=profile,
+                        catalog=str(target["catalog"]), schema=str(target["schema"]),
+                        warehouse_id=str(target["warehouse_id"]).strip())
+
+
+def ensure_tables_steps(region):
+    """The Statement Execution API calls that create the Watchdog schema, tables and view when they are missing."""
+    return _ensure_tables_steps(region)
 
 
 def _ensure_tables_steps(region):

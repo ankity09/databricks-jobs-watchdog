@@ -1,6 +1,15 @@
 # Changelog
 
-What changed, for people who already run the Watchdog. After every pull: restart Python on any open notebook, then run notebook 01 once. It creates any new table, adds any new columns to your existing tables (your rows stay) and brings the view up to date. If you deployed the jobs with the bundle, deploy it again right after the pull, so the jobs run the new code; each scheduled run of `watchdog_scan` then runs notebook 01 too.
+What changed, for people who already run the Watchdog. After every pull: restart Python on any open notebook, then run notebook 01 once. It creates any new table, adds any new columns to your existing tables (your rows stay) and brings the view up to date. If you deployed the jobs with the bundle, deploy it again right after the pull, so the jobs run the new code; each scheduled run of `watchdog_scan` then runs notebook 01 too. Since the Watchdog app, every target also deploys the app, its Lakebase project and a Genie agent: the deploy needs `target.warehouse_id` set, Databricks Apps, Lakebase and Genie turned on, and the CLI 1.23.0 or newer. Before the first such deploy, run `python3 scripts/ensure_tables.py accelerator.local.yaml --profile <profile>`. After each deploy, `bundle run watchdog_app` ships the new app code.
+
+## Deploying the app (2026-11-05)
+
+- **`scripts/ensure_tables.py`** creates the Watchdog schema, tables and view before a single workspace's first deploy, as `deploy_regions.py` does for each region: the Genie agent cannot be created over a schema that does not exist.
+- **`app.users_group`** (default `users`) gets `CAN USE` on the app and `CAN RUN` on the copilot's Genie agent. [docs/multi-region.md](docs/multi-region.md#who-can-use-the-app) lists the grants each user needs, and why the app needs user authorization.
+- **After a teardown and a new deploy**, the new `watchdog_app_access` job (notebook 11) gives the app's new service principal access to the job list the teardown kept in Lakebase. `deploy_regions.py` runs it after each region's deploy (`--skip-app-access` turns that off), and the teardown prints it with the bind commands. Until it runs, the app's job list says so.
+- **`teardown.sh -c <region file>`** now sends every call to the file's `deploy.workspace_host`, names that workspace in its prompts, and refuses a shell host or profile that points elsewhere.
+- **Notebook 02** installs `psycopg` only when it reads the job list from Lakebase, so a YAML load needs no PyPI. A failed install is a FAILED row in `config_loads`.
+- **The job list in the app** reads YAML the way the Python loader does (`y` and `n` are text, dates keep their text), stores names, owners and notes as the text the loader reads, and checks name patterns with Python's own rules for Python 3.10 to 3.14.
 
 ## Multi-region deploys (2026-11-04)
 

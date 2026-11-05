@@ -19,11 +19,13 @@ auth:
 
 scan:
   config_source: lakebase            # the job list is edited in the Watchdog app
-  schedule_status: UNPAUSED
+  schedule_status: PAUSED            # every scan fails at load_config until the app holds a job list: import or
+                                     # add your jobs in the app first, then set UNPAUSED and deploy again
 
 app:
   name: watchdog-app
   lakebase_project_id: jobs-watchdog
+  users_group: users                 # the group whose members may open the app
 
 deploy:
   workspace_host: https://your-workspace.example.com # where this region's Watchdog runs

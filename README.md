@@ -120,6 +120,7 @@ The runbook's [First run, step by step](docs/phase-1-runbook.md#first-run-step-b
 | `08_create_dashboard` | optional: creates or updates the "Watchdog findings" dashboard and publishes it |
 | `09_custom_check_example` | optional: a template for your own checks, such as service connectivity |
 | `10_delete_old_findings` | deletes findings scans older than `retention_days`, keeping each source's newest; the `watchdog_cleanup` job runs it daily |
+| `11_grant_app_access` | after a teardown and a new deploy, gives the app's new service principal access to the job list kept in Lakebase; the `watchdog_app_access` job runs it |
 
 To look at the raw data behind a finding, two read-only notebooks in `notebooks/explore` help: `03_explore_system_tables` runs each query in `sql/explore`, with notes, and `04_explore_jobs_api` walks one job through the three Jobs API calls. They are not part of the main path.
 
@@ -127,15 +128,19 @@ Each notebook takes its inputs from widgets (input boxes) at the top, with defau
 
 ### As a job, with the bundle
 
-From a laptop with the [Databricks CLI](https://docs.databricks.com/dev-tools/cli/) and Python 3.10 or later with PyYAML (`pip install pyyaml`):
+From a laptop with the [Databricks CLI](https://docs.databricks.com/dev-tools/cli/) 1.23.0 or newer and Python 3.10 or later with PyYAML (`pip install pyyaml`):
 
 ```bash
-cp accelerator.yaml accelerator.local.yaml        # then fill in catalog and region
+cp accelerator.yaml accelerator.local.yaml        # then fill in catalog, region and warehouse_id
+python3 scripts/ensure_tables.py accelerator.local.yaml --profile <your-profile>
 eval "$(python3 scripts/bundle_vars.py --export accelerator.local.yaml)"
 databricks bundle validate -t dev --profile <your-profile>
 databricks bundle deploy -t dev --profile <your-profile>
+databricks bundle run watchdog_app -t dev --profile <your-profile>
 databricks bundle run watchdog_phase_1 -t dev --profile <your-profile>
 ```
+
+Every target also deploys the Watchdog app, its Lakebase project and the copilot's Genie agent. So the workspace needs Databricks Apps, Lakebase and Genie turned on, and user authorization for apps, and `target.warehouse_id` must name a SQL warehouse you can use. `scripts/ensure_tables.py` creates the schema, the tables and the view through that warehouse before the first deploy, because the Genie agent cannot be created over a schema that does not exist yet; it is safe to run again. `bundle run watchdog_app` deploys the app's code and starts it; run it again after a pull. The people who use the app need the grants in [Who can use the app](docs/multi-region.md#who-can-use-the-app).
 
 `scripts/bundle_vars.py` turns `accelerator.local.yaml` into `BUNDLE_VAR_*` environment variables, which the CLI reads as bundle variables. Each job passes its run ID as `scan_id`, so both scans in one run share one scan.
 
@@ -159,11 +164,11 @@ The `dev` and `demo` targets use development mode, so deployed names start with 
 ### Remove it
 
 ```bash
-./teardown.sh -t dev --profile <your-profile>                 # the bundle's jobs and files
+./teardown.sh -t dev --profile <your-profile>                 # the jobs, the app, the Genie agent and the bundle's files
 ./teardown.sh -t demo --drop-schema --profile <your-profile>  # also the sample jobs and the Watchdog schema
 ```
 
-`--drop-schema` asks you to type the schema name first. It drops the schema with its five tables and the `findings_latest` view. It stops before changing anything if the schema holds any other table. The script does not delete the dashboard: move it to the trash in the workspace yourself. Any service principal, secret scope or grants you created are yours to remove.
+A plain teardown deletes the jobs, the Watchdog app, the copilot's Genie agent with everyone's copilot conversations, and the bundle's files. It keeps the Lakebase project with the job list, and the Watchdog schema with the findings history. At the end it prints how to deploy again with the list kept; [Deploy again after a teardown](docs/multi-region.md#deploy-again-after-a-teardown) explains the steps. `--drop-lakebase` also deletes the project. `--drop-schema` drops the schema with its six tables and the `findings_latest` view, and stops before changing anything if the schema holds any other table. Each asks you to type a name first. The script does not delete the dashboard: move it to the trash in the workspace yourself. Any service principal, secret scope or grants you created are yours to remove.
 
 ## Phases
 
@@ -192,12 +197,13 @@ The `dev` and `demo` targets use development mode, so deployed names start with 
 accelerator.yaml       the settings you review; copy to accelerator.local.yaml
 DEPLOY.md              Genie Code playbook
 databricks.yml         bundle: dev, demo and production targets
-resources/             watchdog_phase_1 (on demand), watchdog_scan and watchdog_cleanup (scheduled)
-teardown.sh            bundle destroy, plus an optional schema drop
+resources/             watchdog_phase_1 and watchdog_app_access (on demand), watchdog_scan and watchdog_cleanup
+                       (scheduled), the Watchdog app, its Lakebase project and the copilot's Genie agent
+teardown.sh            bundle destroy that keeps the Lakebase project, plus optional project and schema drops
 config/                example monitored-jobs file; config/regions holds example region files
 ci/                    a GitLab CI example for deploying every region
 dashboards/            the dashboard template that notebook 08 publishes
-notebooks/             00 to 02 and 05 to 10, plus _setup (shared widgets and paths)
+notebooks/             00 to 02 and 05 to 11, plus _setup (shared widgets and paths)
 notebooks/explore/     03 and 04, read-only exploration, run by hand
 sql/setup/             schema and table DDL
 sql/config/            loads the config tables
@@ -208,7 +214,7 @@ sql/maintenance/       deletes old findings scans (notebook 10)
 sql/views/             the findings_latest view, created by notebook 01
 jobs_watchdog/         Python package the notebooks use
 demo/                  the four sample job notebooks
-scripts/               bundle_vars.py, deploy_regions.py
+scripts/               bundle_vars.py, ensure_tables.py, deploy_regions.py, region_host.py (teardown's host check)
 tests/                 pytest, no network: python -m pytest
 docs/                  guides and diagrams
 ```
@@ -220,7 +226,7 @@ docs/                  guides and diagrams
 - [Queries](docs/queries.md): every SQL file, what it answers and how to read it.
 - [Jobs API](docs/jobs-api.md): every Jobs API field the Watchdog reads.
 - [Phase 1 runbook](docs/phase-1-runbook.md): step by step, by role.
-- [One Watchdog per region](docs/multi-region.md): region files, the deploy script, a GitLab CI example, the first deploy of a fresh region, and teardown per region.
+- [One Watchdog per region](docs/multi-region.md): region files, the deploy script, a GitLab CI example, the first deploy of a fresh region, who can use the app, teardown per region, and deploying again after a teardown.
 - [Git folder setup](docs/git-folder-setup.md): cloning this repo into a workspace and pulling updates.
 - [Roadmap](docs/roadmap.md): Phases 2 to 5, and the backlog.
 - [Changelog](CHANGELOG.md): what changed in each release, and how to upgrade.

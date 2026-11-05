@@ -264,6 +264,16 @@ def test_the_gitlab_example_has_a_matrix_job_per_stage_and_the_region_script():
     assert ci["variables"]["DATABRICKS_CLI_VERSION"] == "1.23.0"
 
 
+def test_merge_request_validation_signs_in_without_the_protected_deploy_secret():
+    # GitLab gives protected variables only to protected refs, so a merge request never sees the deploy secret
+    import yaml
+
+    ci = yaml.safe_load((repo_root() / "ci" / "gitlab-ci.example.yml").read_text())
+    assert ci["validate"]["variables"] == {"DATABRICKS_CLIENT_ID": "$VALIDATE_CLIENT_ID",
+                                           "DATABRICKS_CLIENT_SECRET": "$VALIDATE_CLIENT_SECRET"}
+    assert "variables" not in ci["deploy"]
+
+
 # teardown_target
 
 
@@ -284,3 +294,10 @@ def test_without_a_region_host_nothing_is_checked_and_the_shell_host_is_shown(tm
     env = {"DATABRICKS_CONFIG_FILE": str(tmp_path / "none"), "DATABRICKS_HOST": "https://a.example.com/"}
     target = teardown_target(None, "", env)
     assert (target.host, target.profile, target.checked) == ("https://a.example.com", "", False)
+
+
+def test_the_view_check_ignores_case_as_information_schema_stores_names_in_lower_case():
+    steps = deploy_steps(region(schema="Watchdog"), validate_only=False, run_app=False)
+    check = next(s for s in steps if s.only_if_missing)
+    body = json.loads(check.only_if_missing[check.only_if_missing.index("--json") + 1])
+    assert "lower(:schema)" in body["statement"] and "lower(:view)" in body["statement"]

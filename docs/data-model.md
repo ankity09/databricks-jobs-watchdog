@@ -1,6 +1,6 @@
 # Data model
 
-The Watchdog keeps five Delta tables and one view in one schema, `<catalog>.<schema>` (the schema defaults to `watchdog`). Notebook 01 creates them from the files in `sql/setup` and `sql/views`. Every column has a comment, so `DESCRIBE TABLE <catalog>.<schema>.findings` shows the same descriptions as this page.
+The Watchdog keeps six Delta tables and one view in one schema, `<catalog>.<schema>` (the schema defaults to `watchdog`). Notebook 01 creates them from the files in `sql/setup` and `sql/views`. Every column has a comment, so `DESCRIBE TABLE <catalog>.<schema>.findings` shows the same descriptions as this page.
 
 | Object | What it holds | How it changes |
 |---|---|---|
@@ -9,6 +9,7 @@ The Watchdog keeps five Delta tables and one view in one schema, `<catalog>.<sch
 | `monitored_workspaces` | an environment label for each workspace | replaced each time notebook 02 loads your YAML file |
 | `monitored_job_environments` | the settings a job changes in one environment, such as a lower severity | replaced each time notebook 02 loads your YAML file |
 | `findings` | what every scan found, from every source | rows are added, never updated or deleted |
+| `config_loads` | one row per load of the job list: where from, which version, how many jobs, and whether it worked | a row is added by every run of notebook 02 |
 | `findings_latest` (view) | the newest scan from each source | computed from `findings` each time it is read |
 
 The scans read the config tables, not the YAML file. The scheduled job loads the file again on every run, so an edit counts from the next run. When you run a scan by hand, run notebook 02 first.
@@ -138,6 +139,23 @@ One row per dependency. A failure lists every job downstream of the failed job, 
 | `loaded_at` | TIMESTAMP, required | When notebook 02 loaded the row. |
 
 The scans fill `affected_jobs` from `job` and `child_job` rows, and `parent_job` from `child_job` rows. `service` rows are used by the custom check template (notebook 09), which lists the jobs that depend on a service it found down. Built-in service probes come in Phase 2. Notebook 02 shows what a failure of each job affects, and prints any loops between jobs.
+
+## config_loads
+
+Notebook 02 adds one row every time it loads the job list, whether the load works or not, so the Watchdog app can show which version the scans use and whether the last load failed. A failed load leaves the four config tables as they were, so the scans go on with the last list that loaded.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `loaded_at` | TIMESTAMP | when the load ran, in UTC |
+| `scan_id` | STRING | the scan the load belongs to (the job's run ID) |
+| `source` | STRING | `yaml` (the monitored-jobs file) or `lakebase` (the list saved in the Watchdog app) |
+| `source_ref` | STRING | the file's path, or the Lakebase database's path |
+| `version` | BIGINT | the app's job list version; empty for YAML |
+| `job_count` | INT | how many jobs the list holds; empty when the load failed |
+| `status` | STRING | `OK` or `FAILED` |
+| `error` | STRING | why the load failed, for example a rule the list breaks or a package that could not be installed; empty when it worked |
+
+A serverless run that retries its task writes one row per attempt, with the same `scan_id`; the newest row is the one that counts.
 
 ## findings
 

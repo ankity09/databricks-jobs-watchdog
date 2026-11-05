@@ -6,7 +6,7 @@
 # MAGIC
 # MAGIC **Inputs (widgets).** `catalog`, `schema`. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
-# MAGIC **What to look for.** Six `exists: True` lines (five tables and the view), and the columns it added, if any. It never creates a catalog. A schema that already exists is left as it is, so this notebook then needs `USE CATALOG` on the catalog plus `USE SCHEMA` and `CREATE TABLE` on the schema; creating a new schema needs `USE CATALOG` and `CREATE SCHEMA` on the catalog instead (see the runbook).
+# MAGIC **What to look for.** Seven `exists: True` lines (six tables and the view), and the columns it added, if any. It never creates a catalog. A schema that already exists is left as it is, so this notebook then needs `USE CATALOG` on the catalog plus `USE SCHEMA` and `CREATE TABLE` on the schema; creating a new schema needs `USE CATALOG` and `CREATE SCHEMA` on the catalog instead (see the runbook).
 
 # COMMAND ----------
 

@@ -653,3 +653,29 @@ def test_the_app_access_job_takes_the_app_and_lakebase_names_from_the_bundle_var
     names = ("app_name", "lakebase_project_id", "lakebase_branch", "lakebase_database")
     assert parameters == {name: f"${{var.{name}}}" for name in names}
     assert set(parameters) <= set(WIDGETS) and set(parameters) <= set(load_bundle()["variables"])
+
+
+def test_people_in_the_users_group_variable_may_open_the_app_and_ask_the_copilot():
+    assert load_app()["permissions"] == [{"group_name": "${var.app_users_group}", "level": "CAN_USE"}]
+    assert load_genie()["permissions"] == [{"group_name": "${var.app_users_group}", "level": "CAN_RUN"}]
+    assert load_bundle()["variables"]["app_users_group"]["default"] == "users"
+    data = yaml.safe_load((repo_root() / "accelerator.yaml").read_text())
+    assert data["app"]["users_group"] == "users"
+
+
+def test_the_bundle_asks_for_the_cli_version_its_resources_need():
+    assert load_bundle()["bundle"]["databricks_cli_version"] == ">= 1.23.0"
+
+
+def test_accelerator_yaml_lists_every_feature_the_bundle_creates():
+    required = yaml.safe_load((repo_root() / "accelerator.yaml").read_text())["features"]["required"]
+    assert {"apps", "lakebase", "genie"} <= set(required)
+
+
+@pytest.mark.parametrize("path", sorted((repo_root() / "config" / "regions").glob("accelerator.*.yaml")), ids=lambda p: p.name)
+def test_example_region_files_ship_paused_until_the_job_list_is_imported(path):
+    # with config_source lakebase every scan fails at load_config until the app holds a job list
+    data = yaml.safe_load(path.read_text())
+    assert data["scan"]["config_source"] == "lakebase"
+    assert data["scan"]["schedule_status"] == "PAUSED"
+    assert "import" in path.read_text()

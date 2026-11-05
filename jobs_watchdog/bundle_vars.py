@@ -28,6 +28,7 @@ VARIABLES = {
     "config_source": ("scan", "config_source"),
     "app_name": ("app", "name"),
     "lakebase_project_id": ("app", "lakebase_project_id"),
+    "app_users_group": ("app", "users_group"),
     # demo_schedule_status has no accelerator.yaml key: set it with --var
 }
 

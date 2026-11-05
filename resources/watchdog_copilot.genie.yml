@@ -4,7 +4,8 @@
 #
 # The catalog, schema and tables must exist before the first deploy, because
 # Genie will not create a space over a schema that does not exist.
-# scripts/deploy_regions.py creates them.
+# scripts/deploy_regions.py creates them for each region, and
+# scripts/ensure_tables.py for a single workspace.
 #
 # Editing the agent:
 # - Genie joins the strings of an array with nothing in between, so each text
@@ -17,8 +18,9 @@
 #   schema. Run a changed one before you deploy it.
 # - The sample questions are also the app's suggested questions
 #   (app/client/src/pages/copilot/SuggestedPrompts.tsx); keep them the same.
-# - The users group gets CAN_RUN: anyone can ask, and each question runs as
-#   the person asking.
+# - The app_users_group variable's group (users by default), the people who
+#   may open the app, gets CAN_RUN: they can ask, and each question runs as the
+#   person asking.
 resources:
   genie_spaces:
     watchdog_copilot:
@@ -27,7 +29,7 @@ resources:
       warehouse_id: ${var.warehouse_id}
       parent_path: ${workspace.root_path}
       permissions:
-        - group_name: users
+        - group_name: ${var.app_users_group}
           level: CAN_RUN
       serialized_space:
         version: 2
