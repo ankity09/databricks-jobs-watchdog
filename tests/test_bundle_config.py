@@ -462,3 +462,48 @@ def test_genie_has_at_most_one_text_instruction_and_version_2():
 def test_the_genie_file_names_no_literal_catalog():
     text = GENIE_FILE.read_text()
     assert "main." not in text
+
+
+def production_target():
+    return load_bundle()["targets"]["production"]
+
+
+def test_production_target_uses_production_mode():
+    assert production_target()["mode"] == "production"
+
+
+def test_production_target_deploys_to_the_deploying_identitys_folder_not_the_shared_path():
+    # a shared root path makes strict validation demand CAN_MANAGE for all users
+    root = production_target()["workspace"]["root_path"]
+    assert root == "/Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}"
+    assert not root.startswith("/Workspace/Shared")
+
+
+def test_production_target_sets_no_permissions_and_no_run_as():
+    target = production_target()
+    assert "permissions" not in target and "run_as" not in target
+
+
+def test_production_target_has_no_demo_jobs():
+    assert not set(production_target().get("resources", {}).get("jobs", {})) & set(DEMO_SCHEDULES)
+    assert "watchdog_phase_1" in included_jobs()
+
+
+def test_production_target_takes_no_host_from_a_variable():
+    assert "host" not in production_target().get("workspace", {})
+
+
+def test_production_target_is_not_the_default():
+    assert not production_target().get("default")
+    assert load_bundle()["targets"]["dev"]["default"] is True
+
+
+def test_gitignore_keeps_local_region_files_out():
+    lines = (repo_root() / ".gitignore").read_text().splitlines()
+    assert "accelerator.*.local.yaml" in lines
+
+
+def test_genie_resource_header_says_tables_must_exist_first():
+    header = "".join(line for line in GENIE_FILE.read_text().splitlines(True) if line.startswith("#"))
+    assert "scripts/deploy_regions.py" in header
+    assert "must exist before the first deploy" in header

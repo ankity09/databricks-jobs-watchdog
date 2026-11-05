@@ -10,11 +10,13 @@
 #         its Lakebase project (default)
 #   demo  the same resources plus four sample jobs (one succeeds, one fails, one
 #         runs long, one retries), so a fresh workspace has something to watch
+#   production  the same resources as dev, in production mode, for a real
+#         region; scripts/deploy_regions.py deploys it once per region
 #
-# Both targets use development mode, so deployed names carry a [dev <you>]
-# prefix. Schedules stay PAUSED unless you set scan_schedule_status (the scan
-# and cleanup jobs) or demo_schedule_status to UNPAUSED. Remove everything with
-# ./teardown.sh.
+# The dev and demo targets use development mode, so deployed names carry a
+# [dev <you>] prefix. Schedules stay PAUSED unless you set scan_schedule_status
+# (the scan and cleanup jobs) or demo_schedule_status to UNPAUSED. Remove
+# everything with ./teardown.sh.
 
 bundle:
   name: databricks-jobs-watchdog
@@ -169,3 +171,15 @@ targets:
                 notebook_path: ./demo/retries.py
                 base_parameters:
                   attempt: "{{task.execution_count}}"
+
+  # One Watchdog per region (see docs/multi-region.md). The workspace host is not
+  # set here: a bundle target cannot take its host from a variable. Each region
+  # file names its workspace, and scripts/deploy_regions.py passes it as
+  # DATABRICKS_HOST (or as a CLI profile). The files go to the deploying
+  # identity's own folder, not /Workspace/Shared: production mode warns that a
+  # shared path is open to every user, and the fix it suggests (CAN_MANAGE for all
+  # users) would reach the jobs, the app and the copilot too.
+  production:
+    mode: production
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}

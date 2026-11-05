@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Removes what the Watchdog bundle deployed.
 #
-#   ./teardown.sh [-t dev|demo] [-p profile] [--drop-schema] [--drop-lakebase] [-y]
+#   ./teardown.sh [-t dev|demo|production] [-p profile] [-c accelerator-file] [--drop-schema] [--drop-lakebase] [-y]
+#
+# -c reads the settings from that file instead of accelerator.local.yaml; use it
+# with a region file to tear down one region's Watchdog (docs/multi-region.md).
 #
 # Default: `databricks bundle destroy` for the target, which deletes the
 # watchdog_phase_1, watchdog_scan and watchdog_cleanup jobs (and, for -t demo,
@@ -38,10 +41,12 @@ drop_schema=false
 drop_lakebase=false
 assume_yes=false
 profile_args=()
+config=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -t|--target) target="$2"; shift 2 ;;
     -p|--profile) profile_args=(--profile "$2"); shift 2 ;;
+    -c|--config) config="$2"; shift 2 ;;
     --drop-schema) drop_schema=true; shift ;;
     --drop-lakebase) drop_lakebase=true; shift ;;
     -y|--yes) assume_yes=true; shift ;;
@@ -50,8 +55,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -n "$config" ]]; then config="$(cd "$(dirname "$config")" && pwd)/$(basename "$config")"; fi
 cd "$(dirname "$0")"
-vars="$(python3 scripts/bundle_vars.py --export)" || exit 2
+vars="$(python3 scripts/bundle_vars.py --export ${config:+"$config"})" || exit 2
 eval "$vars"
 schema_name="${BUNDLE_VAR_catalog}.${BUNDLE_VAR_schema}"
 lakebase_project="${BUNDLE_VAR_lakebase_project_id:-jobs-watchdog}"

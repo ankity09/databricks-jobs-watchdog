@@ -191,10 +191,11 @@ Both targets use development mode, so deployed names start with `[dev <your name
 ```
 accelerator.yaml       the settings you review; copy to accelerator.local.yaml
 DEPLOY.md              Genie Code playbook
-databricks.yml         bundle: dev and demo targets
+databricks.yml         bundle: dev, demo and production targets
 resources/             watchdog_phase_1 (on demand), watchdog_scan and watchdog_cleanup (scheduled)
 teardown.sh            bundle destroy, plus an optional schema drop
-config/                example monitored-jobs file
+config/                example monitored-jobs file; config/regions holds example region files
+ci/                    a GitLab CI example for deploying every region
 dashboards/            the dashboard template that notebook 08 publishes
 notebooks/             00 to 02 and 05 to 10, plus _setup (shared widgets and paths)
 notebooks/explore/     03 and 04, read-only exploration, run by hand
@@ -207,7 +208,7 @@ sql/maintenance/       deletes old findings scans (notebook 10)
 sql/views/             the findings_latest view, created by notebook 01
 jobs_watchdog/         Python package the notebooks use
 demo/                  the four sample job notebooks
-scripts/               bundle_vars.py
+scripts/               bundle_vars.py, deploy_regions.py
 tests/                 pytest, no network: python -m pytest
 docs/                  guides and diagrams
 ```
@@ -219,6 +220,7 @@ docs/                  guides and diagrams
 - [Queries](docs/queries.md): every SQL file, what it answers and how to read it.
 - [Jobs API](docs/jobs-api.md): every Jobs API field the Watchdog reads.
 - [Phase 1 runbook](docs/phase-1-runbook.md): step by step, by role.
+- [One Watchdog per region](docs/multi-region.md): region files, the deploy script, a GitLab CI example, the first deploy of a fresh region, and teardown per region.
 - [Git folder setup](docs/git-folder-setup.md): cloning this repo into a workspace and pulling updates.
 - [Roadmap](docs/roadmap.md): Phases 2 to 5, and the backlog.
 - [Changelog](CHANGELOG.md): what changed in each release, and how to upgrade.

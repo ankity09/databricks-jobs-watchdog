@@ -1,6 +1,10 @@
 # The Watchdog copilot: a Genie agent over the Watchdog's tables. People ask it
 # questions in the Watchdog app; it writes and runs read-only SQL as the person
 # asking, so each person sees only what Unity Catalog lets them see.
+#
+# The catalog, schema and tables must exist before the first deploy, because
+# Genie will not create a space over a schema that does not exist.
+# scripts/deploy_regions.py creates them.
 resources:
   genie_spaces:
     watchdog_copilot:

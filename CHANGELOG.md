@@ -2,6 +2,13 @@
 
 What changed, for people who already run the Watchdog. After every pull: restart Python on any open notebook, then run notebook 01 once. It creates any new table, adds any new columns to your existing tables (your rows stay) and brings the view up to date. If you deployed the jobs with the bundle, deploy it again right after the pull, so the jobs run the new code; each scheduled run of `watchdog_scan` then runs notebook 01 too.
 
+## Multi-region deploys (2026-11-04)
+
+- **A `production` target** in `databricks.yml`, in production mode, for a real region. It deploys to the deploying identity's own folder.
+- **`scripts/deploy_regions.py`** validates and deploys the Watchdog once per region from region files (`config/regions`, `accelerator.<region>.yaml`). Before the first deploy it creates the Watchdog tables and views a fresh region lacks, which the copilot's Genie agent needs. `--validate-only`, `--only`, `--no-app-run` and `--skip-ensure-tables` are options.
+- **`ci/gitlab-ci.example.yml`** deploys every region from GitLab CI. [docs/multi-region.md](docs/multi-region.md) explains it all.
+- **`teardown.sh -c <file>`** reads the settings from that file, so one region can be removed.
+
 ## Phase 1.3 (2026-11-04)
 
 ### Pin jobs by job ID

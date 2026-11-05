@@ -1,0 +1,65 @@
+# Example GitLab CI pipeline: one Watchdog per region. See docs/multi-region.md.
+#
+# Copy this file to .gitlab-ci.yml (or include it) and adjust the region names.
+# Each region has a file config/regions/accelerator.<region>.yaml in your repo.
+# On a merge request every region is validated. On the default branch each
+# region has a manual deploy job.
+#
+# Credentials: create one GitLab environment per region, named like the region
+# (for example prod-eu), and scope these variables to it:
+#   DATABRICKS_CLIENT_ID      application ID of the service principal that deploys
+#   DATABRICKS_CLIENT_SECRET  its OAuth secret (mask it, and protect it)
+# Use this service principal for every deploy of the region, in CI or by hand:
+# another identity would keep its own bundle state and start a conflicting copy.
+# The service principal signs in with OAuth M2M. The workspace host is not a CI
+# variable: it comes from the region file (deploy.workspace_host).
+
+stages:
+  - validate
+  - deploy
+
+variables:
+  DATABRICKS_CLI_VERSION: "1.23.0"  # pinned; the Watchdog needs 1.23.0 or newer
+
+# Shared setup: Python, PyYAML and the pinned Databricks CLI.
+.databricks_setup:
+  image: python:3.12
+  before_script:
+    - pip install --quiet pyyaml
+    - command -v unzip >/dev/null || (apt-get update -qq && apt-get install -y -qq unzip)
+    - curl -fsSL "https://raw.githubusercontent.com/databricks/setup-cli/v${DATABRICKS_CLI_VERSION}/install.sh" | sh
+    - databricks --version
+
+# Validate stage, on merge requests: bundle validate --strict for every region.
+# It changes nothing in any workspace.
+validate:
+  extends: .databricks_setup
+  stage: validate
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  parallel:
+    matrix:
+      - REGION: [lower, prod-eu, prod-us]  # one entry per region file
+  environment:
+    name: $REGION
+    action: prepare
+  script:
+    - python3 scripts/deploy_regions.py config/regions/accelerator.$REGION.yaml --validate-only
+
+# Deploy stage, on the default branch: a person starts each region by hand.
+# The script creates the Watchdog tables if the region lacks them, deploys the
+# bundle and starts the app.
+deploy:
+  extends: .databricks_setup
+  stage: deploy
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+  parallel:
+    matrix:
+      - REGION: [lower, prod-eu, prod-us]  # one entry per region file
+  environment:
+    name: $REGION
+  resource_group: watchdog-$REGION  # one deploy at a time per region
+  script:
+    - python3 scripts/deploy_regions.py config/regions/accelerator.$REGION.yaml
