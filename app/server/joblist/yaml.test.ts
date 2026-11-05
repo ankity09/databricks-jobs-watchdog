@@ -93,6 +93,26 @@ describe("round trip", () => {
   });
 });
 
+describe("the export, read back by PyYAML", () => {
+  // Every scalar of tests/fixtures/yaml-scalars.json, and text PyYAML reads as a merge key or a timestamp
+  // although the yaml library's own 1.1 tags would leave it plain. tests/test_yaml_export.py reads the
+  // pinned export with PyYAML and checks each note and label comes back as the same text.
+  const scalars = (JSON.parse(readFileSync(join(__dirname, "../../../tests/fixtures/yaml-scalars.json"), "utf8")) as {
+    scalars: { text: string }[];
+  }).scalars.map((row) => row.text);
+  const texts = [...scalars, "<<", "2024-11-05 10:30:00 +25:00", "2024-11-05 10:30:00 -99", "2024-11-05T10:30:00+30:00"];
+  const labels = texts.filter((text) => /^[A-Za-z0-9_-]+$/.test(text));
+  it("is pinned with the texts it holds", async () => {
+    const doc = {
+      jobs: texts.map((notes, i) => ({ job_name: `job_${i}`, max_gap_minutes: 5, notes })),
+      dependencies: [],
+    };
+    const withLabels = { ...doc, jobs: [...doc.jobs, { job_name: "labels", max_gap_minutes: 5, environments: Object.fromEntries(labels.map((l) => [l, { enabled: false }])) }] };
+    const pinned = { texts, labels, yaml: toJobListYaml(withLabels, META) };
+    await expect(`${JSON.stringify(pinned, null, 1)}\n`).toMatchFileSnapshot(join(CORPUS, "../yaml-export.json"));
+  });
+});
+
 describe("export layout", () => {
   it("starts with the header and orders sections and keys", () => {
     const text = toJobListYaml(

@@ -17,6 +17,8 @@ const FLOAT = /^(?:[-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+][0-9]+)?|\.[0-9][0-9
 const TIMESTAMP = /^(?:[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]|[0-9][0-9][0-9][0-9]-[0-9][0-9]?-[0-9][0-9]?(?:[Tt]|[ \t]+)[0-9][0-9]?:[0-9][0-9]:[0-9][0-9](?:\.[0-9]*)?(?:[ \t]*(?:Z|[-+][0-9][0-9]?(?::[0-9][0-9])?))?)$/;
 /** PyYAML resolves a plain `=` to the value tag, and its safe loader has no constructor for it. */
 const VALUE = /^(?:=)$/;
+/** PyYAML resolves a plain `<<` to the merge tag: a merge key, which its safe loader refuses as a value. */
+const MERGE = /^(?:<<)$/;
 /** The parts of a timestamp, as PyYAML's constructor reads them (it also takes 1-digit months and days). */
 const TIMESTAMP_PARTS = /^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(?:(?:[Tt]|[ \t]+)([0-9]{1,2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]*))?(?:[ \t]*(Z|([-+])([0-9]{1,2})(?::([0-9]{2}))?))?)?$/;
 
@@ -169,11 +171,18 @@ export const pythonYamlOptions = {
 } as const;
 
 /**
- * Extra tags for writing YAML. A plain `=` would read back as PyYAML's value tag,
- * which its safe loader refuses, so the writer must quote it. (The yaml library's
- * own 1.1 tags already make it quote all other text that PyYAML would read as a
- * number, a boolean, null or a date.)
+ * Tags for writing YAML that PyYAML reads back as the same text. The yaml library
+ * quotes a string when a tag's test matches it, and its own 1.1 tests miss some
+ * text PyYAML reads as another type (a time zone offset of 24 hours or more is
+ * still a timestamp to PyYAML, which then refuses it). So PyYAML's own resolvers
+ * are added as tests that never claim a value: bool, null, int, float, timestamp,
+ * value (=) and merge (<<). The library's merge tag is left out, as it writes the
+ * text << as a plain merge key, which PyYAML would merge as a key or refuse as a
+ * value. tests/fixtures/yaml-export.json pins an export PyYAML reads back.
  */
 export function pythonYamlWriteTags(tags: Tags): Tags {
-  return [...tags, scalarTag("tag:yaml.org,2002:value", VALUE, (text) => text)];
+  const quoteFor = [BOOL, NULL, INT, FLOAT, TIMESTAMP, VALUE, MERGE].map(
+    (test, i): ScalarTag => ({ tag: `tag:watchdog.example.com,2026:pyyaml-${i}`, default: true, test, identify: () => false, resolve: (text) => text }),
+  );
+  return [...tags.filter((tag) => typeof tag === "string" || tag.tag !== "tag:yaml.org,2002:merge"), ...quoteFor];
 }
