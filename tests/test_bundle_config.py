@@ -560,9 +560,30 @@ def test_genie_sample_questions_are_the_app_s_suggested_questions():
         assert f'"{"".join(sample["question"])}"' in prompts
 
 
-def test_the_genie_file_names_no_literal_catalog():
+def assert_catalog_comes_from_the_bundle_variable(text):
+    """Every table read is a CTE (no dots) or ${var.catalog}.${var.schema}.<table>; the schema never stands alone."""
+    tables = re.findall(r"\b(?:FROM|JOIN)\s+([^\s(),;]+)", text, flags=re.IGNORECASE)
+    tables += re.findall(r"identifier:\s*(\S+)", text)
+    assert tables
+    for name in tables:
+        assert "." not in name or name.startswith("${var.catalog}.${var.schema}."), name
+    assert text.count("${var.schema}") == text.count("${var.catalog}.${var.schema}")
+
+
+def test_the_genie_file_takes_its_catalog_from_the_bundle_variable():
+    assert_catalog_comes_from_the_bundle_variable(GENIE_FILE.read_text())
+
+
+@pytest.mark.parametrize("before, after", [
+    ("FROM ${var.catalog}.${var.schema}.findings f", "FROM example_catalog.${var.schema}.findings f"),
+    ("FROM ${var.catalog}.${var.schema}.findings f", "FROM example_catalog.watchdog.findings f"),
+    ("identifier: ${var.catalog}.${var.schema}.findings\n", "identifier: example_catalog.${var.schema}.findings\n"),
+])
+def test_the_catalog_check_refuses_a_literal_catalog(before, after):
     text = GENIE_FILE.read_text()
-    assert "main." not in text
+    assert before in text
+    with pytest.raises(AssertionError):
+        assert_catalog_comes_from_the_bundle_variable(text.replace(before, after, 1))
 
 
 def production_target():
