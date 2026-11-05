@@ -34,6 +34,8 @@ declare module "@databricks/appkit-ui/react" {
     job_history: {
         name: "job_history";
         parameters: {
+          /** INT - use sql.int() */
+          bucket_minutes: SQLNumberMarker;
           /** STRING - use sql.string() */
           catalog: SQLStringMarker;
           /** STRING - use sql.string() */

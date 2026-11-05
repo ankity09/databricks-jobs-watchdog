@@ -142,7 +142,7 @@ function CopilotChat({ chatKey, conversationId }: CopilotChatProps) {
             busy={busy}
             loadingChat={chat.loading}
             loadingRows={chat.loadingRows.includes(message.id)}
-            onRetryRows={() => void chat.retryRows(message.id)}
+            onRetryRows={message.rowsExpired ? undefined : () => void chat.retryRows(message.id)}
             rowsFailed={chat.rowsFailed.includes(message.id)}
           />
         ))}

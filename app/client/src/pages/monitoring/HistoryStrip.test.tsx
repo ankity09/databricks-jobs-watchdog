@@ -11,18 +11,21 @@ const JOBS: HistoryJob[] = [
   { job_name: "inventory_snapshot", workspace_id: null, job_id: null, workspace_name: null },
 ];
 
-function history(job_name: string, workspace_id: string | null, job_id: string | null, scan_id: string, observed_at: string, status: string) {
-  return { job_name, workspace_id, job_id, scan_id, observed_at, status };
+/** One row of job_history: a job's worst status in the window that starts at `window`, over `scans` scans. */
+function history(job_name: string, workspace_id: string | null, job_id: string | null, window: string, status: string, scans = 3) {
+  return { job_name, workspace_id, job_id, observed_at: window, status, scans: String(scans) };
 }
 
-/** Three scans. The second one did not see inventory_snapshot; other_job is not one of the jobs shown. */
+/** Windows of 2 hours (the 3 days view). Clock: 10:10, so the newest window starts at 10:00 and the view starts 3 days before. The 08:00 window did not see inventory_snapshot; other_job is not shown. */
 const HISTORY = [
-  history("orders_ingest", "1001", "11", "s1", "2026-11-05T07:05:00Z", "HEALTHY"),
-  history("inventory_snapshot", null, null, "s1", "2026-11-05T07:05:20Z", "UNKNOWN"),
-  history("orders_ingest", "1001", "11", "s2", "2026-11-05T08:05:00Z", "WARNING"),
-  history("orders_ingest", "1001", "11", "s3", "2026-11-05T09:05:00Z", "FAILED"),
-  history("inventory_snapshot", null, null, "s3", "2026-11-05T09:05:30Z", "UNKNOWN"),
-  history("other_job", "1001", "99", "s3", "2026-11-05T09:05:40Z", "FAILED"),
+  history("orders_ingest", "1001", "11", "2026-11-05T06:00:00.000Z", "HEALTHY"),
+  history("inventory_snapshot", null, null, "2026-11-05T06:00:00.000Z", "UNKNOWN"),
+  history("orders_ingest", "1001", "11", "2026-11-05T08:00:00.000Z", "WARNING", 6),
+  history("orders_ingest", "1001", "11", "2026-11-05T10:00:00.000Z", "FAILED", 1),
+  history("inventory_snapshot", null, null, "2026-11-05T10:00:00.000Z", "UNKNOWN", 1),
+  history("other_job", "1001", "99", "2026-11-05T10:00:00.000Z", "FAILED"),
+  // Before the first window of the view: not drawn.
+  history("orders_ingest", "1001", "11", "2026-11-02T08:00:00.000Z", "FAILED"),
 ];
 
 function renderStrip(jobs: HistoryJob[] = JOBS) {
@@ -53,33 +56,38 @@ describe("the history strip", () => {
     vi.unstubAllGlobals();
   });
 
-  it("draws one cell per scan, oldest first, colored by status, with the time and status on hover", async () => {
+  it("draws one column per fixed window, colored by the window's worst status, and leaves gaps where a job had no scan", async () => {
     setClock("2026-11-05T10:10:00Z");
     mockApi({ queries: { job_history: HISTORY } });
     const user = userEvent.setup();
     renderStrip();
 
-    const orders = cellsOf(await lineOf("orders_ingest"));
+    const ordersLine = await lineOf("orders_ingest");
+    const orders = cellsOf(ordersLine);
     expect(orders.map((cell) => cell.dataset.status)).toEqual(["HEALTHY", "WARNING", "FAILED"]);
     expect(orders[0]).toHaveClass("bg-success");
     expect(orders[1]).toHaveClass("bg-warning");
     expect(orders[2]).toHaveClass("bg-destructive");
+    // 3 days in 2-hour windows: 37 columns, whatever the scan schedule. The rest are gaps.
+    expect(ordersLine.querySelectorAll('[data-slot="history-gap"]')).toHaveLength(37 - 3);
 
-    // The scans line up across jobs: inventory_snapshot has no cell for the scan that missed it.
     const inventory = await lineOf("inventory_snapshot");
     expect(cellsOf(inventory).map((cell) => cell.dataset.status)).toEqual(["UNKNOWN", "UNKNOWN"]);
     expect(cellsOf(inventory)[0]).toHaveClass("bg-muted-foreground/50");
-    expect(inventory.querySelectorAll('[data-slot="history-gap"]')).toHaveLength(1);
+    expect(inventory.querySelectorAll('[data-slot="history-gap"]')).toHaveLength(37 - 2);
     expect(screen.queryByText("other_job")).toBeNull();
 
     const failed = orders[2];
     if (!failed) throw new Error("No third cell");
     await user.hover(failed);
     const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip).toHaveTextContent("2026-11-05 09:05 UTC");
+    expect(tooltip).toHaveTextContent("2026-11-05 10:00 UTC");
     expect(tooltip).toHaveTextContent("Failed");
+    expect(tooltip).toHaveTextContent("1 scan in this 2-hour window");
     await user.unhover(failed);
     await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+    await user.hover(orders[1] ?? failed);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("6 scans in this 2-hour window");
   });
 
   it("gives each line a text summary for screen readers", async () => {
@@ -87,23 +95,41 @@ describe("the history strip", () => {
     mockApi({ queries: { job_history: HISTORY } });
     renderStrip();
     const orders = await lineOf("orders_ingest");
-    expect(orders).toHaveTextContent("3 scans: 1 failed, 1 warning, 1 healthy. Newest: Failed at 2026-11-05 09:05 UTC.");
+    // At 11:10 the newest window starts at 10:00 and the view starts 3 days earlier.
+    expect(orders).toHaveTextContent("3 windows with scans: 1 failed, 1 warning, 1 healthy. Newest: Failed in the window from 2026-11-05 10:00 UTC.");
   });
 
-  it("asks for 3 days first, and switches to 7 days and 24 h", async () => {
+  it("asks for 3 days first (2-hour windows), and switches to 7 days (4 hours) and 24 h (1 hour)", async () => {
     setClock("2026-11-05T12:10:00Z");
     const api = mockApi({ queries: { job_history: HISTORY } });
     const user = userEvent.setup();
     renderStrip();
-    await waitFor(() => expect(api.callsTo("job_history").at(-1)?.params.hours).toBe("72"));
+    await waitFor(() => expect(api.callsTo("job_history").at(-1)?.params).toMatchObject({ hours: "72", bucket_minutes: "120" }));
     expect(screen.getByRole("radio", { name: "3 days" })).toHaveAttribute("aria-checked", "true");
 
     await user.click(screen.getByRole("radio", { name: "7 days" }));
-    await waitFor(() => expect(api.callsTo("job_history").at(-1)?.params.hours).toBe("168"));
+    await waitFor(() => expect(api.callsTo("job_history").at(-1)?.params).toMatchObject({ hours: "168", bucket_minutes: "240" }));
     expect(screen.getByRole("radio", { name: "7 days" })).toHaveAttribute("aria-checked", "true");
 
     await user.click(screen.getByRole("radio", { name: "24 h" }));
-    await waitFor(() => expect(api.callsTo("job_history").at(-1)?.params.hours).toBe("24"));
+    await waitFor(() => expect(api.callsTo("job_history").at(-1)?.params).toMatchObject({ hours: "24", bucket_minutes: "60" }));
+  });
+
+  it.each([
+    ["24 h", 25],
+    ["3 days", 37],
+    ["7 days", 43],
+  ])("draws %s with %i columns per job, so the strip stays readable at any scan schedule", async (label, columns) => {
+    setClock(`2026-11-05T13:${label === "24 h" ? "11" : label === "3 days" ? "12" : "13"}:00Z`);
+    mockApi({ queries: { job_history: [history("orders_ingest", "1001", "11", "2026-11-05T12:00:00.000Z", "HEALTHY")] } });
+    const user = userEvent.setup();
+    renderStrip(JOBS.slice(0, 1));
+    await lineOf("orders_ingest");
+    await user.click(screen.getByRole("radio", { name: label }));
+    await waitFor(async () => {
+      const line = await lineOf("orders_ingest");
+      expect(line.querySelectorAll('[data-slot="history-cell"], [data-slot="history-gap"]')).toHaveLength(columns);
+    });
   });
 
   it("shows an error with Retry, which runs the query again", async () => {

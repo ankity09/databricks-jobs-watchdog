@@ -1,4 +1,4 @@
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 const FIVE_MINUTES = 5 * 60 * 1000;
 
@@ -27,13 +27,32 @@ export interface RefreshProviderProps {
   children: ReactNode;
 }
 
-/** Holds the refresh key that every analytics query takes as its `refresh` parameter. */
+/**
+ * Holds the refresh key that every analytics query takes as its `refresh` parameter.
+ * Every 5 minutes the key moves on, but not while the tab is hidden: each move runs every
+ * query as the person, and a forgotten tab would keep the SQL warehouse awake all day.
+ * When the tab comes back after more than 5 minutes, the key moves on once.
+ */
 export function RefreshProvider({ children }: RefreshProviderProps) {
   const [refresh, setRefresh] = useState(currentMinute);
-  const bump = useCallback(() => setRefresh(advance), []);
+  const lastBump = useRef(0);
+  const bump = useCallback(() => {
+    lastBump.current = Date.now();
+    setRefresh(advance);
+  }, []);
   useEffect(() => {
-    const timer = window.setInterval(bump, FIVE_MINUTES);
-    return () => window.clearInterval(timer);
+    lastBump.current = Date.now();
+    const timer = window.setInterval(() => {
+      if (!document.hidden) bump();
+    }, FIVE_MINUTES);
+    const onVisibility = () => {
+      if (!document.hidden && Date.now() - lastBump.current >= FIVE_MINUTES) bump();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [bump]);
   const value = useMemo(() => ({ refresh, bump }), [refresh, bump]);
   return <RefreshContext.Provider value={value}>{children}</RefreshContext.Provider>;

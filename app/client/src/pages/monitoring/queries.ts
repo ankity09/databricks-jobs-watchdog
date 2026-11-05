@@ -22,9 +22,12 @@ export function useJobChecks(where: WatchdogLocation, jobName: string | null, ac
   return useQueryRows(query, CheckRow, where, `job_checks:${jobName ?? ""}`);
 }
 
-/** Each job's worst status at every scan in the last `hours` hours (job_history.obo.sql). */
-export function useJobHistory(where: WatchdogLocation, hours: number): QueryRows<HistoryRow> {
-  const params = useMemo(() => ({ ...where.params, hours: sql.int(hours) }), [where.params, hours]);
+/**
+ * Each job's worst status in every fixed window of `bucketMinutes` minutes over the last `hours` hours
+ * (job_history.obo.sql). The number of rows per job depends on the two numbers, not on the scan schedule.
+ */
+export function useJobHistory(where: WatchdogLocation, hours: number, bucketMinutes: number): QueryRows<HistoryRow> {
+  const params = useMemo(() => ({ ...where.params, hours: sql.int(hours), bucket_minutes: sql.int(bucketMinutes) }), [where.params, hours, bucketMinutes]);
   const query = useAnalyticsQuery("job_history", params, { autoStart: where.ready });
-  return useQueryRows(query, HistoryRow, where, `job_history:${hours}`);
+  return useQueryRows(query, HistoryRow, where, `job_history:${hours}:${bucketMinutes}`);
 }

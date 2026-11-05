@@ -124,11 +124,12 @@ describe("parseRows", () => {
 
   it("parses history and freshness rows", () => {
     const history = parseRows(HistoryRow, [
-      { job_name: "orders_ingest", workspace_id: null, job_id: null, scan_id: "101", observed_at: "2026-11-05T09:05:00Z", status: "UNKNOWN" },
-      { job_name: "orders_ingest", workspace_id: "1", job_id: "2", scan_id: "102", observed_at: "2026-11-05T10:05:00Z", status: "NOPE" },
+      { job_name: "orders_ingest", workspace_id: null, job_id: null, observed_at: "2026-11-05T08:00:00.000Z", status: "UNKNOWN", scans: "6" },
+      { job_name: "orders_ingest", workspace_id: "1", job_id: "2", observed_at: "2026-11-05T10:00:00.000Z", status: "NOPE", scans: "3" },
+      { job_name: "orders_ingest", workspace_id: "1", job_id: "2", observed_at: "2026-11-05T10:00:00.000Z", status: "FAILED", scans: "many" },
     ]);
-    expect(history.rows).toHaveLength(1);
-    expect(history.bad).toBe(1);
+    expect(history.rows).toEqual([{ job_name: "orders_ingest", workspace_id: null, job_id: null, observed_at: "2026-11-05T08:00:00.000Z", status: "UNKNOWN", scans: 6 }]);
+    expect(history.bad).toBe(2);
     const freshness = parseRows(FreshnessRow, [
       { source: "SYSTEM_TABLES", last_observed_at: "2026-11-05T10:05:00Z", scan_id: "102" },
       { source: "JOBS_API", last_observed_at: null, scan_id: null },

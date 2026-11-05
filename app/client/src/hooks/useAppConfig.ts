@@ -3,19 +3,27 @@ import type { AppConfig } from "../../../shared/joblist/types";
 import { type ApiError, apiFetch } from "../lib/api";
 import { cachedRequest, useCachedRequest } from "./useCachedRequest";
 
+/** The app config, plus where the scan reads the job list from (null when the scan job does not say). */
+export type WatchdogConfig = AppConfig & { configSource?: "yaml" | "lakebase" | null };
+
 const AppConfigSchema = z.object({
   catalog: z.string(),
   schema: z.string(),
   region: z.string(),
   appName: z.string(),
   lakebaseProject: z.string(),
-}) satisfies z.ZodType<AppConfig>;
+  configSource: z.enum(["yaml", "lakebase"]).nullable().optional(),
+}) satisfies z.ZodType<WatchdogConfig>;
 
 /** GET /api/app-config, fetched once per page. */
-export const appConfigRequest = cachedRequest(() => apiFetch("/api/app-config", AppConfigSchema));
+export const appConfigRequest = cachedRequest(
+  () => apiFetch("/api/app-config", AppConfigSchema),
+  // A config with no catalog is fixed in the scan job, not here: Retry asks again.
+  (config) => config.catalog !== "",
+);
 
 export interface AppConfigState {
-  config: AppConfig | null;
+  config: WatchdogConfig | null;
   loading: boolean;
   error: ApiError | null;
 }

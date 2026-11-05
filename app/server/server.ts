@@ -9,8 +9,9 @@ import { registerScanRoutes } from "./scan/routes";
 await createApp({
   plugins: [
     server({}),
-    // A query's rows go to the browser as one SSE event, capped at 5 MiB by default. The history strip's
-    // 7 days of hourly scans is about 183 bytes per job and scan, over 5 MiB at about 170 jobs, so allow 16 MiB.
+    // A query's rows go to the browser as one SSE event, capped at 5 MiB by default. The history strip asks for
+    // fixed windows (job_history.obo.sql), at most 43 per job and about 190 bytes per row: 8 KB per job, so the
+    // default holds about 600 jobs. Allow 16 MiB for headroom over the 200 jobs this app is sized for.
     analytics({ streamConfig: { maxEventSize: 16 * 1024 * 1024 } }),
     lakebase({ pool: { max: 10 } }),
     jobs({}),

@@ -1,9 +1,12 @@
 import { Button, Skeleton, Tooltip, TooltipContent, TooltipTrigger, useAnalyticsQuery, useSidebar } from "@databricks/appkit-ui/react";
 import { ArrowUpRight, Hourglass, Play, RotateCw } from "lucide-react";
 import { type JSX, useState } from "react";
+import { Link } from "react-router";
+import { useScan } from "../hooks/useScan";
+import { useNoScansAdvice } from "../hooks/useNoScansAdvice";
 import { useNow } from "../hooks/useNow";
 import { useRefreshKey } from "../hooks/useRefreshKey";
-import { type ScanResultTone, type ScanState, scanResultLabel, scanResultTone, useScanNow } from "../hooks/useScanNow";
+import { type ScanResultTone, type ScanState, scanResultLabel, scanResultTone } from "../hooks/useScanNow";
 import { useQueryRows, useWatchdogLocation } from "../hooks/useWatchdogRows";
 import { describeProblem } from "../lib/queryProblem";
 import { FreshnessRow } from "../lib/rows";
@@ -86,6 +89,21 @@ function useAnnouncement(newest: string | null, scanText: string | null): string
   return last.text;
 }
 
+/** Under "No scans yet": when the scan reads the Lakebase job list and it is empty, say to add jobs. It reads the job list, so it mounts only with no scans. */
+function AddJobsHint() {
+  const advice = useNoScansAdvice();
+  if (advice !== "add-jobs") return null;
+  return (
+    <p className="pl-4 text-[11px] leading-4 text-muted-foreground">
+      The job list is empty. Add jobs first on the{" "}
+      <Link to="/jobs" className="rounded-sm font-medium text-foreground underline decoration-border underline-offset-2 outline-none hover:text-primary hover:decoration-primary focus-visible:ring-2 focus-visible:ring-ring">
+        Job list
+      </Link>
+      .
+    </p>
+  );
+}
+
 function LiveDot({ fresh }: { fresh: boolean }) {
   return (
     <span data-slot="live-dot" data-fresh={fresh} className="relative flex size-2 shrink-0" aria-hidden="true">
@@ -117,14 +135,14 @@ function RunLink({ url }: { url: string }) {
  * Collapsed, it is the dot and a play button, each with a tooltip.
  */
 export function ScanStatus(): JSX.Element {
-  const { state: sidebar } = useSidebar();
-  const collapsed = sidebar === "collapsed";
+  const { state: sidebar, isMobile } = useSidebar();
+  const collapsed = sidebar === "collapsed" && !isMobile;
   const { bump } = useRefreshKey();
   const now = useNow();
   const where = useWatchdogLocation();
   const query = useAnalyticsQuery("scan_freshness", where.params, { autoStart: where.ready });
   const freshness = useQueryRows(query, FreshnessRow, where, "scan_freshness");
-  const scan = useScanNow(bump);
+  const scan = useScan();
 
   const loading = freshness.rows === null && freshness.problem === null;
   const failed = freshness.rows === null && freshness.problem !== null;
@@ -241,6 +259,7 @@ export function ScanStatus(): JSX.Element {
             {buttonText}
           </Button>
         </div>
+        {newest === null && !loading && !failed ? <AddJobsHint /> : null}
         {line && scan.state.kind !== "checking" ? (
           <p data-tone={stateTone(scan.state)} className={cn("flex min-w-0 flex-wrap items-center gap-x-1.5 pl-4 text-[11px] leading-4", LINE_TONE[stateTone(scan.state)])}>
             <span className="min-w-0">{line}</span>

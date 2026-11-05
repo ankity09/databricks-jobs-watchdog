@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { z } from "zod";
 import type { AppConfig } from "../../../shared/joblist/types";
+import { appConfigRequest, type WatchdogConfig } from "../hooks/useAppConfig";
 
 /**
  * A fetch mock for the app's routes in client tests: /api/app-config, the
@@ -24,7 +25,7 @@ export interface MockApiOptions {
   queries?: Record<string, QueryAnswer | ((params: Record<string, string>) => QueryAnswer)>;
   /** Other routes. Return undefined to fall through to a 404. */
   routes?: (url: string, init: RequestInit | undefined) => Response | Promise<Response> | undefined;
-  config?: AppConfig;
+  config?: WatchdogConfig;
   /** Answers /api/app-config in place of the config, such as an error. Called on every request. */
   configResponse?: () => Response | undefined;
 }
@@ -62,6 +63,8 @@ function paramsOf(body: BodyInit | null | undefined): Record<string, string> {
 }
 
 export function mockApi(options: MockApiOptions = {}): MockApi {
+  // The app config is fetched once per page and cached; each test mocks its own, so start it over.
+  appConfigRequest.reset();
   const calls: QueryCall[] = [];
   const held = new Map<string, Array<(answer: Exclude<QueryAnswer, "hold">) => void>>();
   vi.stubGlobal(

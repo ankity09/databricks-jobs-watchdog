@@ -20,9 +20,15 @@ export interface CachedRequest<T> {
   /** The shared state (for useSyncExternalStore). */
   getState: () => CachedRequestState<T>;
   subscribe: (listener: () => void) => () => void;
+  /** Forgets the answer and any error, so the next load() asks again. For tests: each test mocks its own answers. */
+  reset(): void;
 }
 
-export function cachedRequest<T>(fetcher: () => Promise<T>): CachedRequest<T> {
+/**
+ * `keep` says whether an answer is final. An answer that is not (such as a config that names no catalog,
+ * which the person fixes elsewhere) is asked for again by the next load(), so Retry can work.
+ */
+export function cachedRequest<T>(fetcher: () => Promise<T>, keep: (value: T) => boolean = () => true): CachedRequest<T> {
   let pending: Promise<T> | null = null;
   // Loading until the first answer: the first caller asks as it mounts.
   let state: CachedRequestState<T> = { value: null, loading: true, error: null };
@@ -33,7 +39,7 @@ export function cachedRequest<T>(fetcher: () => Promise<T>): CachedRequest<T> {
   };
   return {
     load() {
-      if (state.value !== null) return Promise.resolve(state.value);
+      if (state.value !== null && keep(state.value)) return Promise.resolve(state.value);
       if (pending === null) {
         if (state.error !== null) update({ value: null, loading: true, error: null });
         pending = fetcher().then(
@@ -50,6 +56,10 @@ export function cachedRequest<T>(fetcher: () => Promise<T>): CachedRequest<T> {
         );
       }
       return pending;
+    },
+    reset() {
+      pending = null;
+      update({ value: null, loading: true, error: null });
     },
     peek: () => state.value,
     getState: () => state,

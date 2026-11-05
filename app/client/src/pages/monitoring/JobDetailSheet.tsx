@@ -13,6 +13,7 @@ import { type ReactNode, useMemo, useRef } from "react";
 import { Link } from "react-router";
 import { useRefreshKey } from "../../hooks/useRefreshKey";
 import { useWatchdogLocation } from "../../hooks/useWatchdogRows";
+import { copilotLink } from "../../lib/copilot-link";
 import type { CheckRow } from "../../lib/rows";
 import { type Status, worstStatus } from "../../lib/status";
 import { formatUtc, formatUtcAfter, parseTime } from "../../lib/time";
@@ -217,13 +218,7 @@ export function JobDetailSheet({ job, workspaceId, jobId, open, onOpenChange, fo
   const runUrl = mine ? newestRunUrl(mine) : null;
   const newestObserved = mine ? newestScan(mine) : null;
 
-  const copilotHref = useMemo(() => {
-    const params = new URLSearchParams();
-    if (job !== null) params.set("job", job);
-    if (workspaceId !== null) params.set("workspace", workspaceId);
-    if (status !== null) params.set("status", status);
-    return `/copilot?${params.toString()}`;
-  }, [job, workspaceId, status]);
+  const copilotHref = useMemo(() => copilotLink({ job: job ?? "", workspace: workspaceId, status }), [job, workspaceId, status]);
 
   const workspaceName = facts?.workspace_name ?? null;
   // Skeletons only while the checks load: after an error, or with no checks, the facts say "Not set".

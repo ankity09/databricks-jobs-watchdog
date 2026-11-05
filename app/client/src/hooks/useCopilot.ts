@@ -32,6 +32,8 @@ export interface CopilotMessage {
   /** Follow-up questions Genie suggests. */
   suggestions: string[];
   error: string | null;
+  /** Genie says the rows of this answer's queries have expired: fetching them again cannot work, only asking again. */
+  rowsExpired: boolean;
 }
 
 export interface UseCopilotOptions {
@@ -187,6 +189,7 @@ function answerFrom(message: GenieMessage, status: string | null): CopilotMessag
     queries,
     suggestions: attachments.flatMap((a) => a.suggestedQuestions ?? []),
     error: failureOf(message),
+    rowsExpired: message.status === "QUERY_RESULT_EXPIRED",
   };
 }
 
@@ -197,7 +200,7 @@ function lastWhere<T>(items: readonly T[], match: (item: T) => boolean): T | und
 }
 
 function userMessage(id: string, text: string): CopilotMessage {
-  return { id, role: "user", text, status: null, queries: [], suggestions: [], error: null };
+  return { id, role: "user", text, status: null, queries: [], suggestions: [], error: null, rowsExpired: false };
 }
 
 interface ChatState {

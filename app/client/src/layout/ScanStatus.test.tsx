@@ -2,9 +2,11 @@
 import { SidebarProvider, TooltipProvider } from "@databricks/appkit-ui/react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { ScanNowProvider } from "../hooks/ScanNowProvider";
 import { RefreshProvider, useRefreshKey } from "../hooks/useRefreshKey";
-import { installRadixPolyfills, json, type MockApiOptions, mockApi, setClock } from "../test/mockApi";
+import { installRadixPolyfills, json, type MockApiOptions, mockApi, setClock, TEST_CONFIG } from "../test/mockApi";
 import { ScanStatus } from "./ScanStatus";
 
 /** A button that calls bump(), as any page's Refresh does. */
@@ -19,14 +21,18 @@ function BumpButton() {
 
 function renderScanStatus({ open = true }: { open?: boolean } = {}) {
   render(
-    <RefreshProvider>
-      <TooltipProvider delayDuration={0}>
-        <SidebarProvider defaultOpen={open}>
-          <ScanStatus />
-          <BumpButton />
-        </SidebarProvider>
-      </TooltipProvider>
-    </RefreshProvider>,
+    <MemoryRouter>
+      <RefreshProvider>
+        <TooltipProvider delayDuration={0}>
+          <SidebarProvider defaultOpen={open}>
+            <ScanNowProvider>
+              <ScanStatus />
+              <BumpButton />
+            </ScanNowProvider>
+          </SidebarProvider>
+        </TooltipProvider>
+      </RefreshProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -138,6 +144,27 @@ describe("ScanStatus", () => {
     mockApi({ queries: { scan_freshness: [] } });
     renderScanStatus();
     expect(await screen.findByText("No scans yet")).toBeInTheDocument();
+  });
+
+  it("points to the Job list, not Scan now, when the scan reads Lakebase and the list is empty", async () => {
+    setClock("2026-11-05T11:31:00Z");
+    mockApi({
+      queries: { scan_freshness: [] },
+      config: { ...TEST_CONFIG, configSource: "lakebase" },
+      routes: (url) => (url === "/api/job-list" ? json({ version: null, savedAt: null, savedBy: null, document: { jobs: [] } }) : undefined),
+    });
+    renderScanStatus();
+    expect(await screen.findByText("No scans yet")).toBeInTheDocument();
+    expect(await screen.findByText(/add jobs first/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Job list" })).toHaveAttribute("href", "/jobs");
+  });
+
+  it("does not point to the Job list when the scan reads the YAML file", async () => {
+    setClock("2026-11-05T11:32:00Z");
+    mockApi({ queries: { scan_freshness: [] }, config: { ...TEST_CONFIG, configSource: "yaml" } });
+    renderScanStatus();
+    expect(await screen.findByText("No scans yet")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Job list" })).toBeNull();
   });
 
   it("shows a green dot for a scan under 2 hours old, and an amber one after", async () => {
