@@ -54,6 +54,18 @@ if [[ "$1 $2" == "api get" ]]; then
   echo '{"statement_id":"s1","status":{"state":"SUCCEEDED"}}'
   exit 0
 fi
+# FAKE_APP_SP_<n> answers the n-th apps get: a client ID, or "missing"; unset, the answer is not JSON.
+if [[ "$1 $2" == "apps get" ]]; then
+  n=$(grep -c '^apps get' "$FAKE_LOG")
+  sp_var="FAKE_APP_SP_$n"
+  if [[ "${!sp_var:-}" == "missing" ]]; then echo "Error: App with name $3 does not exist or is deleted." >&2; exit 1; fi
+  if [[ -n "${!sp_var:-}" ]]; then printf '{"name":"%s","service_principal_client_id":"%s"}\n' "$3" "${!sp_var}"; exit 0; fi
+fi
+# FAKE_PROJECT=missing: the Lakebase project does not exist yet.
+if [[ "$1 $2" == "postgres get-project" && "${FAKE_PROJECT:-}" == "missing" ]]; then
+  echo "Error: Project with name '$3' not found" >&2
+  exit 1
+fi
 if [[ -n "${FAKE_FAIL_HOST:-}" && "${DATABRICKS_HOST:-}" == "$FAKE_FAIL_HOST" && "$1" == "bundle" ]]; then
   echo "Error: boom with $DATABRICKS_CLIENT_SECRET and ${FAKE_TOKEN}" >&2
   exit 1
@@ -67,6 +79,7 @@ exit 0
 def sandbox(tmp_path):
     for folder in ("scripts", "jobs_watchdog", "sql"):
         shutil.copytree(repo_root() / folder, tmp_path / folder, ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy2(repo_root() / "databricks.yml", tmp_path / "databricks.yml")  # the bundle's variable defaults
     regions = tmp_path / "regions"
     regions.mkdir()
     for name, region in (("lower", "us-east-2"), ("prod-eu", "eu-west-1"), ("prod-us", "us-east-1")):
@@ -109,13 +122,17 @@ def test_each_region_runs_with_its_own_variables(sandbox):
     assert "catalog=main" in calls[1]
 
 
+PROBES = ("apps get", "postgres get-project")
+
+
 def test_a_full_deploy_creates_tables_then_deploys_then_runs_the_app(sandbox):
     result, calls = run(sandbox, str(sandbox / "regions" / "accelerator.lower.yaml"))
     assert result.returncode == 0, result.stdout + result.stderr
-    kinds = [" ".join(call.split(" ")[:2]) for call in calls]
+    kinds = [kind for kind in (" ".join(call.split(" ")[:2]) for call in calls) if kind not in PROBES]
     assert kinds[0] == "bundle validate"
-    assert kinds[-2:] == ["bundle deploy", "bundle run"]
-    middle = kinds[1:-2]
+    assert kinds[-3:] == ["bundle deploy", "bundle run", "bundle run"]
+    assert bundle_calls(calls)[-1] == "bundle run watchdog_app_access -t production"
+    middle = kinds[1:-3]
     assert middle and set(middle) == {"api post"}
     first_deploy = kinds.index("bundle deploy")
     assert all(kind == "api post" for kind in kinds[1:first_deploy])
@@ -136,11 +153,16 @@ def test_skip_ensure_tables_leaves_out_the_api_calls(sandbox):
     assert result.returncode == 0, result.stdout + result.stderr
     assert not any(call.startswith("api ") for call in calls)
     assert bundle_calls(calls) == ["bundle validate --strict -t production", "bundle deploy -t production",
-                                   "bundle run watchdog_app -t production"]
+                                   "bundle run watchdog_app -t production",
+                                   "bundle run watchdog_app_access -t production"]
 
 
-def test_no_app_run_stops_after_the_deploy(sandbox):
+def test_no_app_run_leaves_out_the_app_run_and_skip_app_access_the_access_job(sandbox):
     result, calls = run(sandbox, str(sandbox / "regions" / "accelerator.lower.yaml"), "--no-app-run")
+    assert result.returncode == 0
+    assert bundle_calls(calls)[-2:] == ["bundle deploy -t production", "bundle run watchdog_app_access -t production"]
+    result, calls = run(sandbox, str(sandbox / "regions" / "accelerator.lower.yaml"), "--no-app-run",
+                        "--skip-app-access")
     assert result.returncode == 0
     assert bundle_calls(calls)[-1] == "bundle deploy -t production"
 
@@ -291,3 +313,49 @@ def test_the_docs_do_not_say_the_targets_are_both_development_mode_or_that_ci_se
     remove = docs.split("## Remove one region", 1)[1]
     assert "same identity" in remove
     assert "from a CI variable" in docs  # CI takes the host from the region file
+
+
+# the access job: only when the deploy gave the app a new service principal and the Lakebase project was kept
+
+
+def probes(calls):
+    return [call.split(" | ")[0] for call in calls if call.startswith(PROBES)]
+
+
+def test_a_deploy_that_keeps_the_app_s_service_principal_does_not_run_the_access_job(sandbox):
+    sp = "11111111-2222-3333-4444-555555555555"
+    result, calls = run(sandbox, str(sandbox / "regions" / "accelerator.lower.yaml"), FAKE_APP_SP_1=sp, FAKE_APP_SP_2=sp)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "bundle run watchdog_app_access -t production" not in bundle_calls(calls)
+    assert probes(calls) == ["postgres get-project projects/jobs-watchdog -o json", "apps get watchdog-app -o json",
+                             "apps get watchdog-app -o json"]
+    assert "app access not needed: the app kept its service principal" in result.stdout
+    assert any([cell.strip() for cell in line.split("|")][1:] == ["app access", "not needed"] for line in result.stdout.splitlines())
+
+
+def test_a_first_deploy_with_a_new_lakebase_project_does_not_run_the_access_job(sandbox):
+    result, calls = run(sandbox, str(sandbox / "regions" / "accelerator.lower.yaml"), FAKE_PROJECT="missing",
+                        FAKE_APP_SP_1="missing", FAKE_APP_SP_2="11111111-2222-3333-4444-555555555555")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "bundle run watchdog_app_access -t production" not in bundle_calls(calls)
+    assert "the Lakebase project is new" in result.stdout
+
+
+def test_a_new_service_principal_with_a_kept_project_runs_the_access_job(sandbox):
+    # after a plain teardown, or a new app.name: the kept job list belongs to someone else
+    for before in ("missing", "99999999-2222-3333-4444-555555555555"):
+        result, calls = run(sandbox, str(sandbox / "regions" / "accelerator.lower.yaml"),
+                            FAKE_APP_SP_1=before, FAKE_APP_SP_2="11111111-2222-3333-4444-555555555555")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert bundle_calls(calls)[-1] == "bundle run watchdog_app_access -t production"
+
+
+def test_the_access_check_uses_the_region_s_app_and_project_names_and_its_profile(sandbox):
+    region = sandbox / "regions" / "accelerator.lower.yaml"
+    region.write_text(region.read_text().replace("deploy:", "app:\n  name: watchdog-eu\n  lakebase_project_id: watchdog-eu-list\ndeploy:")
+                      .replace('profile: ""', "profile: lower"))
+    sp = "11111111-2222-3333-4444-555555555555"
+    result, calls = run(sandbox, str(region), FAKE_APP_SP_1=sp, FAKE_APP_SP_2=sp)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert probes(calls) == ["postgres get-project projects/watchdog-eu-list -o json --profile lower",
+                             "apps get watchdog-eu -o json --profile lower", "apps get watchdog-eu -o json --profile lower"]

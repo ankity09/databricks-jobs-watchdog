@@ -1,11 +1,14 @@
 /**
  * Reading and writing the job list as a monitored-jobs YAML file. The reader
- * follows PyYAML (YAML 1.1: `yes` is true; merge keys work) so the file means the
- * same to the Python loader. Job and workspace IDs keep every digit.
+ * follows PyYAML's safe loader (its YAML 1.1 scalar types: `yes` is true and `y`
+ * is text; merge keys work; an unknown tag is refused) so the file means the same
+ * to the Python loader. One deliberate difference: a duplicate key is refused,
+ * where PyYAML keeps the last value without a word. Job and workspace IDs keep
+ * every digit.
  */
 import { parseDocument, stringify } from "yaml";
-import { normalizeDocument, validateDocument } from "../../shared/joblist/rules";
-import { pythonYamlOptions } from "../../shared/joblist/yamlOptions";
+import { normalizeDocument, toJobListDocument, validateDocument } from "../../shared/joblist/rules";
+import { pythonYamlOptions, pythonYamlWriteTags } from "../../shared/joblist/yamlOptions";
 import type { JobListDocument, RuleIssue } from "../../shared/joblist/types";
 
 export class YamlError extends Error {
@@ -22,14 +25,18 @@ export interface ReadResult {
   issues: RuleIssue[];
 }
 
+/** A YAML mapping: a plain object, not an array or a marker such as a timestamp. */
 function isMap(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
 }
 
 /** Parses the text, checks the rules on the raw values, then normalizes for storage. Throws YamlError on bad YAML. */
 export function readJobListYaml(text: string, source = "the YAML file"): ReadResult {
   const parsed = parseDocument(text, { ...pythonYamlOptions, uniqueKeys: true });
-  const first = parsed.errors[0];
+  // An unknown tag is only a warning to the yaml library; PyYAML's safe loader refuses the file.
+  const first = parsed.errors[0] ?? parsed.warnings.find((warning) => warning.code === "TAG_RESOLVE_FAILED");
   if (first) throw new YamlError(first.message);
   let raw: unknown;
   try {
@@ -42,15 +49,7 @@ export function readJobListYaml(text: string, source = "the YAML file"): ReadRes
   }
   if (!isMap(raw)) throw new YamlError(`${source} must contain a YAML mapping at the top level`);
   const issues = validateDocument(raw, source);
-  const normalized = normalizeDocument(raw);
-  const { defaults, workspaces, jobs, dependencies } = normalized;
-  const document: JobListDocument = {
-    ...(isMap(defaults) && Object.keys(defaults).length > 0 ? { defaults: defaults as JobListDocument["defaults"] } : {}),
-    ...(Array.isArray(workspaces) ? { workspaces: workspaces as JobListDocument["workspaces"] } : {}),
-    jobs: Array.isArray(jobs) ? (jobs as JobListDocument["jobs"]) : [],
-    ...(Array.isArray(dependencies) ? { dependencies: dependencies as JobListDocument["dependencies"] } : {}),
-  };
-  return { document, issues };
+  return { document: toJobListDocument(normalizeDocument(raw)), issues };
 }
 
 /** The stored document for a YAML text. Throws YamlError on bad YAML; rule problems are not checked here. */
@@ -95,5 +94,5 @@ export function toJobListYaml(doc: JobListDocument, meta: ExportMeta): string {
   body.jobs = doc.jobs.map(orderedJob);
   if (doc.dependencies && doc.dependencies.length > 0) body.dependencies = doc.dependencies.map((d) => ordered(d, DEPENDENCY_KEY_ORDER));
   const header = `# Exported from the Watchdog app: version ${meta.version}, saved ${meta.savedAt} by ${meta.savedBy}\n`;
-  return header + stringify(body, { version: "1.1", lineWidth: 0 });
+  return header + stringify(body, { version: "1.1", lineWidth: 0, customTags: pythonYamlWriteTags });
 }

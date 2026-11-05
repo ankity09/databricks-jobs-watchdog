@@ -1,0 +1,6 @@
+# Python reads {,2} as "zero to two times". Java refuses a repeat with no minimum, so
+# the system-table scan could not run this pattern. Write {0,2}.
+jobs:
+  - job_name: orders_ingest
+    max_gap_minutes: 60
+    job_name_exclude_regex: '_copy\d{,2}$'

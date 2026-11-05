@@ -1,6 +1,6 @@
 # Data model
 
-The Watchdog keeps five Delta tables and one view in one schema, `<catalog>.<schema>` (the schema defaults to `watchdog`). Notebook 01 creates them from the files in `sql/setup` and `sql/views`. Every column has a comment, so `DESCRIBE TABLE <catalog>.<schema>.findings` shows the same descriptions as this page.
+The Watchdog keeps six Delta tables and one view in one schema, `<catalog>.<schema>` (the schema defaults to `watchdog`). Notebook 01 creates them from the files in `sql/setup` and `sql/views`. Every column has a comment, so `DESCRIBE TABLE <catalog>.<schema>.findings` shows the same descriptions as this page.
 
 | Object | What it holds | How it changes |
 |---|---|---|
@@ -9,6 +9,7 @@ The Watchdog keeps five Delta tables and one view in one schema, `<catalog>.<sch
 | `monitored_workspaces` | an environment label for each workspace | replaced each time notebook 02 loads your YAML file |
 | `monitored_job_environments` | the settings a job changes in one environment, such as a lower severity | replaced each time notebook 02 loads your YAML file |
 | `findings` | what every scan found, from every source | rows are added, never updated or deleted |
+| `config_loads` | one row per load of the job list: where from, which version, how many jobs, and whether it worked | a row is added by every run of notebook 02 |
 | `findings_latest` (view) | the newest scan from each source | computed from `findings` each time it is read |
 
 The scans read the config tables, not the YAML file. The scheduled job loads the file again on every run, so an edit counts from the next run. When you run a scan by hand, run notebook 02 first.
@@ -52,7 +53,15 @@ About `job_name_regex` and `job_name_exclude_regex`:
 - Each can match anywhere in the name unless you anchor it with `^` and `$`. That is on purpose: a bundle deployed in development mode adds a `[dev <user>]` prefix, and an unanchored regex still matches.
 - `job_name_regex` can match several jobs, in one workspace or in many. Each match gets its own findings rows, with its workspace and job ID, so one entry covers a job in every workspace where it runs without listing job IDs. Excluded names get none.
 - When two or more jobs that a job's pattern matches in one workspace have exactly the same name, the system table scan writes a `duplicate_name` WARNING for that workspace. Different names (variants, copies in other workspaces) are normal and not flagged.
-- The system table scan matches with Spark's `regexp_like`; the Jobs API scan matches with Python's `re.search`. Simple patterns (letters, `^`, `$`, `|`, groups, character classes) behave the same in both. Avoid engine-specific syntax in either field.
+- The system table scan matches with Spark's `regexp_like`, which compiles each pattern as Java regex; the Jobs API scan matches with Python's `re.search`. A pattern one of them refuses would stop that scan for every job, so the loader and the app refuse it first: Python's `re` must compile it (the app checks Python 3.10 to 3.14, the loader the Python it runs on), and so must Java. Java refuses some patterns Python accepts:
+  - named groups `(?P<name>...)` (leave the group unnamed), conditionals `(?(1)...)`, `(?#...)` comments and the `a` flag;
+  - a `{` that is not a `{n}`, `{n,}` or `{n,m}` repeat, such as `{,2}` (write `{0,2}`) or a `{` meant as text (write `\{`), and a count above 2147483647;
+  - `\0` with no octal digit after it, `\U` escapes and `\N{...}` names (write the character itself);
+  - in a set: `\b`, octal escapes such as `\1`, an unescaped `[`, and `&&` with nothing on either side;
+  - in a verbose `(?x)` pattern, a space or `#` inside a set (Java skips them there; escape them), and a `#` comment with a line break other than `\n` in it;
+  - inside a look-behind, a back reference or a repeated group with a choice in it, such as `(?<=(?:dev|prd){1}_)`.
+
+  The error names the construct, for example `job orders_ingest: job_name_regex '^orders_(?P<env>dev|prod)$' uses a (?P<name>...) group, which the system-table scan can't run`. Simple patterns (letters, `^`, `$`, `|`, groups, character classes, `{n,m}`) compile and match the same in both. A few compile in both and match differently: `\101` is `A` in Python and a back reference in Java, and `\b{g}` is a word boundary and the text `{g}` in Python and a grapheme boundary in Java.
 - The example config sets `job_name_exclude_regex: "_test(_|$)"` in its `defaults` section, so every job skips test copies. It uses `_test(_|$)` rather than a bare `test`, because a bare `test` would also match names such as `daily_revenue_report_latest` and `contest`.
 
 About `job_ids`:
@@ -138,6 +147,23 @@ One row per dependency. A failure lists every job downstream of the failed job, 
 | `loaded_at` | TIMESTAMP, required | When notebook 02 loaded the row. |
 
 The scans fill `affected_jobs` from `job` and `child_job` rows, and `parent_job` from `child_job` rows. `service` rows are used by the custom check template (notebook 09), which lists the jobs that depend on a service it found down. Built-in service probes come in Phase 2. Notebook 02 shows what a failure of each job affects, and prints any loops between jobs.
+
+## config_loads
+
+Notebook 02 adds one row every time it loads the job list, whether the load works or not, so the Watchdog app can show which version the scans use and whether the last load failed. A failed load leaves the four config tables as they were, so the scans go on with the last list that loaded.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `loaded_at` | TIMESTAMP | when the load ran, in UTC |
+| `scan_id` | STRING | the scan the load belongs to (the job's run ID) |
+| `source` | STRING | `yaml` (the monitored-jobs file) or `lakebase` (the list saved in the Watchdog app) |
+| `source_ref` | STRING | the file's path, or the Lakebase database's path |
+| `version` | BIGINT | the app's job list version; empty for YAML |
+| `job_count` | INT | how many jobs the list holds; empty when the load failed |
+| `status` | STRING | `OK` or `FAILED` |
+| `error` | STRING | why the load failed, for example a rule the list breaks or a package that could not be installed; empty when it worked |
+
+A serverless run that retries its task writes one row per attempt, with the same `scan_id`; the newest row is the one that counts.
 
 ## findings
 

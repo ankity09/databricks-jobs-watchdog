@@ -33,8 +33,26 @@ describe("parseJobListYaml", () => {
   });
   it("throws YamlError for a non-mapping top level and for duplicate keys", () => {
     expect(() => parseJobListYaml("- a\n- b\n")).toThrow(YamlError);
+    expect(() => parseJobListYaml("2024-11-05\n")).toThrow(new YamlError("the YAML file must contain a YAML mapping at the top level"));
     expect(() => parseJobListYaml("jobs: []\njobs: []\n")).toThrow(YamlError);
     expect(() => parseJobListYaml("jobs: [\n")).toThrow(YamlError);
+  });
+});
+
+describe("reading the file the way PyYAML does", () => {
+  it("y and n are text, not booleans", () => {
+    const doc = parseJobListYaml("jobs:\n  - job_name: y\n    max_gap_minutes: 5\n    notes: n\n");
+    expect(doc.jobs[0]).toEqual({ job_name: "y", max_gap_minutes: 5, notes: "n" });
+  });
+  it("an unknown tag stops the import, as PyYAML's safe loader has no constructor for it", () => {
+    expect(() => readJobListYaml("jobs: !!python/tuple [1, 2]\n")).toThrow(YamlError);
+    expect(() => readJobListYaml("jobs:\n  - job_name: !custom a\n")).toThrow(YamlError);
+  });
+  it("a plain = stops the import, as PyYAML reads it as a value tag it cannot build", () => {
+    expect(() => readJobListYaml("jobs:\n  - job_name: a\n    notes: =\n")).toThrow(YamlError);
+  });
+  it("an impossible date stops the import, as Python's ValueError stops the loader", () => {
+    expect(() => readJobListYaml("jobs:\n  - job_name: a\n    notes: 2023-02-29\n")).toThrow(YamlError);
   });
 });
 
@@ -55,6 +73,12 @@ describe("round trip", () => {
       expect(parseJobListYaml(toJobListYaml(doc, META))).toEqual(doc);
     });
   }
+  it("quotes text that PyYAML would read as something else, = among it", () => {
+    const doc = { jobs: [{ job_name: "a", max_gap_minutes: 5, notes: "=" }, { job_name: "20241105", max_gap_minutes: 5, notes: "1e3" }] };
+    const text = toJobListYaml(doc, META);
+    expect(parseJobListYaml(text)).toEqual(doc);
+    expect(text).not.toMatch(/notes: =\n/);
+  });
   it("keeps YAML 1.1 words and awkward strings as strings", () => {
     const doc = {
       jobs: [
@@ -66,6 +90,26 @@ describe("round trip", () => {
     const text = toJobListYaml(doc, META);
     expect(parseJobListYaml(text)).toEqual(doc);
     expect(text).toMatch(/notes: "?'?on/);
+  });
+});
+
+describe("the export, read back by PyYAML", () => {
+  // Every scalar of tests/fixtures/yaml-scalars.json, and text PyYAML reads as a merge key or a timestamp
+  // although the yaml library's own 1.1 tags would leave it plain. tests/test_yaml_export.py reads the
+  // pinned export with PyYAML and checks each note and label comes back as the same text.
+  const scalars = (JSON.parse(readFileSync(join(__dirname, "../../../tests/fixtures/yaml-scalars.json"), "utf8")) as {
+    scalars: { text: string }[];
+  }).scalars.map((row) => row.text);
+  const texts = [...scalars, "<<", "2024-11-05 10:30:00 +25:00", "2024-11-05 10:30:00 -99", "2024-11-05T10:30:00+30:00"];
+  const labels = texts.filter((text) => /^[A-Za-z0-9_-]+$/.test(text));
+  it("is pinned with the texts it holds", async () => {
+    const doc = {
+      jobs: texts.map((notes, i) => ({ job_name: `job_${i}`, max_gap_minutes: 5, notes })),
+      dependencies: [],
+    };
+    const withLabels = { ...doc, jobs: [...doc.jobs, { job_name: "labels", max_gap_minutes: 5, environments: Object.fromEntries(labels.map((l) => [l, { enabled: false }])) }] };
+    const pinned = { texts, labels, yaml: toJobListYaml(withLabels, META) };
+    await expect(`${JSON.stringify(pinned, null, 1)}\n`).toMatchFileSnapshot(join(CORPUS, "../yaml-export.json"));
   });
 });
 

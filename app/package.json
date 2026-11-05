@@ -26,7 +26,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "Unlicensed",
+  "license": "Apache-2.0",
   "description": "Watchdog app",
   "dependencies": {
     "@dagrejs/dagre": "3.1.3",

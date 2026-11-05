@@ -4,9 +4,18 @@
  * Python's message text, so the first issue is the error Python raises. Unlike
  * Python, all issues are collected, so the form can show every problem.
  *
+ * Patterns are checked with a port of Python's own re parser (pyregex.ts). The
+ * scan's serverless Python may be any version from 3.10 to 3.14, so a pattern
+ * passes only when all of them compile it, with Python's message.
+ *
+ * Then, like the loader, it checks that Spark's regexp_like, which the system-table
+ * scan matches with, can run the pattern: that compiles it as Java regex, which refuses
+ * some patterns Python accepts, such as (?P<name>...) (javaregex.ts).
+ *
  * Differences that cannot be avoided in JavaScript:
- * - Regexes are checked with `new RegExp`, so a Python-only pattern such as
- *   `(?P<x>...)` is reported as not compiling.
+ * - A \N{...} character name is refused with the loader's message, as the system-table scan may not know
+ *   the name. With no Unicode name database, the app cannot tell a name Python does not know: it gets
+ *   the same message, where the loader says "undefined character name".
  * - A float with no fraction (60.0) is told apart from 60 only if the YAML was
  *   parsed with pythonYamlOptions, which marks it with PyFloat; the rules reject the marker.
  * - Deliberate divergence: a count setting (max_gap_minutes and the like) above 9007199254740991
@@ -14,11 +23,17 @@
  *   IDs (job_ids, workspace_id) are strings of any length.
  * - A section that is not a list gets the issue "X must be a list". This wording differs from the Python
  *   loader on purpose: Python fails with an unrelated error there, and the form needs a message that names the section.
- * The rules accept the raw parse (integers as bigint, floats marked), so messages
- * print values the way Python does; normalizeDocument is for storage afterwards.
+ * - The YAML reader refuses a file with a duplicate key (PyYAML keeps the last one), so a
+ *   mistake is shown rather than dropped silently.
+ * - Environment labels that YAML reads as true, false or null become "true", "false" and ""
+ *   in JavaScript, where Python's str() gives "True", "False" and "None".
+ * The rules accept the raw parse (integers as bigint, floats and timestamps marked), so
+ * messages print values the way Python does; normalizeDocument is for storage afterwards.
  */
-import { PyFloat, pyRepr, pySorted, pyStr } from "./pyrepr";
-import type { RuleIssue } from "./types";
+import { javaRegexClause, javaRegexProblem } from "./javaregex";
+import { pythonRegexError } from "./pyregex";
+import { PyFloat, pyRepr, pySorted, pyStr, pyStrip } from "./pyrepr";
+import type { Change, JobListDocument, RuleIssue } from "./types";
 
 type Obj = Record<string, unknown>;
 
@@ -37,8 +52,11 @@ const OVERRIDE_KEYS = [
   "min_attempt_minutes", "job_ids",
 ];
 
+/** A YAML mapping or a JSON object: a plain object, never an array or a marker such as PyFloat. */
 function isMap(value: unknown): value is Obj {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
 }
 
 function has(obj: Obj, key: string): boolean {
@@ -52,6 +70,7 @@ function get(obj: Obj, key: string): unknown {
 /** Python truthiness for the values a YAML document holds. */
 function truthy(value: unknown): boolean {
   if (value === null || value === undefined || value === false || value === 0 || value === 0n || value === "") return false;
+  if (value instanceof PyFloat) return value.value !== 0;
   if (Array.isArray(value)) return value.length > 0;
   if (isMap(value)) return Object.keys(value).length > 0;
   return true;
@@ -85,10 +104,103 @@ function convert(value: unknown, asId: boolean): unknown {
   return value;
 }
 
-/** Job and workspace IDs become strings; other big integers become numbers when safe, else strings. */
+/*
+ * Text fields, stored the way the Python loader reads them. The loader reads
+ * names, owners and notes with str(), so YAML that gives a number, a boolean
+ * or a date there is valid, and the app stores the text Python reads: the job
+ * name 20241105 is "20241105" and notes: true is "True". Each rule keeps
+ * config.py's own reading, its `or ""` included. A value the loader refuses
+ * is left alone: the rules report it, and nothing invalid is stored. These
+ * run on the raw parse, so floats and timestamps print as Python prints them.
+ */
+type TextRule = (value: unknown) => unknown;
+
+/** str(value or ""), for owner and notes, and a link's names. None stays None: it means the same. */
+const orEmpty: TextRule = (value) => value === null || value === undefined || typeof value === "string" ? value : truthy(value) ? pyStr(value) : "";
+/** str(value) unless it is None or "", for job_name_exclude_regex and workspace_name. */
+const unlessEmpty: TextRule = (value) => value === null || value === undefined || typeof value === "string" ? value : pyStr(value);
+/** str(value), for job_name and a workspace's environment, which must not be empty. */
+const whenSet: TextRule = (value) => typeof value === "string" || !truthy(value) ? value : pyStr(value);
+/** job_name_regex: any empty value means "^<name>$", so it is stored as "". Any other non-text value is refused. */
+const pattern: TextRule = (value) => typeof value === "string" || value === null || value === undefined || truthy(value) ? value : "";
+
+const JOB_TEXT: Record<string, TextRule> = {
+  job_name: whenSet, job_name_regex: pattern, job_name_exclude_regex: unlessEmpty, owner: orEmpty, notes: orEmpty,
+};
+const DEFAULTS_TEXT: Record<string, TextRule> = { job_name_exclude_regex: unlessEmpty, owner: orEmpty, notes: orEmpty };
+const OVERRIDE_TEXT: Record<string, TextRule> = { owner: orEmpty };
+const WORKSPACE_TEXT: Record<string, TextRule> = { workspace_name: unlessEmpty, environment: whenSet, notes: orEmpty };
+const DEPENDENCY_TEXT: Record<string, TextRule> = { job_name: orEmpty, depends_on: orEmpty, notes: orEmpty };
+
+function withText(entry: unknown, rules: Record<string, TextRule>): unknown {
+  if (!isMap(entry)) return entry;
+  const out: Obj = { ...entry };
+  for (const [key, rule] of Object.entries(rules)) if (has(out, key)) out[key] = rule(out[key]);
+  return out;
+}
+
+/** Python reads each job ID as str(value).strip() and keeps that text. */
+function jobIdsText(entry: unknown): unknown {
+  if (!isMap(entry) || !Array.isArray(entry.job_ids)) return entry;
+  return { ...entry, job_ids: entry.job_ids.map((id: unknown) => (typeof id === "string" ? pyStrip(id) : id)) };
+}
+
+function jobText(entry: unknown): unknown {
+  const out = jobIdsText(withText(entry, JOB_TEXT));
+  if (!isMap(out) || !isMap(out.environments)) return out;
+  const environments = Object.fromEntries(
+    Object.entries(out.environments).map(([label, values]) => [label, jobIdsText(withText(values, OVERRIDE_TEXT))]),
+  );
+  return { ...out, environments };
+}
+
+const ENTRY_TEXT: Record<string, (entry: unknown) => unknown> = {
+  job: jobText,
+  defaults: (entry) => withText(entry, DEFAULTS_TEXT),
+  workspace: (entry) => withText(entry, WORKSPACE_TEXT),
+  dependency: (entry) => withText(entry, DEPENDENCY_TEXT),
+};
+
+function sectionText(value: unknown, entry: (item: unknown) => unknown): unknown {
+  return Array.isArray(value) ? value.map(entry) : value;
+}
+
+/**
+ * The job list as it is stored: job and workspace IDs become strings, other big
+ * integers become numbers when safe, else strings, and text fields hold the text
+ * the Python loader reads. Running it twice changes nothing more.
+ */
 export function normalizeDocument(raw: Record<string, unknown>): Record<string, unknown> {
-  const out = convert(raw, false);
+  const text: Obj = { ...raw };
+  if (has(text, "defaults")) text.defaults = ENTRY_TEXT.defaults(text.defaults);
+  if (has(text, "workspaces")) text.workspaces = sectionText(text.workspaces, ENTRY_TEXT.workspace);
+  if (has(text, "jobs")) text.jobs = sectionText(text.jobs, ENTRY_TEXT.job);
+  if (has(text, "dependencies")) text.dependencies = sectionText(text.dependencies, ENTRY_TEXT.dependency);
+  const out = convert(text, false);
   return isMap(out) ? out : {};
+}
+
+/** The four sections of a normalized document, typed. The rules check the contents when the list is saved. */
+export function toJobListDocument(normalized: Record<string, unknown>): JobListDocument {
+  const { defaults, workspaces, jobs, dependencies } = normalized;
+  return {
+    ...(isMap(defaults) && Object.keys(defaults).length > 0 ? { defaults: defaults as JobListDocument["defaults"] } : {}),
+    ...(Array.isArray(workspaces) ? { workspaces: workspaces as JobListDocument["workspaces"] } : {}),
+    jobs: Array.isArray(jobs) ? (jobs as JobListDocument["jobs"]) : [],
+    ...(Array.isArray(dependencies) ? { dependencies: dependencies as JobListDocument["dependencies"] } : {}),
+  };
+}
+
+/** A stored job list in its stored form. Versions an older app saved may hold numbers or booleans in text fields. */
+export function storedDocument(doc: JobListDocument): JobListDocument {
+  return toJobListDocument(normalizeDocument({ ...doc }));
+}
+
+/** A change with its entry in the stored form, so a job named 2024 in the request is the job "2024". */
+export function storedChange(change: Change): Change {
+  if (change.kind === "delete") return change;
+  const value = convert(ENTRY_TEXT[change.target.type](change.value), false);
+  return { ...change, value: value as typeof change.value };
 }
 
 // ---------------------------------------------------------------------------
@@ -116,13 +228,18 @@ function optionalInt(c: Collector, path: string, raw: unknown, jobName: string, 
   }
 }
 
+/**
+ * re.compile(raw), as the loader runs it, with Python's own message when it fails; then the loader's
+ * check that the system-table scan's Java regex can run the pattern, with the loader's message.
+ */
 function compiled(c: Collector, path: string, raw: unknown, name: string, field: string): void {
-  try {
-    if (typeof raw !== "string") throw new Error("first argument must be string or compiled pattern");
-    new RegExp(raw);
-  } catch (err) {
-    c.add(path, `job ${name}: ${field} does not compile: ${err instanceof Error ? err.message : String(err)}`);
+  const error = typeof raw === "string" ? pythonRegexError(raw) : "first argument must be string or compiled pattern";
+  if (error !== null) {
+    c.add(path, `job ${name}: ${field} does not compile: ${error}`);
+    return;
   }
+  const construct = typeof raw === "string" ? javaRegexProblem(raw) : null;
+  if (construct !== null) c.add(path, `job ${name}: ${field} ${pyRepr(raw)} ${javaRegexClause(construct)}`);
 }
 
 function checkJobIds(c: Collector, path: string, raw: unknown, where: string): void {
@@ -136,7 +253,7 @@ function checkJobIds(c: Collector, path: string, raw: unknown, where: string): v
       c.add(path, `${where}: job_ids must be whole numbers, got ${pyRepr(value)}`);
       return;
     }
-    const text = String(value).trim();
+    const text = pyStrip(String(value));
     if (!isDigits(text)) {
       c.add(path, `${where}: job_ids must be whole numbers, got ${pyRepr(value)}`);
       return;
@@ -372,17 +489,18 @@ export function validateDocument(doc: unknown, source = "the job list"): RuleIss
     seen.add(name);
   }
 
+  // Python reads every link first and looks for a second parent after, so a bad link is reported first.
+  const deps = section(c, doc, "dependencies").map((raw, index) => checkDependency(c, raw, index, seen));
   const parents = new Map<string, string>();
-  section(c, doc, "dependencies").forEach((raw, index) => {
-    const dep = checkDependency(c, raw, index, seen);
-    if (dep === null || dep.type !== "child_job") return;
+  for (const dep of deps) {
+    if (dep === null || dep.type !== "child_job") continue;
     const parent = parents.get(dep.job);
     if (parent !== undefined && parent !== dep.on) {
       c.add(`dependencies[${dep.job}->${dep.on}:child_job]`,
         `job ${dep.job} is a child_job of both ${parent} and ${dep.on}; a job can have only one parent`);
     }
     parents.set(dep.job, dep.on);
-  });
+  }
 
   const keys = new Set<string>();
   parsedWorkspaces.forEach((workspace) => {

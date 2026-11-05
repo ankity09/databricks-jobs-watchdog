@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
 import { PyFloat } from "./pyrepr";
-import { normalizeDocument, validateDocument } from "./rules";
+import { normalizeDocument, toJobListDocument, validateDocument } from "./rules";
 import { pythonYamlOptions } from "./yamlOptions";
 
 const CORPUS = join(__dirname, "../../../tests/fixtures/job-lists");
@@ -23,6 +23,56 @@ describe("rules match the Python corpus", () => {
       else expect(issues[0]?.message ?? "").toContain(want.error_contains);
     });
   }
+});
+
+/** A corpus file as PyYAML would read it: the raw parse the rules check. */
+function readRaw(file: string): Record<string, unknown> {
+  return parse(readFileSync(join(CORPUS, file), "utf8"), pythonYamlOptions) as Record<string, unknown>;
+}
+
+describe("the stored form keeps text fields as the Python loader reads them", () => {
+  const doc = toJobListDocument(normalizeDocument(readRaw("valid_text_from_other_types.yml")));
+  it("job names, owners, notes and patterns are Python's str() of the YAML value", () => {
+    expect(doc.jobs.map((j) => [j.job_name, j.owner, j.notes])).toEqual([
+      ["20241105", "42", "True"],
+      ["True", "", "60.0"],
+      ["2024-11-05", undefined, "2024-11-05 10:30:00"],
+      ["750", undefined, "1e3"],
+    ]);
+    expect(doc.jobs[2].job_name_exclude_regex).toBe("2024");
+    expect(doc.jobs[0].environments).toEqual({ 1: { owner: "9" } });
+    expect(doc.defaults).toEqual({ max_gap_minutes: 60, owner: "7" });
+  });
+  it("workspace names, labels and notes, and the links' names and notes, are text too", () => {
+    expect(doc.workspaces).toEqual([
+      { workspace_name: "2024", environment: "1", notes: "2024" },
+      { workspace_id: "1111111111111111", environment: "production", notes: "True" },
+    ]);
+    expect(doc.dependencies).toEqual([
+      { job_name: "True", depends_on: "20241105", notes: "7" },
+      { job_name: "2024-11-05", depends_on: "1.5", dependency_type: "service" },
+    ]);
+  });
+  it("keeps null, empty text and values the loader refuses as they are", () => {
+    expect(normalizeDocument({ jobs: [{ job_name: "a", owner: null, notes: "", job_name_regex: false }] }).jobs)
+      .toEqual([{ job_name: "a", owner: null, notes: "", job_name_regex: "" }]);
+    expect(normalizeDocument({ jobs: [{ job_name: 0, max_gap_minutes: true }] }).jobs).toEqual([{ job_name: 0, max_gap_minutes: true }]);
+  });
+  it("stores job IDs as the stripped text Python checks", () => {
+    expect(normalizeDocument({ jobs: [{ job_name: "a", job_ids: [" 123\t", 456n] }] }).jobs).toEqual([{ job_name: "a", job_ids: ["123", "456"] }]);
+  });
+  it("is the same after a second pass, so stored documents can be read through it again", () => {
+    const once = normalizeDocument(readRaw("valid_text_from_other_types.yml"));
+    expect(normalizeDocument(once)).toEqual(once);
+  });
+});
+
+describe("stored.json", () => {
+  it("pins the stored form of every loadable corpus file; the Python suite checks each means the same as its YAML", async () => {
+    const loadable = Object.entries(expected).filter(([, want]) => want.ok).map(([file]) => file);
+    const stored = Object.fromEntries(loadable.map((file) => [file, normalizeDocument(readRaw(file))]));
+    await expect(`${JSON.stringify(stored, null, 1)}\n`).toMatchFileSnapshot(join(CORPUS, "stored.json"));
+  });
 });
 
 describe("issue paths and collection", () => {
@@ -49,9 +99,31 @@ describe("issue paths and collection", () => {
     expect(validateDocument({ jobs: [] }, "x.yml")[0].message).toBe("x.yml lists no jobs");
     expect(validateDocument({ jobs: [] })[0].message).toBe("the job list lists no jobs");
   });
-  it("a Python-only regex pattern is reported as not compiling", () => {
-    const issues = validateDocument(doc([{ job_name: "a", max_gap_minutes: 5, job_name_regex: "(?P<x>a)" }]));
-    expect(issues[0].message).toContain("job_name_regex does not compile");
+  it("checks a pattern the way Python's re does, with Python's message", () => {
+    const issues = (pattern: string) => validateDocument(doc([{ job_name: "a", max_gap_minutes: 5, job_name_regex: pattern }]));
+    expect(issues("(?i)^orders")).toEqual([]);
+    expect(issues("(?x) ^orders _ingest$")).toEqual([]);
+    expect(issues("(?<x>a)")[0].message).toBe("job a: job_name_regex does not compile: unknown extension ?<x at position 1");
+    const exclude = validateDocument(doc([{ job_name: "a", max_gap_minutes: 5, job_name_exclude_regex: "\\k<x>" }]));
+    expect(exclude[0].message).toBe("job a: job_name_exclude_regex does not compile: bad escape \\k at position 0");
+  });
+  it("then checks that the system-table scan's Java regex can run it, with the loader's message", () => {
+    const issues = (field: string, pattern: string) => validateDocument(doc([{ job_name: "a", max_gap_minutes: 5, [field]: pattern }]));
+    expect(issues("job_name_regex", "(?P<x>a)(?P=x)")).toEqual([
+      {
+        path: "jobs[a].job_name_regex",
+        message: "job a: job_name_regex '(?P<x>a)(?P=x)' uses a (?P<name>...) group, which the system-table scan can't run",
+      },
+    ]);
+    expect(issues("job_name_exclude_regex", "_copy\\d{,2}$")[0].message).toBe(
+      "job a: job_name_exclude_regex '_copy\\\\d{,2}$' uses a { that is not a {n}, {n,} or {n,m} repeat, which the system-table scan can't run",
+    );
+    // Python's own error comes first, and a pattern gets one issue
+    expect(issues("job_name_regex", "(?P<x>a")).toEqual([
+      { path: "jobs[a].job_name_regex", message: "job a: job_name_regex does not compile: missing ), unterminated subpattern at position 0" },
+    ]);
+    const fromDefaults = validateDocument(doc([{ job_name: "a", max_gap_minutes: 5 }], { defaults: { job_name_exclude_regex: "(?#copies)_copy$" } }));
+    expect(fromDefaults[0].message).toBe("job a: job_name_exclude_regex '(?#copies)_copy$' uses a (?#...) comment, which the system-table scan can't run");
   });
 });
 
@@ -119,6 +191,11 @@ describe("raw parse messages", () => {
     expect(ids([new PyFloat(123)])[0].message).toBe("job a: job_ids must be whole numbers, got 123.0");
     expect(ids([true])[0].message).toContain("got True");
     expect(ids([1n, 1n])[0].message).toBe("job a: job ID 1 is listed twice");
+  });
+  it("job IDs are stripped the way Python's strip() does, not trim()", () => {
+    const ids = (v: unknown[]) => validateDocument({ jobs: [{ job_name: "a", max_gap_minutes: 1, job_ids: v }] });
+    expect(ids(["\x1c123\x85"])).toEqual([]);
+    expect(ids(["\ufeff123"])[0].message).toBe("job a: job_ids must be whole numbers, got '\ufeff123'");
   });
   it("a float workspace_id is not digits", () => {
     const issues = validateDocument({ workspaces: [{ workspace_id: new PyFloat(12), environment: "p" }], jobs: [{ job_name: "a", max_gap_minutes: 1 }] });

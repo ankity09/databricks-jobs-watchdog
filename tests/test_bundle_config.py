@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -63,8 +64,8 @@ def test_every_task_notebook_exists():
 
 def test_job_parameters_match_the_notebook_widgets():
     names = {parameter["name"] for parameter in load_job()["parameters"]}
-    # retention_days is only for the cleanup job
-    assert names == set(WIDGETS) - {"retention_days"}
+    # retention_days is only for the cleanup job, app_name only for the app access job
+    assert names == set(WIDGETS) - {"retention_days", "app_name"}
 
 
 def test_phase_1_runs_the_setup_scan_and_validation_notebooks_but_not_the_explore_ones():
@@ -560,9 +561,30 @@ def test_genie_sample_questions_are_the_app_s_suggested_questions():
         assert f'"{"".join(sample["question"])}"' in prompts
 
 
-def test_the_genie_file_names_no_literal_catalog():
+def assert_catalog_comes_from_the_bundle_variable(text):
+    """Every table read is a CTE (no dots) or ${var.catalog}.${var.schema}.<table>; the schema never stands alone."""
+    tables = re.findall(r"\b(?:FROM|JOIN)\s+([^\s(),;]+)", text, flags=re.IGNORECASE)
+    tables += re.findall(r"identifier:\s*(\S+)", text)
+    assert tables
+    for name in tables:
+        assert "." not in name or name.startswith("${var.catalog}.${var.schema}."), name
+    assert text.count("${var.schema}") == text.count("${var.catalog}.${var.schema}")
+
+
+def test_the_genie_file_takes_its_catalog_from_the_bundle_variable():
+    assert_catalog_comes_from_the_bundle_variable(GENIE_FILE.read_text())
+
+
+@pytest.mark.parametrize("before, after", [
+    ("FROM ${var.catalog}.${var.schema}.findings f", "FROM example_catalog.${var.schema}.findings f"),
+    ("FROM ${var.catalog}.${var.schema}.findings f", "FROM example_catalog.watchdog.findings f"),
+    ("identifier: ${var.catalog}.${var.schema}.findings\n", "identifier: example_catalog.${var.schema}.findings\n"),
+])
+def test_the_catalog_check_refuses_a_literal_catalog(before, after):
     text = GENIE_FILE.read_text()
-    assert "main." not in text
+    assert before in text
+    with pytest.raises(AssertionError):
+        assert_catalog_comes_from_the_bundle_variable(text.replace(before, after, 1))
 
 
 def production_target():
@@ -608,3 +630,68 @@ def test_genie_resource_header_says_tables_must_exist_first():
     header = "".join(line for line in GENIE_FILE.read_text().splitlines(True) if line.startswith("#"))
     assert "scripts/deploy_regions.py" in header
     assert "must exist before the first deploy" in header
+
+
+ACCESS_FILE = repo_root() / "resources" / "watchdog_app_access.job.yml"
+
+
+def load_access_job():
+    return yaml.safe_load(ACCESS_FILE.read_text())["resources"]["jobs"]["watchdog_app_access"]
+
+
+def test_the_app_access_job_runs_notebook_11_on_demand_on_serverless():
+    job = load_access_job()
+    assert "schedule" not in job and job["max_concurrent_runs"] == 1
+    (task,) = job["tasks"]
+    assert task["notebook_task"]["notebook_path"] == "../notebooks/11_grant_app_access.py"
+    assert (ACCESS_FILE.parent / task["notebook_task"]["notebook_path"]).resolve().is_file()
+    assert not {"job_cluster_key", "existing_cluster_id", "new_cluster"} & set(task)
+    assert "watchdog_app_access" in included_jobs()
+
+
+def test_the_app_access_job_takes_the_app_and_lakebase_names_from_the_bundle_variables():
+    parameters = {p["name"]: p["default"] for p in load_access_job()["parameters"]}
+    names = ("app_name", "lakebase_project_id", "lakebase_branch", "lakebase_database")
+    assert parameters == {name: f"${{var.{name}}}" for name in names}
+    assert set(parameters) <= set(WIDGETS) and set(parameters) <= set(load_bundle()["variables"])
+
+
+def test_people_in_the_users_group_variable_may_open_the_app_and_ask_the_copilot():
+    assert load_app()["permissions"] == [{"group_name": "${var.app_users_group}", "level": "CAN_USE"}]
+    assert load_genie()["permissions"] == [{"group_name": "${var.app_users_group}", "level": "CAN_RUN"}]
+    assert load_bundle()["variables"]["app_users_group"]["default"] == "users"
+    data = yaml.safe_load((repo_root() / "accelerator.yaml").read_text())
+    assert data["app"]["users_group"] == "users"
+
+
+def test_the_bundle_asks_for_the_cli_version_its_resources_need():
+    assert load_bundle()["bundle"]["databricks_cli_version"] == ">= 1.23.0"
+
+
+def test_accelerator_yaml_lists_every_feature_the_bundle_creates():
+    required = yaml.safe_load((repo_root() / "accelerator.yaml").read_text())["features"]["required"]
+    assert {"apps", "lakebase", "genie"} <= set(required)
+
+
+@pytest.mark.parametrize("path", sorted((repo_root() / "config" / "regions").glob("accelerator.*.yaml")), ids=lambda p: p.name)
+def test_example_region_files_ship_paused_until_the_job_list_is_imported(path):
+    # with config_source lakebase every scan fails at load_config until the app holds a job list
+    data = yaml.safe_load(path.read_text())
+    assert data["scan"]["config_source"] == "lakebase"
+    assert data["scan"]["schedule_status"] == "PAUSED"
+    assert "import" in path.read_text()
+
+
+def test_the_app_package_declares_the_repo_license():
+    # The repo is Apache 2.0 (LICENSE); npm and license scanners read the app's own package files.
+    assert "Apache License" in (repo_root() / "LICENSE").read_text()
+    package = json.loads((repo_root() / "app" / "package.json").read_text())
+    lock = json.loads((repo_root() / "app" / "package-lock.json").read_text())
+    assert package["license"] == lock["packages"][""]["license"] == "Apache-2.0"
+
+
+def test_every_place_that_asks_for_the_warehouse_says_the_genie_agent_needs_pro_or_serverless():
+    # Genie agents refuse a Classic SQL warehouse, so the first deploy would fail at the copilot's agent.
+    for name in ("README.md", "DEPLOY.md", "accelerator.yaml", "databricks.yml", "docs/multi-region.md",
+                 "config/regions/accelerator.example-lower.yaml", "config/regions/accelerator.example-prod-eu.yaml"):
+        assert "Pro or Serverless" in (repo_root() / name).read_text(), name

@@ -6,12 +6,15 @@ config_source is lakebase. The run connects as the identity it runs as, with a
 short-lived database credential, so it needs no stored password.
 
 The caller passes in the Databricks API client (WorkspaceClient().api_client)
-and the connect function (psycopg.connect), so this module needs neither
-package and the tests run without a workspace.
+and the connect function (psycopg.connect, from psycopg_connect), so this
+module needs neither package and the tests run without a workspace.
 """
 
+import importlib
 import json
 import re
+import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,6 +27,46 @@ _QUERY = f"SELECT version, document, saved_by, saved_at FROM {APP_SCHEMA}.job_li
 
 class LakebaseSourceError(Exception):
     """Raised when the job list cannot be read from Lakebase."""
+
+
+PSYCOPG_REQUIREMENT = "psycopg[binary]>=3.2,<4"
+
+# What each notebook needs psycopg for, and what to do when it cannot be installed.
+READ_JOB_LIST = ("reading the job list from Lakebase", "until then the scans use the last job list that loaded")
+GRANT_APP_ACCESS = ("giving the app access to its job list",
+                    "then run the watchdog_app_access job again, as a deploy runs it only when the app gets a new "
+                    "service principal")
+
+
+def psycopg_connect(purpose=READ_JOB_LIST, run=subprocess.run, import_module=importlib.import_module):
+    """psycopg.connect, installing psycopg into this Python first when it is missing.
+
+    Only the Lakebase source (notebook 02) and the app access grant (notebook 11)
+    need psycopg, so a YAML load never reaches PyPI. A failed install raises
+    LakebaseSourceError on one line that says what purpose, one of the pairs above,
+    needs it: notebook 02 records it as a FAILED config_loads row, and the config
+    tables keep their rows.
+    """
+    try:
+        return import_module("psycopg").connect
+    except ImportError:
+        pass
+    argv = [sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", PSYCOPG_REQUIREMENT]
+    try:
+        done = run(argv, capture_output=True, text=True)
+        lines = [line.strip() for line in (done.stderr or done.stdout or "").splitlines() if line.strip()]
+        # pip's last ERROR line says why; a WARNING may come after it
+        errors = [line for line in lines if line.startswith("ERROR:")]
+        problem = None if done.returncode == 0 else (errors or lines or [f"pip exit code {done.returncode}"])[-1]
+    except OSError as err:
+        problem = str(err)
+    if problem is not None:
+        detail = " ".join(problem.removeprefix("ERROR:").split())[:160]
+        needed_for, meanwhile = purpose
+        raise LakebaseSourceError(f"could not install {PSYCOPG_REQUIREMENT}, which {needed_for} needs ({detail}). "
+                                  f"Let serverless compute reach PyPI or your package mirror; {meanwhile}")
+    importlib.invalidate_caches()
+    return import_module("psycopg").connect
 
 
 @dataclass(frozen=True)
@@ -87,12 +130,17 @@ def current_username(api):
     return name
 
 
-def _fetch_latest(api, target, connect):
+def open_branch(api, target, connect):
+    """A connection to the target's database as the identity the API client runs as (a context manager, as psycopg's is)."""
     endpoint_name, host = read_write_endpoint(api, target)
     password = database_credential(api, endpoint_name)
     user = current_username(api)
-    with connect(host=host, port=5432, dbname=target.database, user=user, password=password,
-                 sslmode="require", connect_timeout=30) as connection:
+    return connect(host=host, port=5432, dbname=target.database, user=user, password=password,
+                   sslmode="require", connect_timeout=30)
+
+
+def _fetch_latest(api, target, connect):
+    with open_branch(api, target, connect) as connection:
         with connection.cursor() as cursor:
             cursor.execute(_QUERY)
             return cursor.fetchone()

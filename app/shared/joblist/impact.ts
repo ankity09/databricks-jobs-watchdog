@@ -12,6 +12,7 @@
  * Lists are sorted the way Python sorts strings (by code point), and the
  * records have no prototype, so a job named "constructor" is just a key.
  */
+import { comparePy as compareStrings } from "./pyrepr";
 import type { DependencyEntry, DependencyType, Impact, JobListDocument } from "./types";
 
 function typeOf(d: DependencyEntry): DependencyType {
@@ -24,20 +25,6 @@ function emptyRecord<T>(): Record<string, T> {
 
 function has(record: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
-}
-
-/** Python's string order: by code point, not by UTF-16 code unit. */
-function compareStrings(a: string, b: string): number {
-  let i = 0;
-  let j = 0;
-  while (i < a.length && j < b.length) {
-    const x = a.codePointAt(i) ?? 0;
-    const y = b.codePointAt(j) ?? 0;
-    if (x !== y) return x - y;
-    i += x > 0xffff ? 2 : 1;
-    j += y > 0xffff ? 2 : 1;
-  }
-  return a.length - i - (b.length - j);
 }
 
 /** Python's list order: item by item, and a shorter prefix first. */

@@ -279,3 +279,16 @@ describe("the scan job's ID", () => {
     expect((await request(app).get("/api/scan/latest-run")).status).toBe(503);
   });
 });
+
+describe("the jobs plugin routes the app does not use", () => {
+  it.each([
+    ["GET", "/api/jobs/default/runs"], ["GET", "/api/jobs/default/runs/7"], ["DELETE", "/api/jobs/default/runs/7"],
+    ["GET", "/api/jobs/default/status"],
+  ])("%s %s answers 404", async (method, path) => {
+    const app = express();
+    registerScanRoutes(app, { jobsApi: () => fakeJobs().api, jobId: () => JOB_ID });
+    const res = method === "GET" ? await request(app).get(path) : await request(app).delete(path);
+    expect(res.status).toBe(404);
+    expect(body(res).error).toBe("not_found");
+  });
+});

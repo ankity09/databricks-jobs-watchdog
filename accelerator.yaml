@@ -14,7 +14,8 @@ target:
   catalog: ""                   # required: catalog that will hold the Watchdog schema
   schema: watchdog              # schema created for the Watchdog tables and view
   region: ""                    # required: cloud region of this metastore, for example us-east-2
-  warehouse_id: ""              # required for the Watchdog app: the SQL warehouse it reads findings through
+  warehouse_id: ""              # required for the Watchdog app: the SQL warehouse it reads findings through;
+                                # Pro or Serverless, as the copilot's Genie agent needs one
 
 auth:
   mode: current_workspace       # current_workspace: check only this workspace, as you
@@ -42,6 +43,7 @@ scan:
 app:
   name: watchdog-app                       # the Watchdog app's name, unique in the workspace
   lakebase_project_id: jobs-watchdog       # Lakebase project for the app's job list, unique in the workspace
+  users_group: users                       # workspace group whose members may open the app and ask its copilot
 
 resources: {}                   # nothing extra is needed in Phase 1
 
@@ -53,5 +55,6 @@ features:
     - serverless
     - apps
     - lakebase
+    - genie                     # the copilot is a Genie agent the bundle creates
   optional:
     - service_principal_oauth   # needed only for the every-workspace mode

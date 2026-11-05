@@ -187,6 +187,48 @@ def test_exclude_regex_must_compile(tmp_path):
         load_monitored_jobs(path)
 
 
+def _with_pattern(tmp_path, field, pattern):
+    lines = [line for line in VALID_JOB.splitlines() if not line.strip().startswith(field + ":")]
+    lines.append(f"    {field}: '{pattern}'")
+    return write(tmp_path, "jobs:" + "\n".join(lines) + "\n")
+
+
+def _pattern_error(tmp_path, field, pattern):
+    with pytest.raises(ConfigError) as err:
+        load_monitored_jobs(_with_pattern(tmp_path, field, pattern))
+    return str(err.value)
+
+
+def test_a_pattern_java_refuses_is_refused_with_the_construct(tmp_path):
+    # The system-table scan matches with Spark's regexp_like, which compiles patterns as Java regex.
+    assert _pattern_error(tmp_path, "job_name_regex", "^orders_ingest_(?P<env>dev|prod)$") == (
+        "job orders_ingest: job_name_regex '^orders_ingest_(?P<env>dev|prod)$' uses a (?P<name>...) group, "
+        "which the system-table scan can't run"
+    )
+    assert _pattern_error(tmp_path, "job_name_exclude_regex", "_copy{,2}$") == (
+        "job orders_ingest: job_name_exclude_regex '_copy{,2}$' uses a { that is not a {n}, {n,} or {n,m} repeat, "
+        "which the system-table scan can't run"
+    )
+
+
+def test_python_s_own_error_comes_before_java_s(tmp_path):
+    assert _pattern_error(tmp_path, "job_name_exclude_regex", "(?P<copy>_test") == (
+        "job orders_ingest: job_name_exclude_regex does not compile: missing ), unterminated subpattern at position 0"
+    )
+
+
+def test_a_character_name_is_refused_with_advice(tmp_path):
+    assert _pattern_error(tmp_path, "job_name_exclude_regex", r"\N{EM DASH}test$") == (
+        "job orders_ingest: job_name_exclude_regex '\\\\N{EM DASH}test$' uses a \\N{...} character name, "
+        "which the system-table scan may not know; write the character itself"
+    )
+
+
+def test_a_pattern_both_engines_compile_still_loads(tmp_path):
+    jobs, _ = load_monitored_jobs(_with_pattern(tmp_path, "job_name_exclude_regex", r"(?<=_)(copy|test)\d{2,}$"))
+    assert jobs[0].job_name_exclude_regex == r"(?<=_)(copy|test)\d{2,}$"
+
+
 def test_enabled_must_be_true_or_false(tmp_path):
     path = write(tmp_path, "jobs:" + VALID_JOB.replace("enabled: true", 'enabled: "false"'))
     with pytest.raises(ConfigError, match="enabled must be true or false"):

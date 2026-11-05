@@ -1,13 +1,5 @@
-import { deepEqual } from "./apply";
-import { pySorted } from "./pyrepr";
+import { changedFields as fieldsOf, deepEqual } from "./apply";
 import { dependencyKey, targetKey, workspaceKey, type DiffEntry, type JobListDocument, type Target } from "./types";
-
-function fieldsOf(a: unknown, b: unknown): string[] {
-  const left = typeof a === "object" && a !== null ? Object.fromEntries(Object.entries(a)) : {};
-  const right = typeof b === "object" && b !== null ? Object.fromEntries(Object.entries(b)) : {};
-  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
-  return pySorted([...keys].filter((k) => !deepEqual(left[k], right[k])));
-}
 
 function compareSection<T>(
   before: T[], after: T[], key: (item: T) => string, target: (k: string) => Target, out: DiffEntry[],

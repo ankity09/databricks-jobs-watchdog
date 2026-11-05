@@ -14,6 +14,12 @@ deploy section; see docs/multi-region.md. For each region, in turn:
      this off
   3. databricks bundle deploy -t production
   4. databricks bundle run watchdog_app -t production; --no-app-run skips it
+  5. databricks bundle run watchdog_app_access -t production, when the deploy
+     gave the app a new service principal and the Lakebase project was there
+     before it (a plain teardown, or a new app.name): it gives the new app access
+     to the job list the project kept. Other deploys leave it out, as the app
+     owns its schema, so a region without PyPI deploys; --skip-app-access always
+     leaves it out
 
 --validate-only runs step 1 and nothing else. A failed step skips the rest of
 that region and the script carries on with the next one. It prints a summary
@@ -33,12 +39,25 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from jobs_watchdog.config import ConfigError  # noqa: E402
-from jobs_watchdog.regions import STATEMENTS_API, deploy_steps, load_regions, region_env, region_names  # noqa: E402
+from jobs_watchdog.regions import (  # noqa: E402
+    APP_ACCESS,
+    APP_MISSING,
+    DEPLOY,
+    STATEMENTS_API,
+    UNKNOWN,
+    app_access_needed,
+    app_and_project,
+    deploy_steps,
+    load_regions,
+    region_env,
+    region_names,
+)
 
 POLL_LIMIT_SECONDS = 600
 POLL_INTERVAL_SECONDS = 5.0  # between two checks of a statement that has not finished; tests set it to 0
 _SECRET_NAME = re.compile(r"SECRET|TOKEN|PASSWORD|CREDENTIAL", re.IGNORECASE)
 _TOKEN_SHAPE = re.compile(r"\bdapi[0-9a-zA-Z]{16,}\b")
+_NOT_FOUND = re.compile(r"does not exist|not found|RESOURCE_DOES_NOT_EXIST", re.IGNORECASE)
 
 
 def redact(text, env):
@@ -104,18 +123,47 @@ def run_step(step, env):
     return "FAILED", "\n".join(((err or "") + (out or "")).strip().splitlines()[-20:])
 
 
+def app_principal(app_name, env, profile_args):
+    """The app's service principal client ID, APP_MISSING when there is no such app, UNKNOWN when the CLI cannot tell."""
+    code, out, err = _run(["databricks", "apps", "get", app_name, "-o", "json"] + profile_args, env)
+    if code != 0:
+        return APP_MISSING if _NOT_FOUND.search(err or out) else UNKNOWN
+    try:
+        return json.loads(out).get("service_principal_client_id") or UNKNOWN
+    except (ValueError, AttributeError):
+        return UNKNOWN
+
+
+def project_exists(project_id, env, profile_args):
+    """False only when the CLI says the Lakebase project does not exist."""
+    code, out, err = _run(["databricks", "postgres", "get-project", f"projects/{project_id}", "-o", "json"] + profile_args, env)
+    return not (code != 0 and _NOT_FOUND.search(err or out))
+
+
 def deploy_region(region, args, results):
     env = region_env(region, os.environ)
     # A profile named in the environment could send this deploy to another workspace than the region's host.
     if env.pop("DATABRICKS_CONFIG_PROFILE", None):
         print(f"[{region.name}] ignoring DATABRICKS_CONFIG_PROFILE from the environment; "
               f"this region deploys to {region.host}.", file=sys.stderr, flush=True)
-    steps = deploy_steps(region, args.validate_only, not args.no_app_run, not args.skip_ensure_tables)
+    steps = deploy_steps(region, args.validate_only, not args.no_app_run, not args.skip_ensure_tables,
+                         not args.skip_app_access)
     failed = False
+    profile_args = ["--profile", region.profile] if region.profile else []
+    before = None
     for step in steps:
         if failed:
             results.append((region.name, step.label, "skipped"))
             continue
+        if step.label == DEPLOY and not args.skip_app_access:
+            app_name, project_id = app_and_project(env)
+            before = (project_exists(project_id, env, profile_args), app_principal(app_name, env, profile_args))
+        if step.label == APP_ACCESS and before is not None:
+            needed, why = app_access_needed(*before, app_principal(app_name, env, profile_args))
+            if not needed:
+                print(f"[{region.name}] {step.label} not needed: {why}.", flush=True)
+                results.append((region.name, step.label, "not needed"))
+                continue
         print(f"[{region.name}] {step.label} ...", flush=True)
         result, detail = run_step(step, env)
         results.append((region.name, step.label, result))
@@ -142,6 +190,8 @@ def main(argv=None):
     parser.add_argument("--no-app-run", action="store_true", help="deploy the bundle but do not run bundle run watchdog_app")
     parser.add_argument("--skip-ensure-tables", action="store_true",
                         help="do not create the Watchdog tables and views before the deploy")
+    parser.add_argument("--skip-app-access", action="store_true",
+                        help="do not run the watchdog_app_access job after the deploy")
     args = parser.parse_args(argv)
     try:
         regions = load_regions(args.paths, only=args.only)

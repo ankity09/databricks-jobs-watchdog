@@ -196,6 +196,14 @@ def test_a_plain_teardown_prints_how_to_bind_the_kept_lakebase_resources(sandbox
     assert "branches/production/databases/watchdog" in result.stdout
 
 
+def test_the_hint_ends_with_giving_the_new_app_access_to_the_kept_list(sandbox):
+    out = run_with_input(sandbox, "", "-y")[0].stdout
+    steps = ["bundle deployment bind watchdog_database", "databricks bundle deploy -t dev",
+             "databricks bundle run watchdog_app -t dev", "databricks bundle run watchdog_app_access -t dev"]
+    assert all(step in out for step in steps)
+    assert [out.index(step) for step in steps] == sorted(out.index(step) for step in steps)
+
+
 def test_dropping_the_lakebase_project_prints_no_bind_hint(sandbox):
     result, _ = run_with_input(sandbox, "", "--drop-lakebase", "-y")
     assert "bundle deployment bind" not in result.stdout
@@ -244,3 +252,134 @@ def test_an_option_without_a_value_gets_a_clear_message(sandbox, option):
     assert f"{option} needs a value" in result.stderr
     assert "unbound variable" not in result.stderr
     assert calls == []
+
+
+# -c with a region file: the teardown goes to the file's deploy.workspace_host, or nowhere
+
+REGION = ACCELERATOR + """
+deploy:
+  workspace_host: https://prod-eu.example.com/
+  profile: ""
+"""
+
+FAKE_ENV_DATABRICKS = FAKE_DATABRICKS.replace(
+    'echo "$*" >> "$FAKE_LOG"', 'echo "$* | host=${DATABRICKS_HOST:-} profile=${DATABRICKS_CONFIG_PROFILE:-}" >> "$FAKE_LOG"')
+
+
+CLI_CONFIG = "[eu]\nhost = https://prod-eu.example.com\n\n[us]\nhost = https://prod-us.example.com/\n"
+# The CLI reads these; Python's configparser refuses a key twice in a section, and a key before the first section.
+CONFIG_PYTHON_REFUSES = [CLI_CONFIG + "host = https://prod-us.example.com/\n", "host = https://prod-eu.example.com\n" + CLI_CONFIG]
+
+
+def region_run(sandbox, *args, answers="", region=REGION, config=CLI_CONFIG, **env_extra):
+    (sandbox / "accelerator.prod-eu.yaml").write_text(region)
+    (sandbox / "bin" / "databricks").write_text(FAKE_ENV_DATABRICKS)
+    (sandbox / "databrickscfg").write_text(config)
+    log = sandbox / "calls.log"
+    log.unlink(missing_ok=True)
+    env = {key: value for key, value in os.environ.items() if not key.startswith("DATABRICKS_")}
+    env.update(PATH=f"{sandbox / 'bin'}:{os.environ['PATH']}", FAKE_LOG=str(log),
+               DATABRICKS_CONFIG_FILE=str(sandbox / "databrickscfg"), **env_extra)
+    result = subprocess.run(["bash", str(sandbox / "teardown.sh"), "-t", "production", "-c",
+                             str(sandbox / "accelerator.prod-eu.yaml"), *args], capture_output=True, text=True,
+                            env=env, input=answers)
+    return result, log.read_text().splitlines() if log.exists() else []
+
+
+def test_a_region_file_sends_every_call_to_its_own_host(sandbox):
+    result, calls = region_run(sandbox, "-y")
+    assert result.returncode == 0, result.stderr
+    assert calls and all("host=https://prod-eu.example.com profile=" in call for call in calls)
+
+
+def test_the_prompt_names_the_workspace_and_the_genie_agent(sandbox):
+    result, calls = region_run(sandbox, answers="no\n")
+    assert "https://prod-eu.example.com" in result.stdout
+    assert "Genie agent" in result.stdout and "conversations" in result.stdout
+    assert "experiment" not in result.stdout
+    assert calls == []
+
+
+def test_a_shell_host_for_another_workspace_refuses_before_any_call(sandbox):
+    result, calls = region_run(sandbox, "-y", DATABRICKS_HOST="https://prod-us.example.com")
+    assert result.returncode == 2
+    assert "https://prod-us.example.com" in result.stderr and "https://prod-eu.example.com" in result.stderr
+    assert "Nothing was changed" in result.stderr and calls == []
+
+
+def test_a_shell_profile_for_another_workspace_refuses(sandbox):
+    result, calls = region_run(sandbox, "-y", DATABRICKS_CONFIG_PROFILE="us")
+    assert result.returncode == 2 and calls == []
+    assert "us" in result.stderr and "https://prod-eu.example.com" in result.stderr
+
+
+def test_a_profile_option_for_another_workspace_refuses(sandbox):
+    result, calls = region_run(sandbox, "-y", "-p", "us")
+    assert result.returncode == 2 and calls == []
+
+
+def test_a_matching_profile_is_used_for_every_call(sandbox):
+    result, calls = region_run(sandbox, "-y", "-p", "eu")
+    assert result.returncode == 0, result.stderr
+    assert calls and all("--profile eu" in call for call in calls)
+
+
+def test_the_region_file_s_own_profile_is_used_and_checked(sandbox):
+    region = REGION.replace('profile: ""', "profile: eu")
+    result, calls = region_run(sandbox, "-y", region=region)
+    assert result.returncode == 0, result.stderr
+    assert calls and all("--profile eu" in call for call in calls)
+    result, calls = region_run(sandbox, "-y", region=REGION.replace('profile: ""', "profile: us"))
+    assert result.returncode == 2 and calls == []
+
+
+def test_an_unknown_profile_refuses(sandbox):
+    result, calls = region_run(sandbox, "-y", "-p", "nope")
+    assert result.returncode == 2 and "nope" in result.stderr and calls == []
+
+
+@pytest.mark.parametrize("config", CONFIG_PYTHON_REFUSES)
+def test_a_region_file_without_a_profile_never_reads_the_cli_config(sandbox, config):
+    result, calls = region_run(sandbox, "-y", config=config)
+    assert result.returncode == 0, result.stderr
+    assert calls and all("host=https://prod-eu.example.com profile=" in call for call in calls)
+
+
+@pytest.mark.parametrize("config", CONFIG_PYTHON_REFUSES)
+def test_a_profile_in_a_cli_config_python_cannot_read_refuses_with_a_message(sandbox, config):
+    result, calls = region_run(sandbox, "-y", "-p", "eu", config=config)
+    assert result.returncode == 2 and calls == []
+    assert "Traceback" not in result.stderr
+    assert str(sandbox / "databrickscfg") in result.stderr and "profile eu" in result.stderr
+    assert "Nothing was changed" in result.stderr
+
+
+@pytest.mark.parametrize("config", CONFIG_PYTHON_REFUSES)
+def test_a_cli_config_python_cannot_read_does_not_stop_a_teardown_without_a_region_file(sandbox, config):
+    (sandbox / "databrickscfg").write_text(config)
+    log = sandbox / "calls.log"
+    env = {key: value for key, value in os.environ.items() if not key.startswith("DATABRICKS_")}
+    env.update(PATH=f"{sandbox / 'bin'}:{os.environ['PATH']}", FAKE_LOG=str(log), DATABRICKS_CONFIG_FILE=str(sandbox / "databrickscfg"))
+    result = subprocess.run(["bash", str(sandbox / "teardown.sh"), "-y"], capture_output=True, text=True, env=env)
+    assert result.returncode == 0, result.stderr
+    assert "Traceback" not in result.stderr
+    assert any(call.startswith("bundle destroy") for call in log.read_text().splitlines())
+
+
+# the bind hint, whatever happens after the unbind
+
+def test_a_destroy_that_fails_after_the_unbind_still_prints_the_bind_hint(sandbox):
+    (sandbox / "bin" / "databricks").write_text(FAKE_DATABRICKS.replace(
+        'exit 0', 'if [[ "$1 $2" == "bundle destroy" ]]; then echo "destroy failed" >&2; exit 1; fi\nexit 0'))
+    log = sandbox / "calls.log"
+    env = dict(os.environ, PATH=f"{sandbox / 'bin'}:{os.environ['PATH']}", FAKE_LOG=str(log))
+    result = subprocess.run(["bash", str(sandbox / "teardown.sh"), "-y"], capture_output=True, text=True, env=env)
+    assert result.returncode != 0
+    assert "bundle deployment bind watchdog_db projects/jobs-watchdog -t dev" in result.stdout
+
+
+def test_declining_to_delete_the_project_prints_the_bind_hint(sandbox):
+    result, calls = run_with_input(sandbox, "yes\nnope\n", "--drop-lakebase")
+    assert result.returncode == 0
+    assert "Lakebase project kept." in result.stdout
+    assert "bundle deployment bind watchdog_db" in result.stdout

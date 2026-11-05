@@ -95,3 +95,18 @@ export function registerCopilotRoutes(app: express.Application, ctx: CopilotRout
     }
   });
 }
+
+export const COPILOT_NOT_SET_UP = "The copilot isn't set up in this app. Set the Genie space for the app, then restart it.";
+
+/**
+ * Without DATABRICKS_GENIE_SPACE_ID (a local run, or a deploy with no genie-space
+ * resource) the genie plugin is not loaded, so the app still starts; the
+ * copilot's routes and the plugin's paths answer 503 with what to do.
+ */
+export function registerCopilotNotSetUp(app: express.Application): void {
+  const notSetUp: express.RequestHandler = (_req, res) => {
+    res.status(503).json({ error: "not_configured", message: COPILOT_NOT_SET_UP });
+  };
+  app.use("/api/copilot", notSetUp);
+  app.use("/api/genie", notSetUp);
+}

@@ -2,8 +2,8 @@ import express from "express";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { MemoryVersionRepo } from "./memory-repo";
-import { createJobListRouter } from "./routes";
-import { createJobListStore } from "./store";
+import { createJobListRouter, mountJobList } from "./routes";
+import { createJobListStore, type JobListStore } from "./store";
 
 /** The fields the tests read from a response body; the routes' contract fixes their types. */
 interface Body {
@@ -195,10 +195,10 @@ describe("job-list routes", () => {
     expect(res.body).toEqual({ error: "bad_request", message: "The request body is not valid JSON." });
   });
 
-  it("answers a body over 2 MB with 413 too_large", async () => {
-    const res = await request(app()).post("/api/job-list/import/preview").send({ yaml: "x".repeat(2 * 1024 * 1024 + 1024) });
+  it("answers a body over 1 MB with 413 too_large", async () => {
+    const res = await request(app()).post("/api/job-list/import/preview").send({ yaml: "x".repeat(1024 * 1024 + 1024) });
     expect(res.status).toBe(413);
-    expect(res.body).toEqual({ error: "too_large", message: "The request is larger than 2 MB." });
+    expect(res.body).toEqual({ error: "too_large", message: "The request is larger than 1 MB." });
   });
 
   it("answers a YAML alias bomb with the yaml error, not a 500", async () => {
@@ -206,5 +206,88 @@ describe("job-list routes", () => {
     const res = await request(app()).post("/api/job-list/import/preview").send({ yaml: bomb });
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: "yaml", message: "The YAML file uses too many aliases." });
+  });
+});
+
+const denied = () => Object.assign(new Error("permission denied for schema watchdog_app"), { code: "42501" });
+
+function appWith(store: JobListStore, ready?: () => Promise<void>) {
+  const server = express();
+  server.use("/api/job-list", createJobListRouter(store, { ready }));
+  return server;
+}
+
+describe("when the app cannot use its schema", () => {
+  it("says what to do, with 503, when the startup check was refused for lack of a privilege", async () => {
+    const res = await request(appWith(createJobListStore(new MemoryVersionRepo()), () => Promise.reject(denied())))
+      .get("/api/job-list");
+    expect(res.status).toBe(503);
+    expect(body(res).error).toBe("no_access");
+    expect(body(res).message).toContain("watchdog_app_access");
+  });
+
+  it("answers 503 not_ready when the database did not answer, and lets the request through once it is ready", async () => {
+    let ready: () => Promise<void> = () => Promise.reject(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }));
+    const server = appWith(createJobListStore(new MemoryVersionRepo()), () => ready());
+    const first = await request(server).get("/api/job-list");
+    expect(first.status).toBe(503);
+    expect(body(first).error).toBe("not_ready");
+    expect(JSON.stringify(first.body)).not.toContain("ECONNREFUSED");
+    ready = () => Promise.resolve();
+    expect((await request(server).get("/api/job-list")).status).toBe(200);
+  });
+
+  it("says the same when a query is refused later, for example after a grant was taken back", async () => {
+    const store = createJobListStore(new MemoryVersionRepo());
+    const refusing: JobListStore = { ...store, latest: () => Promise.reject(denied()) };
+    const res = await request(appWith(refusing)).get("/api/job-list");
+    expect(res.status).toBe(503);
+    expect(body(res).error).toBe("no_access");
+  });
+});
+
+describe("behind AppKit's server, which parses JSON for every route first (1 MB)", () => {
+  /** As the deployed app: AppKit's own express.json, then the routes. The pool is never reached here. */
+  function appkitLike(): express.Application {
+    const server = express();
+    server.use(express.json({ limit: "1mb", type: (req) => (req.headers["content-type"] ?? "").includes("json") }));
+    mountJobList(server, createJobListRouter(createJobListStore(new MemoryVersionRepo())));
+    return server;
+  }
+
+  it("answers a body over the limit with the job list's own 413", async () => {
+    const res = await request(appkitLike()).post("/api/job-list/import/preview").send({ yaml: "x".repeat(1024 * 1024 + 1024) });
+    expect(res.status).toBe(413);
+    expect(res.body).toEqual({ error: "too_large", message: "The request is larger than 1 MB." });
+  });
+
+  it("answers a body that is not JSON with the job list's own 400", async () => {
+    const res = await request(appkitLike()).post("/api/job-list/changes").set("content-type", "application/json").send("{nope");
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "bad_request", message: "The request body is not valid JSON." });
+  });
+});
+
+describe("a job list an older app stored with job_name 20241105 as a number", () => {
+  function seeded() {
+    const repo = new MemoryVersionRepo();
+    const document: unknown = JSON.parse('{"jobs": [{"job_name": 20241105, "max_gap_minutes": 60}, {"job_name": "orders_ingest", "max_gap_minutes": 60}]}');
+    repo.rows.push({
+      version: 1, savedBy: "someone@example.com", savedAt: new Date(), changeKind: "import", changeTarget: null,
+      summary: "Imported 2 jobs, 0 links and 0 workspace labels from YAML", document: document as { jobs: [] },
+    });
+    return appWith(createJobListStore(repo));
+  }
+
+  it("is read with the name as text, and an edit of that job saves instead of answering duplicate job_name", async () => {
+    const server = seeded();
+    const state = await request(server).get("/api/job-list");
+    expect(body(state).document.jobs[0]).toEqual({ job_name: "20241105", max_gap_minutes: 60 });
+    const res = await request(server).post("/api/job-list/changes").send({
+      baseVersion: 1, change: { kind: "upsert", target: { type: "job", name: "20241105" }, value: { job_name: "20241105", max_gap_minutes: 90 } },
+    });
+    expect(res.status).toBe(201);
+    expect(body(res).summary).toBe("Changed max_gap_minutes on 20241105 from 60 to 90");
+    expect(body(res).document.jobs).toEqual([{ job_name: "20241105", max_gap_minutes: 90 }, { job_name: "orders_ingest", max_gap_minutes: 60 }]);
   });
 });

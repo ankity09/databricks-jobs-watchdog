@@ -6,6 +6,7 @@ copy), otherwise from accelerator.yaml, otherwise from the built-in default
 below. Job parameters override the defaults when the notebooks run as a job.
 """
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -32,7 +33,11 @@ WIDGETS = {
     "lakebase_project_id": ("app", "lakebase_project_id", "jobs-watchdog"),
     "lakebase_branch": (None, None, "production"),
     "lakebase_database": (None, None, "watchdog"),
+    "app_name": ("app", "name", "watchdog-app"),
 }
+
+# Databricks app names: lowercase letters, digits and hyphens, 2 to 30 characters, not starting with a hyphen
+_APP_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{1,29}$")
 
 
 def accelerator_file(repo_root):
@@ -94,6 +99,9 @@ def read_settings(values, repo_root):
             LakebaseTarget(**(lakebase | given))
         except LakebaseSourceError as err:
             raise ValueError(str(err)) from err
+    if "app_name" in settings and not _APP_NAME.match(settings["app_name"]):
+        raise ValueError("app_name must be the Watchdog app's name: 2 to 30 lowercase letters, digits and -, "
+                         f"got {settings['app_name']!r}")
     if "monitored_jobs_path" in settings:
         path = Path(settings["monitored_jobs_path"])
         settings["monitored_jobs_path"] = path if path.is_absolute() else Path(repo_root) / path

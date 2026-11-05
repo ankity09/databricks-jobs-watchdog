@@ -7,6 +7,10 @@
     "ok": false,
     "error_contains": "a job can have only one parent"
   },
+  "invalid_default_exclude_regex_java_comment.yml": {
+    "ok": false,
+    "error_contains": "job orders_ingest: job_name_exclude_regex '(?#test copies)_test$' uses a (?#...) comment, which the system-table scan can't run"
+  },
   "invalid_defaults_not_mapping.yml": {
     "ok": false,
     "error_contains": "defaults must be a mapping of job settings, got ['a']"
@@ -38,6 +42,14 @@
   "invalid_environment_unknown_key.yml": {
     "ok": false,
     "error_contains": "has unknown keys ['notes']"
+  },
+  "invalid_exclude_regex_java_brace.yml": {
+    "ok": false,
+    "error_contains": "job orders_ingest: job_name_exclude_regex '_copy\\\\d{,2}$' uses a { that is not a {n}, {n,} or {n,m} repeat, which the system-table scan can't run"
+  },
+  "invalid_exclude_regex_named_group.yml": {
+    "ok": false,
+    "error_contains": "job_name_exclude_regex does not compile: unknown extension ?<c at position 1"
   },
   "invalid_float_gap.yml": {
     "ok": false,
@@ -71,6 +83,30 @@
     "ok": false,
     "error_contains": "job_name_regex does not compile"
   },
+  "invalid_regex_java_ascii_flag.yml": {
+    "ok": false,
+    "error_contains": "job orders_ingest: job_name_regex '(?a)^orders_\\\\w+$' uses the a flag, which the system-table scan can't run"
+  },
+  "invalid_regex_java_lookbehind_choice.yml": {
+    "ok": false,
+    "error_contains": "job orders_ingest: job_name_regex '(?<=^(?:dev|prd){1}_)orders$' uses a repeated group with a choice in it, such as (?:a|b){2}, inside a look-behind, which the system-table scan can't run"
+  },
+  "invalid_regex_java_named_group.yml": {
+    "ok": false,
+    "error_contains": "job orders_ingest: job_name_regex '^orders_(?P<env>dev|prod)$' uses a (?P<name>...) group, which the system-table scan can't run"
+  },
+  "invalid_regex_named_character.yml": {
+    "ok": false,
+    "error_contains": "job orders_ingest: job_name_regex '^orders\\\\N{EM DASH}ingest$' uses a \\N{...} character name, which the system-table scan may not know; write the character itself"
+  },
+  "invalid_regex_unicode_class.yml": {
+    "ok": false,
+    "error_contains": "job_name_regex does not compile: bad escape \\p at position 8"
+  },
+  "invalid_regex_variable_lookbehind.yml": {
+    "ok": false,
+    "error_contains": "job_name_regex does not compile: look-behind requires fixed-width pattern"
+  },
   "invalid_schedule_type.yml": {
     "ok": false,
     "error_contains": "schedule_type must be one of ['continuous', 'scheduled', 'triggered']"
@@ -86,6 +122,10 @@
   "invalid_triggered_with_gap.yml": {
     "ok": false,
     "error_contains": "triggered jobs have no schedule check, so remove max_gap_minutes"
+  },
+  "invalid_unknown_job_after_two_parents.yml": {
+    "ok": false,
+    "error_contains": "dependency orders_report -> missing_job: missing_job is not a configured job"
   },
   "invalid_unknown_job_key.yml": {
     "ok": false,
@@ -119,13 +159,22 @@
   "valid_explicit_values.yml": {
     "ok": true
   },
+  "valid_java_compatible_patterns.yml": {
+    "ok": true
+  },
   "valid_job_ids_numbers_and_strings.yml": {
     "ok": true
   },
   "valid_minimal.yml": {
     "ok": true
   },
+  "valid_python_only_patterns.yml": {
+    "ok": true
+  },
   "valid_service_dependency.yml": {
+    "ok": true
+  },
+  "valid_text_from_other_types.yml": {
     "ok": true
   },
   "valid_triggered_child.yml": {

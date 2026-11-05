@@ -106,6 +106,7 @@ APP_KEYS = """
 app:
   name: watchdog-app
   lakebase_project_id: jobs-watchdog
+  users_group: watchdog-users
 """
 
 
@@ -117,6 +118,7 @@ def test_app_and_lakebase_settings_become_bundle_variables(tmp_path):
     assert variables["config_source"] == "lakebase"
     assert variables["app_name"] == "watchdog-app"
     assert variables["lakebase_project_id"] == "jobs-watchdog"
+    assert variables["app_users_group"] == "watchdog-users"
     assert "copilot_model" not in variables
 
 

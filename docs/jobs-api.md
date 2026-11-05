@@ -270,4 +270,5 @@ environments, or no workspace could be checked.`
 - The SDK returns states as enums. The Watchdog compares their text values, and reads every field
   with a default, so a field an older SDK version lacks reads as empty instead of failing.
 - Regexes run with Python's `re.search`, like Spark's `regexp_like` in the system table scan: both
-  find the pattern anywhere in the name unless it is anchored.
+  find the pattern anywhere in the name unless it is anchored. The loader refuses a pattern Java's
+  regex, which `regexp_like` uses, cannot compile (see `docs/data-model.md`).

@@ -20,6 +20,8 @@
 
 bundle:
   name: databricks-jobs-watchdog
+  # The app, Lakebase and Genie resources need CLI 1.23.0 or newer; an older CLI says so here, not with an unknown field.
+  databricks_cli_version: ">= 1.23.0"
 
 include:
   - resources/*.yml
@@ -66,7 +68,7 @@ variables:
     description: watchdog_cleanup deletes findings scans older than this many days, keeping each source's newest scan; 0 keeps everything
     default: "30"
   warehouse_id:
-    description: SQL warehouse the Watchdog app reads findings through (required)
+    description: Pro or Serverless SQL warehouse the Watchdog app reads findings through (required; the copilot's Genie agent needs one)
   config_source:
     description: Where notebook 02 reads the job list, yaml (the monitored-jobs file) or lakebase (the Watchdog app)
     default: yaml
@@ -76,6 +78,9 @@ variables:
   lakebase_project_id:
     description: Lakebase project that holds the Watchdog app's job list; unique in the workspace
     default: jobs-watchdog
+  app_users_group:
+    description: Workspace group whose members may open the Watchdog app (CAN USE) and ask its copilot (CAN RUN)
+    default: users
   lakebase_branch:
     description: Lakebase branch the scan reads the job list from
     default: production

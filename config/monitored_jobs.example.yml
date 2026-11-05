@@ -28,6 +28,9 @@
 #   job_name          a short logical name used in findings and alerts; unique
 #   job_name_regex    matches the job's real name in each workspace. It matches
 #                     anywhere in the name unless anchored with ^ and $.
+#                     Python's re and Java's regex (the system table scan's
+#                     regexp_like) must both compile it; docs/data-model.md
+#                     lists what Java refuses, such as (?P<name>...).
 #   job_name_exclude_regex  real names matching this are skipped, for example
 #                     test copies with "_test(_|$)". A bare "test" would also skip
 #                     names such as daily_revenue_report_latest.

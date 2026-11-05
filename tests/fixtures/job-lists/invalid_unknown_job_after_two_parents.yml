@@ -1,0 +1,18 @@
+# The loader checks every link before it looks for a job with two parents, so
+# the unknown job on the last link is the first error, not the second parent.
+jobs:
+  - job_name: orders_ingest
+    max_gap_minutes: 60
+  - job_name: orders_enrich
+    max_gap_minutes: 60
+  - job_name: orders_report
+    max_gap_minutes: 60
+dependencies:
+  - job_name: orders_report
+    depends_on: orders_ingest
+    dependency_type: child_job
+  - job_name: orders_report
+    depends_on: orders_enrich
+    dependency_type: child_job
+  - job_name: orders_report
+    depends_on: missing_job

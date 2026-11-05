@@ -3,7 +3,15 @@ import json
 import pytest
 
 from jobs_watchdog.config import ConfigError
-from jobs_watchdog.regions import RegionDeploy, deploy_steps, load_regions, region_env
+from jobs_watchdog.regions import (
+    RegionDeploy,
+    TeardownTarget,
+    deploy_steps,
+    load_regions,
+    normal_host,
+    region_env,
+    teardown_target,
+)
 from jobs_watchdog.sqlfiles import load_sql, repo_root
 from jobs_watchdog.upgrade import VIEW_TEMPLATES, render_view, view_names
 
@@ -171,7 +179,15 @@ def test_deploy_steps_validate_deploy_run_without_the_table_step():
         ["databricks", "bundle", "validate", "--strict", "-t", "production"],
         ["databricks", "bundle", "deploy", "-t", "production"],
         ["databricks", "bundle", "run", "watchdog_app", "-t", "production"],
+        ["databricks", "bundle", "run", "watchdog_app_access", "-t", "production"],
     ]
+
+
+def test_deploy_steps_give_the_app_access_to_a_kept_job_list_last_unless_told_not_to():
+    steps = deploy_steps(region(), validate_only=False, run_app=False, ensure_tables=False)
+    assert [s.label for s in steps][-1] == "app access"
+    steps = deploy_steps(region(), validate_only=False, run_app=True, ensure_tables=False, app_access=False)
+    assert [s.label for s in steps][-1] == "run app"
 
 
 def test_deploy_steps_add_the_profile_to_every_command():
@@ -184,8 +200,8 @@ def test_deploy_steps_validate_only_is_just_the_validate_and_never_touches_table
     assert argv(steps) == [["databricks", "bundle", "validate", "--strict", "-t", "production"]]
 
 
-def test_deploy_steps_no_app_run_stops_after_the_deploy():
-    steps = deploy_steps(region(), validate_only=False, run_app=False, ensure_tables=False)
+def test_deploy_steps_no_app_run_leaves_out_the_app_run():
+    steps = deploy_steps(region(), validate_only=False, run_app=False, ensure_tables=False, app_access=False)
     assert [s.argv[1:3] for s in steps] == [["bundle", "validate"], ["bundle", "deploy"]]
 
 
@@ -193,8 +209,8 @@ def test_deploy_steps_validate_first_then_tables_then_deploy():
     steps = deploy_steps(region(), validate_only=False, run_app=True)
     labels = [s.label for s in steps]
     assert labels[0] == "validate"
-    assert labels[-2:] == ["deploy", "run app"]
-    assert all(label.startswith("tables") for label in labels[1:-2])
+    assert labels[-3:] == ["deploy", "run app", "app access"]
+    assert all(label.startswith("tables") for label in labels[1:-3])
 
 
 def test_ensure_tables_runs_every_setup_file_in_sorted_order_with_named_parameters():
@@ -254,3 +270,76 @@ def test_the_gitlab_example_has_a_matrix_job_per_stage_and_the_region_script():
     assert "--validate-only" in ci["validate"]["script"][0]
     assert ci["deploy"]["rules"][0]["when"] == "manual"
     assert ci["variables"]["DATABRICKS_CLI_VERSION"] == "1.23.0"
+
+
+def test_merge_request_validation_signs_in_without_the_protected_deploy_secret():
+    # GitLab gives protected variables only to protected refs, so a merge request never sees the deploy secret.
+    # A variable set in Settings outranks a job's variables: block, so the validate job sets both on its
+    # command line; otherwise the deploy ID from Settings would go out with the validate secret.
+    import yaml
+
+    ci = yaml.safe_load((repo_root() / "ci" / "gitlab-ci.example.yml").read_text())
+    assert "variables" not in ci["validate"] and "variables" not in ci["deploy"]
+    assert ci["validate"]["script"][0].startswith(
+        'DATABRICKS_CLIENT_ID="$VALIDATE_CLIENT_ID" DATABRICKS_CLIENT_SECRET="$VALIDATE_CLIENT_SECRET" '
+        "python3 scripts/deploy_regions.py "
+    )
+    header = (repo_root() / "ci" / "gitlab-ci.example.yml").read_text().split("stages:")[0]
+    assert "outranks" in header and "command line" in header
+
+
+# teardown_target
+
+
+def test_hosts_compare_without_case_scheme_or_a_trailing_slash():
+    assert normal_host("HTTPS://Prod-EU.example.com/") == normal_host("prod-eu.example.com") == "https://prod-eu.example.com"
+    assert normal_host("") == "" and normal_host(None) == ""
+
+
+def test_a_default_profile_is_a_profile_like_any_other(tmp_path):
+    config = tmp_path / "databrickscfg"
+    config.write_text("[DEFAULT]\nhost = https://prod-eu.example.com\n")
+    region_file = write(tmp_path, "accelerator.prod-eu.yaml", REGION_FILE.replace("example-eu.example.com", "prod-eu.example.com"))
+    target = teardown_target(region_file, "DEFAULT", {"DATABRICKS_CONFIG_FILE": str(config)})
+    assert (target.host, target.profile, target.checked) == ("https://prod-eu.example.com", "DEFAULT", True)
+
+
+def test_without_a_region_host_nothing_is_checked_and_the_shell_host_is_shown(tmp_path):
+    env = {"DATABRICKS_CONFIG_FILE": str(tmp_path / "none"), "DATABRICKS_HOST": "https://a.example.com/"}
+    target = teardown_target(None, "", env)
+    assert (target.host, target.profile, target.checked) == ("https://a.example.com", "", False)
+
+
+def test_a_cli_config_python_cannot_read_is_read_only_when_a_region_file_and_a_profile_need_it(tmp_path):
+    config = tmp_path / "databrickscfg"
+    config.write_text("host = https://prod-eu.example.com\n[eu]\nhost = https://prod-eu.example.com\n")
+    env = {"DATABRICKS_CONFIG_FILE": str(config)}
+    region_file = write(tmp_path, "accelerator.prod-eu.yaml", REGION_FILE.replace("example-eu.example.com", "prod-eu.example.com"))
+    # a region file with no profile checks only the host, and never reads the file
+    assert teardown_target(region_file, "", env) == TeardownTarget("https://prod-eu.example.com", "", True)
+    # without a region file nothing is checked, so the file only names the workspace, when it can
+    plain = teardown_target(None, "eu", env)
+    assert (plain.host, plain.checked) == ("", False) and str(config) in plain.note
+    # a profile to check against the region's host needs the file
+    with pytest.raises(ConfigError, match=r"cannot read .*databrickscfg.* so the profile eu cannot be checked"):
+        teardown_target(region_file, "eu", env)
+
+
+def test_the_view_check_ignores_case_as_information_schema_stores_names_in_lower_case():
+    steps = deploy_steps(region(schema="Watchdog"), validate_only=False, run_app=False)
+    check = next(s for s in steps if s.only_if_missing)
+    body = json.loads(check.only_if_missing[check.only_if_missing.index("--json") + 1])
+    assert "lower(:schema)" in body["statement"] and "lower(:view)" in body["statement"]
+
+
+def test_the_redeploy_handover_is_not_stated_as_fact_and_the_docs_say_how_to_check_it():
+    # A full teardown and redeploy has not been run; the handover rests on how Databricks describes deleting an app.
+    guide = (repo_root() / "docs" / "multi-region.md").read_text()
+    assert "A full teardown and redeploy has not been run yet" in guide and "checked, on Lakebase branches" in guide
+    steps = guide[guide.index("### Check the handover after a redeploy"):]
+    assert "has_schema_privilege" in steps and "pg_namespace" in steps and "Job list" in steps
+    for name in ("docs/multi-region.md", "notebooks/11_grant_app_access.py", "jobs_watchdog/app_access.py",
+                 "app/server/db/schema.ts", "resources/watchdog_app_access.job.yml"):
+        text = " ".join((repo_root() / name).read_text().split())
+        assert "Lakebase hands" not in text and "Lakebase then hands" not in text, name
+        assert "belongs to the identity that ran the teardown" not in text, name

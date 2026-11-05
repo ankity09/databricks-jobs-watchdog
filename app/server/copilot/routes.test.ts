@@ -7,7 +7,7 @@ vi.mock("@databricks/appkit", () => ({
   getExecutionContext: () => ({ client: { genie: { listConversations } } }),
 }));
 
-const { genieConversations, registerCopilotRoutes, toConversationSummary } = await import("./routes");
+const { COPILOT_NOT_SET_UP, genieConversations, registerCopilotNotSetUp, registerCopilotRoutes, toConversationSummary } = await import("./routes");
 type ConversationSource = Parameters<typeof registerCopilotRoutes>[1]["conversations"];
 
 let server: ReturnType<express.Application["listen"]> | null = null;
@@ -102,5 +102,27 @@ describe("toConversationSummary", () => {
       title: "Why did orders_ingest fail?",
       updatedAt: "1970-01-01T00:00:00.000Z",
     });
+  });
+});
+
+describe("without a Genie space", () => {
+  afterEach(async () => {
+    await new Promise((resolve) => (server ? server.close(resolve) : resolve(undefined)));
+    server = null;
+  });
+
+  it("answers the copilot's routes and the genie plugin's paths with 503 and what to do", async () => {
+    const app = express();
+    registerCopilotNotSetUp(app);
+    server = app.listen(0);
+    await new Promise((resolve) => server?.once("listening", resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    for (const [method, path] of [["GET", "/api/copilot/conversations"], ["POST", "/api/genie/default/messages"],
+      ["GET", "/api/genie/default/conversations/abc"]]) {
+      const res = await fetch(`${base}${path}`, { method });
+      expect(res.status, path).toBe(503);
+      expect(await res.json()).toEqual({ error: "not_configured", message: COPILOT_NOT_SET_UP });
+    }
+    expect(COPILOT_NOT_SET_UP).toBe("The copilot isn't set up in this app. Set the Genie space for the app, then restart it.");
   });
 });

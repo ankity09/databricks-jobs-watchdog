@@ -1,10 +1,14 @@
-import { analytics, createApp, genie, jobs, lakebase, server } from "@databricks/appkit";
+import { analytics, createApp, genie, lakebase, server } from "@databricks/appkit";
 import { registerAppConfigRoute } from "./app-config";
-import { genieConversations, registerCopilotRoutes } from "./copilot/routes";
-import { ensureSchema } from "./db/schema";
+import { genieConversations, registerCopilotNotSetUp, registerCopilotRoutes } from "./copilot/routes";
+import { schemaErrorLog, schemaGate } from "./db/schema";
 import { registerIdentityRoutes } from "./identity";
 import { registerJobListRoutes } from "./joblist/routes";
+import { scanNowJobs } from "./scan/jobs-plugin";
 import { registerScanRoutes } from "./scan/routes";
+
+/** The copilot's Genie space (the app's genie-space resource). Without it the app starts with the copilot off. */
+const genieSpaceId = process.env.DATABRICKS_GENIE_SPACE_ID?.trim() || undefined;
 
 await createApp({
   plugins: [
@@ -14,22 +18,25 @@ await createApp({
     // default holds about 600 jobs. Allow 16 MiB for headroom over the 200 jobs this app is sized for.
     analytics({ streamConfig: { maxEventSize: 16 * 1024 * 1024 } }),
     lakebase({ pool: { max: 10 } }),
-    jobs({}),
-    // The copilot's Genie space (the app's genie-space resource), under the alias "default".
-    genie({ spaces: { default: process.env.DATABRICKS_GENIE_SPACE_ID } }),
+    // AppKit's jobs plugin with Scan now's route only: its routes that read or cancel runs would run as the service principal.
+    scanNowJobs({}),
+    // The copilot's Genie space, under the alias "default". The plugin refuses to load without one.
+    ...(genieSpaceId ? [genie({ spaces: { default: genieSpaceId } })] : []),
   ],
   async onPluginsReady(appkit) {
+    const schema = schemaGate(appkit.lakebase.pool);
     try {
-      await ensureSchema(appkit.lakebase.pool);
+      await schema.ready();
     } catch (error) {
-      // Keep serving: Monitoring and the copilot work without Lakebase, and the job list routes report the error.
-      console.error("[lakebase] Could not create the watchdog_app schema:", error instanceof Error ? error.message : error);
+      // Keep serving: Monitoring and the copilot work without Lakebase, and the job list tries again on each request.
+      console.error(schemaErrorLog(error));
     }
     appkit.server.extend((app) => {
       registerIdentityRoutes(app);
       registerAppConfigRoute(app, appkit);
-      registerJobListRoutes(app, { pool: appkit.lakebase.pool });
-      registerCopilotRoutes(app, { conversations: genieConversations(appkit) });
+      registerJobListRoutes(app, { pool: appkit.lakebase.pool, ready: () => schema.ready() });
+      if (genieSpaceId) registerCopilotRoutes(app, { conversations: genieConversations(appkit, genieSpaceId) });
+      else registerCopilotNotSetUp(app);
       registerScanRoutes(app);
     });
   },
