@@ -40,3 +40,10 @@ export function formatUtc(iso: string): string {
   const d = new Date(ms);
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
 }
+
+/** "10:05 UTC" when `iso` is on the same UTC day as `earlier`, else the full formatUtc. For an end after a start. */
+export function formatUtcAfter(iso: string, earlier: string): string {
+  const full = formatUtc(iso);
+  const start = formatUtc(earlier);
+  return full !== "unknown" && full.slice(0, 10) === start.slice(0, 10) ? full.slice(11) : full;
+}

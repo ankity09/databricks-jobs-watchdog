@@ -17,8 +17,48 @@ declare module "@databricks/appkit-ui/react" {
         };
         result: unknown;
       };
+    job_checks: {
+        name: "job_checks";
+        parameters: {
+          /** STRING - use sql.string() */
+          catalog: SQLStringMarker;
+          /** STRING - use sql.string() */
+          schema: SQLStringMarker;
+          /** INT - use sql.int() */
+          refresh: SQLNumberMarker;
+          /** STRING - use sql.string() */
+          job_name: SQLStringMarker;
+        };
+        result: unknown;
+      };
+    job_history: {
+        name: "job_history";
+        parameters: {
+          /** STRING - use sql.string() */
+          catalog: SQLStringMarker;
+          /** STRING - use sql.string() */
+          schema: SQLStringMarker;
+          /** INT - use sql.int() */
+          refresh: SQLNumberMarker;
+          /** INT - use sql.int() */
+          hours: SQLNumberMarker;
+        };
+        result: unknown;
+      };
     job_live_status: {
         name: "job_live_status";
+        parameters: {
+          /** STRING - use sql.string() */
+          catalog: SQLStringMarker;
+          /** STRING - use sql.string() */
+          schema: SQLStringMarker;
+          /** INT - use sql.int() */
+          refresh: SQLNumberMarker;
+        };
+        result: unknown;
+      };
+    job_status: {
+        name: "job_status";
         parameters: {
           /** STRING - use sql.string() */
           catalog: SQLStringMarker;

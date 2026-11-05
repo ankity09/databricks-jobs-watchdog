@@ -4,11 +4,14 @@ import { genieConversations, registerCopilotRoutes } from "./copilot/routes";
 import { ensureSchema } from "./db/schema";
 import { registerIdentityRoutes } from "./identity";
 import { registerJobListRoutes } from "./joblist/routes";
+import { registerScanRoutes } from "./scan/routes";
 
 await createApp({
   plugins: [
     server({}),
-    analytics({}),
+    // A query's rows go to the browser as one SSE event, capped at 5 MiB by default. The history strip's
+    // 7 days of hourly scans is about 183 bytes per job and scan, over 5 MiB at about 170 jobs, so allow 16 MiB.
+    analytics({ streamConfig: { maxEventSize: 16 * 1024 * 1024 } }),
     lakebase({ pool: { max: 10 } }),
     jobs({}),
     // The copilot's Genie space (the app's genie-space resource), under the alias "default".
@@ -26,6 +29,7 @@ await createApp({
       registerAppConfigRoute(app, appkit);
       registerJobListRoutes(app, { pool: appkit.lakebase.pool });
       registerCopilotRoutes(app, { conversations: genieConversations(appkit) });
+      registerScanRoutes(app);
     });
   },
 });

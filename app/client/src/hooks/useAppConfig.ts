@@ -20,8 +20,11 @@ export interface AppConfigState {
   error: ApiError | null;
 }
 
-/** Where the Watchdog tables are (catalog, schema, region), and the app's names. */
-export function useAppConfig(): AppConfigState {
-  const { value, loading, error } = useCachedRequest(appConfigRequest);
+/**
+ * Where the Watchdog tables are (catalog, schema, region), and the app's names.
+ * When `retryKey` changes after a failed load, it loads again (see useCachedRequest).
+ */
+export function useAppConfig(retryKey?: unknown): AppConfigState {
+  const { value, loading, error } = useCachedRequest(appConfigRequest, retryKey);
   return { config: value, loading, error };
 }

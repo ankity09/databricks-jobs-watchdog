@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatAgo, formatUtc } from "./time";
+import { formatAgo, formatUtc, formatUtcAfter } from "./time";
 
 const now = new Date("2026-11-05T10:30:00Z");
 
@@ -37,5 +37,14 @@ describe("formatUtc", () => {
   });
   it("says unknown for a value that is not a time", () => {
     expect(formatUtc("")).toBe("unknown");
+  });
+});
+
+describe("formatUtcAfter", () => {
+  it("gives only the time when it is on the same UTC day as the earlier time", () => {
+    expect(formatUtcAfter("2026-11-05T04:00:33Z", "2026-11-05T04:00:02Z")).toBe("04:00 UTC");
+  });
+  it("gives the date too on another day", () => {
+    expect(formatUtcAfter("2026-11-06T00:10:00Z", "2026-11-05T23:50:00Z")).toBe("2026-11-06 00:10 UTC");
   });
 });
