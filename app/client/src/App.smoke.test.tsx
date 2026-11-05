@@ -2,9 +2,10 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter } from "react-router";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { routes } from "./routes";
+import { installRadixPolyfills } from "./test/mockApi";
 
 const PAGES = [
   ["/monitoring", "Monitoring"],
@@ -82,6 +83,8 @@ async function renderAt(path: string) {
 }
 
 describe("the app shell", () => {
+  // Radix's tooltips (the collapsed nav, the sheet) measure with a ResizeObserver, which jsdom lacks.
+  beforeAll(installRadixPolyfills);
   beforeEach(() => {
     window.localStorage.clear();
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(respond(urlOf(input)))));
