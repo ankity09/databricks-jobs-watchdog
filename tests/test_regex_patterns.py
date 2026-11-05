@@ -82,3 +82,10 @@ def test_the_java_check_gives_each_pattern_this_python_compiles_its_verdict(row)
     if compile_error(row["pattern"]) is not None:
         pytest.skip(f"Python {VERSION} refuses this pattern, so the loader never asks Java")
     assert java_regex_problem(row["pattern"]) == row["java"]
+
+
+def test_the_changelog_says_which_patterns_now_fail_to_load_and_why():
+    text = (Path(__file__).resolve().parents[1] / "CHANGELOG.md").read_text()
+    latest = text[text.index("\n## "):text.index("\n## ", text.index("\n## ") + 1)]
+    for words in ("(?P<name>...)", "\\N{...}", "fails to load", "regexp_like", "Java"):
+        assert words in latest, words

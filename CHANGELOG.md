@@ -10,6 +10,8 @@ What changed, for people who already run the Watchdog. After every pull: restart
 - **`teardown.sh -c <region file>`** now sends every call to the file's `deploy.workspace_host`, names that workspace in its prompts, and refuses a shell host or profile that points elsewhere.
 - **Notebook 02** installs `psycopg` only when it reads the job list from Lakebase, so a YAML load needs no PyPI. A failed install is a FAILED row in `config_loads`.
 - **The job list in the app** reads YAML the way the Python loader does (`y` and `n` are text, dates keep their text), stores names, owners and notes as the text the loader reads, and checks name patterns with Python's own rules for Python 3.10 to 3.14.
+- **Name patterns the system table scan cannot run are refused.** That scan matches names with Spark's `regexp_like`, which uses Java regex, and one pattern Java refuses stops it for every job. So the loader and the app now refuse patterns Python accepts and Java does not, such as a `(?P<name>...)` group, a `(?#...)` comment, the `a` flag, `{,2}`, or a repeated choice inside a look-behind. A YAML file with one now fails to load, and the message names the job, the field and the part to change, for example `job orders_ingest: job_name_regex '^orders_(?P<env>dev|prod)$' uses a (?P<name>...) group, which the system-table scan can't run`. [docs/data-model.md](docs/data-model.md) lists what Java refuses.
+- **`\N{...}` character names in patterns are refused**, as Java knows fewer names than Python. A YAML file with one now fails to load with `... uses a \N{...} character name, which the system-table scan may not know; write the character itself`.
 
 ## Multi-region deploys (2026-11-04)
 
