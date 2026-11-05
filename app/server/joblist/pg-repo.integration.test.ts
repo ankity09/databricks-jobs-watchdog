@@ -50,4 +50,20 @@ describe.skipIf(!enabled)("pg version repo (Lakebase)", () => {
     const stored = await repo.get(900001);
     expect(stored?.document.jobs[0].max_gap_minutes === 90 || stored?.document.jobs[0].max_gap_minutes === 120).toBe(true);
   }, 60_000);
+
+  it("lists the versions before a version, newest first", async () => {
+    const repo = createPgVersionRepo(pool);
+    await repo.transaction(async (tx) => {
+      for (const version of [900100, 900101, 900102]) {
+        await tx.insert({
+          version, document: { jobs: [{ job_name: "orders_ingest", max_gap_minutes: 60 }] }, savedBy: "test",
+          changeKind: "update", changeTarget: "job:orders_ingest", summary: `seed ${version}`,
+        });
+      }
+    });
+    const versions = (rows: { version: number }[]) => rows.map((row) => row.version);
+    expect(versions(await repo.list(1))).toEqual([900102]);
+    expect(versions(await repo.list(2, 900102))).toEqual([900101, 900100]);
+    expect(versions(await repo.list(1, 900101))).toEqual([900100]);
+  }, 60_000);
 });

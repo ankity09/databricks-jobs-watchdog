@@ -55,9 +55,14 @@ export function createPgVersionRepo(pool: LakebasePool): VersionRepo {
   return {
     latest: () => withRetry(() => selectOne(pool, "ORDER BY version DESC", [])),
     get: (version) => withRetry(() => selectOne(pool, "WHERE version = $1", [version])),
-    list: async (limit) => {
+    list: async (limit, before) => {
       const result = await withRetry(() =>
-        pool.query(`SELECT ${COLUMNS} FROM watchdog_app.job_list_versions ORDER BY version DESC LIMIT $1`, [limit]));
+        before === undefined
+          ? pool.query(`SELECT ${COLUMNS} FROM watchdog_app.job_list_versions ORDER BY version DESC LIMIT $1`, [limit])
+          : pool.query(
+            `SELECT ${COLUMNS} FROM watchdog_app.job_list_versions WHERE version < $2 ORDER BY version DESC LIMIT $1`,
+            [limit, before],
+          ));
       return result.rows.map(toRow);
     },
     transaction: async <T>(fn: (tx: VersionTx) => Promise<T>): Promise<T> => {

@@ -18,7 +18,7 @@ import {
   TableRow,
 } from "@databricks/appkit-ui/react";
 import { CircleAlert, History, RotateCw } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import type { ChangeKind, VersionSummary } from "../../../../shared/joblist/types";
 import { type ApiError, toApiError } from "../../lib/api";
@@ -29,7 +29,8 @@ import { PageHeader } from "../../layout/PageHeader";
 import { ConfigBanner } from "./ConfigBanner";
 import { VersionDiffSheet } from "./VersionDiffSheet";
 
-const LIMIT = 50;
+/** Versions load 50 at a time: the newest first, then older ones on request. */
+const PAGE = 50;
 
 const KIND_STYLE: Record<ChangeKind, string> = {
   import: "border-foreground/20 bg-background text-foreground",
@@ -40,31 +41,80 @@ const KIND_STYLE: Record<ChangeKind, string> = {
 };
 
 interface VersionsState {
+  /** Newest first: the newest page, and the older pages loaded since. */
   versions: VersionSummary[] | null;
+  /** The newest page did not load. */
   error: ApiError | null;
+  /** Older versions can exist past the oldest one shown. */
+  more: boolean;
+  older: { loading: boolean; error: ApiError | null };
 }
 
-/** The newest versions, newest first. A failed reload keeps the versions already shown. */
-function useVersions(): VersionsState & { reload: () => Promise<void> } {
-  const [state, setState] = useState<VersionsState>({ versions: null, error: null });
+const OLDER_IDLE = { loading: false, error: null };
+
+/** Versions count up from 1, so a full page whose oldest version is above 1 has older ones behind it. */
+function moreAfter(page: VersionSummary[]): boolean {
+  const oldest = page[page.length - 1];
+  return page.length === PAGE && oldest !== undefined && oldest.version > 1;
+}
+
+/** The newest page joined to the versions shown when the two meet, so a refresh keeps the older pages; else the newest page alone. */
+function withNewest(current: VersionsState, page: VersionSummary[]): VersionsState {
+  const shown = current.versions ?? [];
+  const newestShown = shown[0]?.version;
+  const oldestNew = page[page.length - 1]?.version;
+  if (newestShown === undefined || oldestNew === undefined || !moreAfter(page) || oldestNew > newestShown) {
+    return { versions: page, error: null, more: moreAfter(page), older: OLDER_IDLE };
+  }
+  const byVersion = new Map(shown.map((v) => [v.version, v]));
+  for (const v of page) byVersion.set(v.version, v);
+  return { ...current, versions: [...byVersion.values()].sort((a, b) => b.version - a.version), error: null };
+}
+
+/** The saved versions, newest first, 50 at a time. A failed load keeps the versions already shown. */
+function useVersions() {
+  const [state, setState] = useState<VersionsState>({ versions: null, error: null, more: false, older: OLDER_IDLE });
   const reload = useCallback(async () => {
     try {
-      const versions = await listVersions(LIMIT);
-      setState({ versions, error: null });
+      const page = await listVersions(PAGE);
+      setState((current) => withNewest(current, page));
     } catch (error) {
-      setState((current) => ({ versions: current.versions, error: toApiError(error) }));
+      setState((current) => ({ ...current, error: toApiError(error) }));
+    }
+  }, []);
+  const loadOlder = useCallback(async (before: number) => {
+    setState((current) => ({ ...current, older: { loading: true, error: null } }));
+    try {
+      const page = await listVersions(PAGE, before);
+      setState((current) => {
+        const shown = current.versions ?? [];
+        // A refresh can replace the versions meanwhile: add the page only where it continues them.
+        if (shown[shown.length - 1]?.version !== before) return { ...current, older: OLDER_IDLE };
+        return { ...current, versions: [...shown, ...page], more: moreAfter(page), older: OLDER_IDLE };
+      });
+    } catch (error) {
+      setState((current) => ({ ...current, older: { loading: false, error: toApiError(error) } }));
     }
   }, []);
   useEffect(() => {
     void reload();
   }, [reload]);
-  return { ...state, reload };
+  return { ...state, reload, loadOlder };
 }
 
 /** Every saved version of the job list: who saved it, when, and what changed. */
 export function ChangeLogPage() {
-  const { versions, error, reload } = useVersions();
+  const { versions, error, more, older, reload, loadOlder } = useVersions();
   const [open, setOpen] = useState<VersionSummary | null>(null);
+  // After older versions load, focus moves to the first of them (its index in the table).
+  const table = useRef<HTMLDivElement>(null);
+  const focusAt = useRef<number | null>(null);
+  useEffect(() => {
+    const index = focusAt.current;
+    if (index === null || versions === null || versions.length <= index) return;
+    focusAt.current = null;
+    table.current?.querySelectorAll<HTMLButtonElement>("button[data-summary]")[index]?.focus();
+  }, [versions]);
 
   let body: ReactNode;
   if (versions === null) {
@@ -95,7 +145,7 @@ export function ChangeLogPage() {
             The newest versions did not load. {error.message}
           </p>
         ) : null}
-        <div className="overflow-hidden rounded-md border border-border">
+        <div ref={table} className="overflow-hidden rounded-md border border-border">
           <Table className="text-[13px]">
             <TableHeader className="bg-muted/50">
               <TableRow className="hover:bg-transparent">
@@ -117,6 +167,7 @@ export function ChangeLogPage() {
                   <TableCell className="max-w-0 px-3 py-2">
                     <button
                       type="button"
+                      data-summary
                       className="block max-w-full truncate rounded-xs text-left text-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
                       title={version.summary}
                       onClick={(event) => {
@@ -140,7 +191,32 @@ export function ChangeLogPage() {
             </TableBody>
           </Table>
         </div>
-        {versions.length === LIMIT ? <p className="text-xs text-muted-foreground">The newest {LIMIT} versions.</p> : null}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          {more ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={older.loading}
+              onClick={() => {
+                const oldest = versions[versions.length - 1];
+                if (!oldest) return;
+                focusAt.current = versions.length;
+                void loadOlder(oldest.version);
+              }}
+            >
+              {older.loading ? "Loading older versions..." : "Load older versions"}
+            </Button>
+          ) : null}
+          <p className="text-xs text-muted-foreground" aria-live="polite">
+            {more ? `The newest ${versions.length} versions.` : versions.length > PAGE ? `All ${versions.length} versions.` : ""}
+          </p>
+          {older.error ? (
+            <p role="alert" className="flex items-center gap-1.5 text-xs text-destructive">
+              <CircleAlert className="size-3.5" aria-hidden="true" />
+              Older versions did not load. {older.error.message}
+            </p>
+          ) : null}
+        </div>
       </section>
     );
   }

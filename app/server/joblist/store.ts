@@ -31,7 +31,8 @@ export interface VersionRepo {
   transaction<T>(fn: (tx: VersionTx) => Promise<T>): Promise<T>;
   latest(): Promise<VersionRow | null>;
   get(version: number): Promise<VersionRow | null>;
-  list(limit: number): Promise<VersionRow[]>;
+  /** The newest `limit` versions, newest first; with `before`, only the versions older than it. */
+  list(limit: number, before?: number): Promise<VersionRow[]>;
 }
 
 export class ConflictError extends Error {
@@ -62,7 +63,7 @@ export class NotFoundError extends Error {
 export interface JobListStore {
   latest(): Promise<VersionRow | null>;
   get(version: number): Promise<VersionRow | null>;
-  list(limit: number): Promise<VersionRow[]>;
+  list(limit: number, before?: number): Promise<VersionRow[]>;
   saveChange(args: { baseVersion: number | null; change: Change; savedBy: string }): Promise<VersionRow>;
   importDocument(args: { baseVersion: number | null; document: JobListDocument; savedBy: string }): Promise<VersionRow>;
   restore(args: { version: number; baseVersion: number | null; savedBy: string }): Promise<VersionRow>;
@@ -77,7 +78,7 @@ export function createJobListStore(repo: VersionRepo): JobListStore {
   return {
     latest: () => repo.latest(),
     get: (version) => repo.get(version),
-    list: (limit) => repo.list(limit),
+    list: (limit, before) => repo.list(limit, before),
 
     saveChange: ({ baseVersion, change, savedBy }) =>
       repo.transaction(async (tx) => {

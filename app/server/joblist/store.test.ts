@@ -99,6 +99,20 @@ describe("importDocument", () => {
   });
 });
 
+describe("list", () => {
+  it("lists the newest versions first, or the ones before a version", async () => {
+    const { store } = setup();
+    await store.saveChange({ baseVersion: null, change: add("a"), savedBy: "me" });
+    await store.saveChange({ baseVersion: 1, change: add("b"), savedBy: "me" });
+    await store.saveChange({ baseVersion: 2, change: add("c"), savedBy: "me" });
+    const versions = (rows: { version: number }[]) => rows.map((row) => row.version);
+    expect(versions(await store.list(2))).toEqual([3, 2]);
+    expect(versions(await store.list(2, 3))).toEqual([2, 1]);
+    expect(versions(await store.list(5, 2))).toEqual([1]);
+    expect(await store.list(5, 1)).toEqual([]);
+  });
+});
+
 describe("restore", () => {
   it("is not found for a missing version", async () => {
     const { store } = setup();
