@@ -1,6 +1,6 @@
 # Architecture
 
-The Watchdog is a job that runs in one Unity Catalog workspace per cloud region. Each scan reads two sources, checks them against your list of monitored jobs, and writes the results into one table, `findings`. A scheduled scan runs every 20 minutes by default, and it starts paused. Each scheduled run first brings the tables and the view up to date. A dashboard reads the view `findings_latest`, which holds the newest scan from each source, judged by the time each scan first wrote. This page walks through the two diagrams and the timing details that shape the checks.
+The Watchdog is a job that runs in one Unity Catalog workspace per cloud region. Each scan reads two sources, checks them against your list of monitored jobs, and writes the results into one table, `findings`. A scheduled scan runs every 20 minutes by default, and it starts paused. Each scheduled run first brings the tables and the view up to date. A dashboard and the Watchdog app read the view `findings_latest`, which holds the newest scan from each source, judged by the time each scan first wrote. This page walks through the two diagrams and the timing details that shape the checks.
 
 ## Diagram 1: Unity Catalog, system tables and the Watchdog identity
 
@@ -52,7 +52,7 @@ This is the best source for live checks: a task that failed inside a run that is
 
 **Step 3: check and write.** The checks compare both sources with your config: the jobs to watch, their limits, their owners, the dependency map and the environment labels. Each check writes one row to `findings` for each job it applies to, including HEALTHY rows, so you can see that a check ran and passed. [data-model.md](data-model.md) explains each column.
 
-**Alerts and the app.** Phases 3 and 4 add Databricks SQL alerts and a Databricks App, both reading `findings`. See [roadmap.md](roadmap.md).
+**The app.** The Watchdog app is the box at the lower right of the diagram, labeled Phase 4. The diagram was drawn before the app was built, so read the box as a plan: the app now has the health view, the impact of a failure, the coverage gaps, the history strip and plain-language questions, but not incidents, acknowledgements or triage notes (see [roadmap.md](roadmap.md#phase-4-the-watchdog-app-built)). It reads `findings_latest` and `findings` through a SQL warehouse, as the person using it, so Monitoring shows the current status of every job and a history strip for each. It also edits your list of monitored jobs, which is the config that step 3 checks against. The list is saved in a Lakebase project, as versions. When `scan.config_source` is `lakebase`, the `load_config` task of each scan (notebook 02, after notebook 01 has brought the tables up to date) reads the newest version and fills the same four config tables it fills from a YAML file, so steps 1 to 3 do not change. Notebook 02 also adds a row to `config_loads` on every run, and the app reads that table to show which version the scan uses. The app's copilot is a Genie agent that answers questions over the same tables, and Scan now starts the scan job. [app.md](app.md) describes the app. Alerts (Phase 3) will read `findings` as well. See [roadmap.md](roadmap.md).
 
 **Your own checks.** Notebook 09 adds rows the same way, with `source` = `CUSTOM`. See [The dashboard and your own checks](#the-dashboard-and-your-own-checks).
 
@@ -61,7 +61,7 @@ This is the best source for live checks: a task that failed inside a run that is
 The `watchdog_scan` job runs every 20 minutes in UTC, and it starts paused. Each run has four tasks, in order:
 
 1. `create_tables` (notebook 01) creates what is missing, adds new columns after an upgrade, and makes the view `findings_latest` current. Tables and views that are already current are left alone.
-2. `load_config` (notebook 02) reloads your monitored-jobs file into the config tables.
+2. `load_config` (notebook 02) reloads your monitored-jobs list into the config tables, from the YAML file or, with `scan.config_source: lakebase`, from the newest version saved in the Watchdog app. It records the load in `config_loads`.
 3. `scan_system_tables` (notebook 05) writes the system table findings.
 4. `scan_jobs_api` (notebook 06) writes the Jobs API findings.
 
@@ -104,8 +104,8 @@ Each source covers the other's blind spot. A job created ten minutes ago is miss
 
 ## How data flows
 
-1. You keep a monitored-jobs YAML file outside the Git folder: the jobs to watch, a name pattern (`job_name_regex`) for each, an optional exclusion pattern, limits, severity, owner and dependencies. Optional sections add shared `defaults`, `workspaces` that label each workspace with an environment, and, on any job, `environments` that change its settings in one environment.
-2. Notebook `02_load_config` checks the file and loads it into `monitored_jobs`, `job_dependencies`, `monitored_workspaces` and `monitored_job_environments` through four temp views and the files in `sql/config`. Both scans read these tables, so they always use the same config.
+1. You keep your list of monitored jobs in a YAML file outside the Git folder, or edit it in the Watchdog app, which saves it in Lakebase (see [app.md](app.md)). The list holds: the jobs to watch, a name pattern (`job_name_regex`) for each, an optional exclusion pattern, limits, severity, owner and dependencies. Optional sections add shared `defaults`, `workspaces` that label each workspace with an environment, and, on any job, `environments` that change its settings in one environment.
+2. Notebook `02_load_config` checks the list (from the file, or from the newest app version) and loads it into `monitored_jobs`, `job_dependencies`, `monitored_workspaces` and `monitored_job_environments` through four temp views and the files in `sql/config`. Both scans read these tables, so they always use the same config.
 3. Notebook `05_scan_system_tables` runs `sql/scan/21_system_table_findings.sql`. The query reads the config tables, the system tables, and the temp view `watchdog_workspace_names` (workspace names and URLs). It also takes each workspace's environment label from `monitored_workspaces`, and each job's settings for that environment from `monitored_job_environments`. Its rows go into the temp view `watchdog_new_findings`, and `sql/scan/30_merge_findings.sql` adds them to `findings`.
 4. Notebook `06_scan_jobs_api` reads the config tables, chooses the workspaces to visit, and calls the Jobs API through `jobs_watchdog/jobs_api.py`. `jobs_watchdog/findings.py` fills the columns that are the same for the whole scan (scan ID, time, region, account), plus severity and owner for each row's environment, and affected jobs. The rows go through the same temp view and merge file.
 5. Notebook `07_validate_phase_1` checks the result.

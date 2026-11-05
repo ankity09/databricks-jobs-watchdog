@@ -264,13 +264,25 @@ Open each notebook in `notebooks/`, attach it to serverless compute, run its fir
 |---|---|---|
 | `00_check_access` | checks system table access, the region's workspaces and the Jobs API | every line PASS, and the workspace names you expect in section 3 |
 | `01_create_tables` | creates or upgrades the schema, the six tables and the view `findings_latest` | seven `exists: True` lines, a `view findings_latest:` line that says created, replaced or current, and the columns it added, if any |
-| `02_load_config` | loads your YAML file into the config tables, shows what each job matches | every job matches a real job where you expect it, with `checked_here` true where it should be checked |
+| `02_load_config` | loads your job list (the YAML file, or the newest version saved in the Watchdog app) into the config tables, records the load in `config_loads`, and shows what each job matches | every job matches a real job where you expect it, with `checked_here` true where it should be checked |
 | `05_scan_system_tables` | writes the system table findings | one row per check for each matched job |
 | `06_scan_jobs_api` | writes the Jobs API findings | rows for each matched job |
 | `07_validate_phase_1` | checks the result | five PASS lines |
 | `08_create_dashboard` (optional) | creates or updates the "Watchdog findings" dashboard and publishes it | a `Dashboard ready` line with its link |
 | `09_custom_check_example` (optional) | probes the services in its list and writes `CUSTOM` rows | one row per service, or a skip line for each placeholder host |
 | `10_delete_old_findings` (optional) | deletes scans older than `retention_days`, keeping each source's newest; the `watchdog_cleanup` job runs it daily | a `Deleted N rows` line, then the scans left per source |
+| `11_grant_app_access` (optional) | after a teardown and a new deploy, gives the app's new service principal access to the job list kept in Lakebase; the `watchdog_app_access` job runs it | one line that says what it did ([Deploy again after a teardown](multi-region.md#deploy-again-after-a-teardown)) |
+
+**Notebook 02's input boxes.** Besides `catalog`, `schema` and `scan_id`, it has `monitored_jobs_path` and four boxes that choose where the job list comes from:
+
+| Box | Default | Meaning |
+|---|---|---|
+| `config_source` | `yaml` | `yaml` reads the file at `monitored_jobs_path`. `lakebase` reads the newest version saved in the Watchdog app. Any other value stops the notebook. |
+| `lakebase_project_id` | `jobs-watchdog` | the Lakebase project that holds the app's job list (`app.lakebase_project_id`) |
+| `lakebase_branch` | `production` | the project's branch |
+| `lakebase_database` | `watchdog` | the Postgres database in that branch |
+
+The three Lakebase boxes matter only when `config_source` is `lakebase`. In that mode the notebook connects as the identity that runs it, so that identity needs access to the app's Lakebase schema (the identity that deployed the bundle has it), and it installs the `psycopg` package from PyPI or your package mirror if the compute lacks it. A list that is empty, breaks a rule, or cannot be read fails the load. The failure is a `FAILED` row in `config_loads`, the config tables keep their last good rows, and the scans go on with those. The scheduled `watchdog_scan` takes `config_source` and the project from `accelerator.local.yaml` (`scan.config_source` and `app.lakebase_project_id`), and the branch and database from the bundle's defaults.
 
 Two read-only notebooks in `notebooks/explore` show the raw data behind a finding. They are not part of the main path, and no job runs them; run them by hand when you want to look:
 
@@ -313,7 +325,7 @@ The sample jobs tag themselves with `code_version: <branch>@<commit>`, using `bu
 `watchdog_scan` is the scheduled scan. Every 20 minutes, in UTC, it runs four tasks in order:
 
 1. `create_tables` (notebook 01) creates what is missing, adds new columns after an upgrade, and makes the view `findings_latest` current. Tables and views that are already current are left alone.
-2. `load_config` (notebook 02) reloads your monitored-jobs file into the config tables.
+2. `load_config` (notebook 02) reloads your job list, from the YAML file or the Watchdog app, into the config tables.
 3. `scan_system_tables` (notebook 05) writes the system table findings.
 4. `scan_jobs_api` (notebook 06) writes the Jobs API findings.
 
