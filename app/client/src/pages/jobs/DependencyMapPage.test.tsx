@@ -72,6 +72,36 @@ function box(name: RegExp | string) {
   return screen.findByRole("button", { name });
 }
 
+/** Numbers in a CSS transform, such as translate(10px,20px) scale(0.9). */
+function numbersIn(transform: string): number[] {
+  return (transform.match(/-?\d+(\.\d+)?/g) ?? []).map(Number);
+}
+
+/** Where the boxes are on screen: their flow positions and sizes, through the viewport's pan and zoom. */
+function boxesOnScreen(container: HTMLElement) {
+  const [x, y, zoom] = numbersIn(container.querySelector<HTMLElement>(".react-flow__viewport")?.style.transform ?? "");
+  const rects = Array.from(container.querySelectorAll<HTMLElement>(".react-flow__node")).map((node) => {
+    const [left, top] = numbersIn(node.style.transform);
+    return { left, top, right: left + parseFloat(node.style.width), bottom: top + parseFloat(node.style.height) };
+  });
+  return {
+    zoom,
+    top: y + Math.min(...rects.map((r) => r.top)) * zoom,
+    bottom: y + Math.max(...rects.map((r) => r.bottom)) * zoom,
+    left: x + Math.min(...rects.map((r) => r.left)) * zoom,
+    right: x + Math.max(...rects.map((r) => r.right)) * zoom,
+  };
+}
+
+/** Gives the map's drawing area a size, as the browser would after a layout change, and tells React Flow. */
+function resizeMap(container: HTMLElement, width: number, height: number) {
+  const renderer = container.querySelector<HTMLElement>(".react-flow__renderer");
+  if (!renderer) throw new Error("The map has not rendered.");
+  renderer.style.width = `${width}px`;
+  renderer.style.height = `${height}px`;
+  fireEvent(window, new Event("resize"));
+}
+
 describe("DependencyMapPage", () => {
   beforeAll(() => mockReactFlow());
   afterEach(() => vi.unstubAllGlobals());
@@ -127,6 +157,137 @@ describe("DependencyMapPage", () => {
     expect(ingest).toHaveAttribute("data-highlight", "selected");
     await user.keyboard("{Escape}");
     expect(ingest).toHaveAttribute("data-highlight", "none");
+  });
+
+  it("shows which link has keyboard focus, in the focus color and a wider line", async () => {
+    renderMap();
+    await box("orders_enrich depends on orders_ingest (job link)");
+    const links = screen.getAllByRole("button", { name: / link\)$/ });
+    expect(links).toHaveLength(7);
+    // React Flow's own focus style loses to the line's color classes, so each link brings its own.
+    for (const link of links) {
+      expect(link).toHaveClass("group");
+      expect(link.querySelector(".react-flow__edge-path")).toHaveClass("group-focus-visible:stroke-ring", "group-focus-visible:[stroke-width:2.25]");
+    }
+  });
+
+  it("closes a link's menu with Escape without clearing the selected box, and gives focus back to the link", async () => {
+    const user = userEvent.setup();
+    renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    fireEvent.click(ingest);
+    expect(ingest).toHaveAttribute("data-highlight", "selected");
+    const link = screen.getByRole("button", { name: "orders_enrich depends on orders_ingest (job link)" });
+    link.focus();
+    await user.keyboard("{Enter}");
+    const menu = await screen.findByRole("dialog", { name: "orders_enrich depends on orders_ingest" });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(ingest).toHaveAttribute("data-highlight", "selected");
+    await waitFor(() => expect(link).toHaveFocus());
+  });
+
+  it("gives focus back to the link when its menu's Close is pressed", async () => {
+    const user = userEvent.setup();
+    renderMap();
+    const link = await box("orders_enrich depends on orders_ingest (job link)");
+    link.focus();
+    await user.keyboard("{Enter}");
+    const menu = await screen.findByRole("dialog", { name: "orders_enrich depends on orders_ingest" });
+    await user.click(within(menu).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(link).toHaveFocus());
+  });
+
+  it("after Remove link, gives focus to the box at the link's upstream end", async () => {
+    const user = userEvent.setup();
+    renderMap();
+    const link = await box("orders_enrich depends on orders_ingest (job link)");
+    link.focus();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("dialog", { name: "orders_enrich depends on orders_ingest" });
+    await user.tab();
+    await user.tab();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "orders_enrich depends on orders_ingest (job link)" })).toBeNull());
+    await waitFor(() => expect(screen.getByRole("button", { name: "orders_ingest (Unknown, switched off)" })).toHaveFocus());
+  });
+
+  it("after Remove link, gives focus to the job when the upstream box goes with the link", async () => {
+    const user = userEvent.setup();
+    renderMap();
+    // kafka has this one link, so its box goes too.
+    fireEvent.click(await box("orders_ingest depends on kafka (service link)"));
+    const menu = await screen.findByRole("dialog", { name: "orders_ingest depends on kafka" });
+    await user.click(within(menu).getByRole("button", { name: "Remove link" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "kafka (service)" })).toBeNull());
+    await waitFor(() => expect(screen.getByRole("button", { name: "orders_ingest (Unknown, switched off)" })).toHaveFocus());
+  });
+
+  it("keeps focus in the side panel after a link is removed there", async () => {
+    const user = userEvent.setup();
+    renderMap();
+    fireEvent.click(await box("orders_ingest (Unknown, switched off)"));
+    const panel = screen.getByRole("region", { name: "orders_ingest" });
+    await user.click(within(panel).getByRole("button", { name: "Remove the link: orders_enrich depends on orders_ingest (job link)" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "orders_enrich depends on orders_ingest (job link)" })).toBeNull());
+    await waitFor(() => expect(panel).toHaveFocus());
+  });
+
+  it("gives focus back to the box when its side panel closes, with the button or with Escape", async () => {
+    const user = userEvent.setup();
+    renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    fireEvent.click(ingest);
+    await user.click(within(screen.getByRole("region", { name: "orders_ingest" })).getByRole("button", { name: "Clear the selection" }));
+    await waitFor(() => expect(ingest).toHaveFocus());
+
+    fireEvent.click(ingest);
+    within(screen.getByRole("region", { name: "orders_ingest" })).getByRole("button", { name: "Clear the selection" }).focus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("region", { name: "orders_ingest" })).toBeNull();
+    await waitFor(() => expect(ingest).toHaveFocus());
+  });
+
+  it("gives focus back to Add link and Add service when what they opened closes", async () => {
+    const user = userEvent.setup();
+    renderMap();
+    await box("watchdog_demo_slow (Unknown)");
+    const addService = screen.getByRole("button", { name: "Add service" });
+    await user.click(addService);
+    await screen.findByRole("dialog", { name: "Add a service" });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(addService).toHaveFocus());
+
+    const addLink = screen.getByRole("button", { name: "Add link" });
+    await user.click(addLink);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText("Pick the upstream job or service.")).toBeNull();
+    await waitFor(() => expect(addLink).toHaveFocus());
+
+    await user.click(addLink);
+    fireEvent.click(screen.getByRole("button", { name: "watchdog_demo_slow (Unknown)" }));
+    fireEvent.click(screen.getByRole("button", { name: "watchdog_demo_retries (Unknown)" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a link" });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(addLink).toHaveFocus());
+  });
+
+  it("fits the map again when its area changes size, clear of the legend above and the controls and minimap below", async () => {
+    const { container } = renderMap();
+    await box("watchdog_demo_fails (Failed)");
+    resizeMap(container, 1200, 800);
+    await waitFor(() => expect(boxesOnScreen(container).zoom).toBeGreaterThan(0.5));
+    let shown = boxesOnScreen(container);
+    expect(shown.top).toBeGreaterThanOrEqual(84);
+    expect(shown.bottom).toBeLessThanOrEqual(800 - 180);
+    expect(shown.left).toBeGreaterThanOrEqual(24);
+    expect(shown.right).toBeLessThanOrEqual(1200 - 24);
+
+    // An alert above the map takes 150 pixels of its height.
+    resizeMap(container, 1200, 650);
+    await waitFor(() => expect(boxesOnScreen(container).bottom).toBeLessThanOrEqual(650 - 180));
+    shown = boxesOnScreen(container);
+    expect(shown.top).toBeGreaterThanOrEqual(84);
   });
 
   it("adds a link: pick the upstream box, then the downstream box, then the type", async () => {

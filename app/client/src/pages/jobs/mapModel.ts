@@ -1,9 +1,6 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { DependencyType } from "../../../../shared/joblist/types";
 import type { EdgeLine, GraphEdge, GraphNode } from "../../lib/graph";
-
-// A box is a <button> with no handler of its own: its click, from the mouse or
-// from Enter and Space, reaches the page through React Flow's onNodeClick.
 import type { Status, StatusTone } from "../../lib/status";
 
 /** How a box looks right now: selected, affected by the selection, dimmed, or its state while picking a link. */

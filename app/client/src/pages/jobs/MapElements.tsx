@@ -121,7 +121,13 @@ export function SectionNode({ data }: NodeProps<SectionFlowNode>) {
   return <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{data.text}</p>;
 }
 
-/** A link: a thin neutral curve with an arrow at the downstream end, dashed for child jobs, dotted for services. */
+/**
+ * A link: a thin neutral curve with an arrow at the downstream end, dashed for
+ * child jobs, dotted for services. A link that has keyboard focus turns the
+ * focus color and wider, even when dimmed: its <g> is the "group" (the edge's
+ * className), and these classes beat React Flow's own focus style, which sits
+ * in the components layer.
+ */
 export function LinkEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, selected, interactionWidth }: EdgeProps<LinkFlowEdge>) {
   const [path] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
   const highlight = data?.highlight ?? "none";
@@ -137,6 +143,7 @@ export function LinkEdge({ id, sourceX, sourceY, targetX, targetY, sourcePositio
         LINE_DASH[data?.link.line ?? "solid"],
         accent ? "stroke-primary [stroke-width:1.75]" : "stroke-muted-foreground/55 [stroke-width:1.25]",
         highlight === "dimmed" && "opacity-25",
+        "group-focus-visible:stroke-ring group-focus-visible:opacity-100 group-focus-visible:[stroke-width:2.25]",
       )}
     />
   );

@@ -16,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@databricks/appkit-ui/react";
-import { type FormEvent, useId, useMemo, useState } from "react";
+import { type FormEvent, type RefObject, useId, useMemo, useState } from "react";
 import { parentJobs } from "../../../../shared/joblist/impact";
 import { type Change, type DependencyType, type JobListDocument, type RuleIssue, dependencyKey } from "../../../../shared/joblist/types";
 import { type NodeKind, changeIssues, linkChange } from "../../lib/graph";
@@ -60,6 +60,15 @@ function linkExists(document: JobListDocument, change: Change): boolean {
   return (document.dependencies ?? []).some((d) => dependencyKey(d) === key);
 }
 
+/** Gives focus to `target` when a dialog closes. Radix gives it back only to a trigger, and these dialogs open from the map's own buttons. */
+function returnFocusTo(target: RefObject<HTMLElement | null> | undefined) {
+  return (event: Event) => {
+    if (!target?.current) return;
+    event.preventDefault();
+    target.current.focus();
+  };
+}
+
 export interface AddLinkDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -69,14 +78,16 @@ export interface AddLinkDialogProps {
   target: LinkEnd | null;
   document: JobListDocument;
   saving: boolean;
+  /** Where focus goes when the dialog closes, such as the button that started adding the link. */
+  returnFocus?: RefObject<HTMLElement | null>;
   onSave: (change: Change) => void;
 }
 
 /** Choose the type of a link picked on the map: job or child job between two jobs; a service link from a service. */
-export function AddLinkDialog({ open, onOpenChange, source, target, document, saving, onSave }: AddLinkDialogProps) {
+export function AddLinkDialog({ open, onOpenChange, source, target, document, saving, returnFocus, onSave }: AddLinkDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg" onCloseAutoFocus={returnFocusTo(returnFocus)}>
         <DialogHeader>
           <DialogTitle>Add a link</DialogTitle>
           <DialogDescription>
@@ -192,14 +203,16 @@ export interface AddServiceDialogProps {
   /** The job to suggest, such as the job selected on the map. */
   defaultJob: string | null;
   saving: boolean;
+  /** Where focus goes when the dialog closes, such as the button that opened it. */
+  returnFocus?: RefObject<HTMLElement | null>;
   onSave: (change: Change) => void;
 }
 
 /** Add a service: its name, then the job that needs it. A service exists on the map through its links. */
-export function AddServiceDialog({ open, onOpenChange, document, defaultJob, saving, onSave }: AddServiceDialogProps) {
+export function AddServiceDialog({ open, onOpenChange, document, defaultJob, saving, returnFocus, onSave }: AddServiceDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg" onCloseAutoFocus={returnFocusTo(returnFocus)}>
         <DialogHeader>
           <DialogTitle>Add a service</DialogTitle>
           <DialogDescription>

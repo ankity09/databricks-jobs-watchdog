@@ -20,12 +20,14 @@ import {
   Controls,
   type EdgeChange,
   type EdgeTypes,
+  type FitViewOptions,
   MiniMap,
   type NodeTypes,
   Panel,
   Position,
   ReactFlow,
   useReactFlow,
+  useStore,
 } from "@xyflow/react";
 import { Link2, Network, RotateCw, Server, X } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -56,7 +58,12 @@ import {
 const NODE_TYPES: NodeTypes = { job: JobNode, service: ServiceNode, section: SectionNode };
 const EDGE_TYPES: EdgeTypes = { link: LinkEdge };
 const EMPTY_COPY = "No links yet. Add a link, or import a job list that has dependencies.";
-const FIT_OPTIONS = { padding: 0.06, maxZoom: 1.1 };
+/**
+ * How the view fits the boxes: clear of the legend at the top, which ends about
+ * 72 pixels from the edge, and of the minimap and the controls at the bottom,
+ * where the minimap starts about 166 pixels from the edge.
+ */
+const FIT_OPTIONS: FitViewOptions = { padding: { top: "84px", right: "24px", bottom: "180px", left: "24px" }, maxZoom: 1.1 };
 
 /** React Flow's keyboard hints, without the delete key, which the map does not use. */
 const ARIA_LABELS = {
@@ -86,13 +93,51 @@ function rect(x: number, y: number, width = 0, height = 0): DOMRect {
   return { x, y, width, height, top: y, left: x, right: x + width, bottom: y + height, toJSON: () => ({ x, y, width, height }) };
 }
 
+/** A link's or a box's element on the map, by the id React Flow puts in data-id. */
+function mapElement(container: HTMLElement | null, kind: "edge" | "node", id: string): HTMLElement | SVGElement | null {
+  return container?.querySelector<HTMLElement | SVGElement>(`.react-flow__${kind}[data-id="${id.replace(/["\\]/g, "\\$&")}"]`) ?? null;
+}
+
 /** Where a link is on screen, so its menu opens next to it and follows a pan or zoom. */
 function edgeRect(container: HTMLElement | null, edgeId: string, fallback: DOMRect): DOMRect {
-  const selector = `.react-flow__edge[data-id="${edgeId.replace(/["\\]/g, "\\$&")}"]`;
-  const element = container?.querySelector(selector);
+  const element = mapElement(container, "edge", edgeId);
   if (!element) return fallback;
   const box = element.getBoundingClientRect();
   return rect(box.x + box.width / 2, box.y + box.height / 2);
+}
+
+/**
+ * Where focus goes when what had it goes away: a link (its menu closed), a box,
+ * the side panel, or the map itself. Radix gives focus back only to a trigger,
+ * and the map's menu and panel open without one.
+ */
+type FocusTarget = { kind: "link" | "box"; id: string } | { kind: "panel" } | { kind: "map" };
+
+function focusOn(container: HTMLElement | null, panel: HTMLElement | null, target: FocusTarget): void {
+  let element: HTMLElement | SVGElement | null = null;
+  if (target.kind === "link") element = mapElement(container, "edge", target.id);
+  else if (target.kind === "box") element = mapElement(container, "node", target.id)?.querySelector("button") ?? null;
+  else if (target.kind === "panel") element = panel;
+  (element ?? container)?.focus();
+}
+
+type Graph = ReturnType<typeof buildGraph>;
+
+/**
+ * Where focus goes after a link is removed: the box at its upstream end, else
+ * the one at its downstream end, whichever stays on the map without the link
+ * (a service, or a job that is not in the job list, goes with its last link).
+ */
+function focusAfterRemoving(graph: Graph, edgeId: string): FocusTarget {
+  const edge = graph.edges.find((e) => e.id === edgeId);
+  const id = edge ? [edge.source, edge.target].find((end) => staysWithout(graph, edgeId, end)) : undefined;
+  return id === undefined ? { kind: "map" } : { kind: "box", id };
+}
+
+/** Whether a box stays on the map without a link: a job in the job list does, anything else only while another link has it. */
+function staysWithout(graph: Graph, edgeId: string, nodeId: string): boolean {
+  if (graph.nodes.some((n) => n.id === nodeId && n.kind === "job" && n.listed)) return true;
+  return graph.edges.some((e) => e.id !== edgeId && (e.source === nodeId || e.target === nodeId));
 }
 
 function nodeHighlight(box: GraphNode, link: LinkMode, selected: GraphNode | null, downstream: Downstream | null): NodeHighlight {
@@ -186,13 +231,29 @@ export function DependencyMapPage() {
   const [problem, setProblem] = useState<Problem | null>(null);
 
   const mapRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const bannerRef = useRef<HTMLDivElement>(null);
+  const addLinkRef = useRef<HTMLButtonElement>(null);
+  const addServiceRef = useRef<HTMLButtonElement>(null);
   const anchor = useRef<Measurable>({ getBoundingClientRect: () => rect(0, 0) });
+  const [refocus, setRefocus] = useState<FocusTarget | null>(null);
 
   // A box removed by a save (a service whose last link went) drops out of the selection on its own.
   const selected = graph?.nodes.find((n) => n.id === selectedId) ?? null;
   const downstream = useMemo(() => (document && selected ? downstreamOf(document, selected) : null), [document, selected]);
   const menuLink = graph?.edges.find((e) => e.id === menuEdge) ?? null;
   const statusLoading = live.loading && live.byJob.size === 0;
+
+  // Moves focus on when a change takes away what had it.
+  useEffect(() => {
+    if (refocus === null) return;
+    // After React Flow has drawn the change.
+    const frame = window.requestAnimationFrame(() => {
+      focusOn(mapRef.current, panelRef.current, refocus);
+      setRefocus(null);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [refocus]);
 
   const runSave = useCallback(
     async (change: Change): Promise<boolean> => {
@@ -260,6 +321,8 @@ export function DependencyMapPage() {
           source: edge.source,
           target: edge.target,
           data: { link: edge, highlight },
+          // The group LinkEdge's focus classes look at: React Flow puts this class on the link's focusable <g>.
+          className: "group",
           selected: edge.id === menuEdge,
           selectable: link.step === "off",
           focusable: true,
@@ -282,12 +345,32 @@ export function DependencyMapPage() {
 
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Escape") return;
-    if (link.step !== "off") setLink({ step: "off" });
-    else setSelectedId(null);
+    const from = event.target instanceof Node ? event.target : null;
+    if (link.step !== "off") {
+      setLink({ step: "off" });
+      // From the banner, which goes with the mode: back to Add link.
+      if (from && bannerRef.current?.contains(from)) addLinkRef.current?.focus();
+      return;
+    }
+    // From inside the side panel, which closes: back to its box.
+    if (selected && from && panelRef.current?.contains(from)) setRefocus({ kind: "box", id: selected.id });
+    setSelectedId(null);
   };
 
-  const removeLink = (edgeId: string) => {
-    void runSave(unlinkChange(edgeId)).then(() => setMenuEdge(null));
+  const closeMenu = (returnFocus: boolean) => {
+    if (returnFocus && menuEdge !== null) setRefocus({ kind: "link", id: menuEdge });
+    setMenuEdge(null);
+  };
+
+  /** Removes a link, from its menu or from the side panel, and moves focus to something that stays. */
+  const removeLink = (edgeId: string, from: "menu" | "panel") => {
+    const panelStays = from === "panel" && graph !== null && selected !== null && staysWithout(graph, edgeId, selected.id);
+    const after: FocusTarget = panelStays ? { kind: "panel" } : graph ? focusAfterRemoving(graph, edgeId) : { kind: "map" };
+    void runSave(unlinkChange(edgeId)).then((saved) => {
+      setMenuEdge(null);
+      // When the save fails, the link is still there: focus goes back to where the removal started.
+      setRefocus(saved ? after : from === "menu" ? { kind: "link", id: edgeId } : { kind: "panel" });
+    });
   };
 
   const jobCount = document?.jobs.length ?? 0;
@@ -295,6 +378,7 @@ export function DependencyMapPage() {
   const headerActions = (
     <>
       <Button
+        ref={addLinkRef}
         variant={link.step === "off" ? "outline" : "default"}
         size="sm"
         aria-pressed={link.step !== "off"}
@@ -308,7 +392,7 @@ export function DependencyMapPage() {
         <Link2 aria-hidden="true" />
         Add link
       </Button>
-      <Button variant="outline" size="sm" disabled={jobCount === 0 || saving} onClick={() => setServiceOpen(true)}>
+      <Button ref={addServiceRef} variant="outline" size="sm" disabled={jobCount === 0 || saving} onClick={() => setServiceOpen(true)}>
         <Server aria-hidden="true" />
         Add service
       </Button>
@@ -357,7 +441,8 @@ export function DependencyMapPage() {
             {EMPTY_COPY}
           </p>
         ) : null}
-        <div ref={mapRef} className="relative min-h-[520px] flex-1 overflow-hidden rounded-md border border-border bg-muted" onKeyDown={onKeyDown}>
+        {/* tabIndex -1: focus lands on the map itself when nothing on it can take it. */}
+        <div ref={mapRef} tabIndex={-1} className="relative min-h-[520px] flex-1 overflow-hidden rounded-md border border-border bg-muted" onKeyDown={onKeyDown}>
           <MapMarkers />
           <div className="absolute inset-0">
             <ReactFlow<MapFlowNode, LinkFlowEdge>
@@ -393,7 +478,6 @@ export function DependencyMapPage() {
               attributionPosition="bottom-center"
               ariaLabelConfig={ARIA_LABELS}
               aria-label="Dependency map"
-              className="[--xy-edge-stroke-selected:var(--primary)]"
             >
               <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="var(--input)" bgColor="var(--muted)" />
               <Controls
@@ -419,7 +503,14 @@ export function DependencyMapPage() {
               {/* Adding a link clears the selection, so the banner takes the inspector's corner and never covers the legend. */}
               {link.step !== "off" ? (
                 <Panel position="top-right">
-                  <LinkBanner mode={link} onCancel={() => setLink({ step: "off" })} />
+                  <LinkBanner
+                    mode={link}
+                    containerRef={bannerRef}
+                    onCancel={() => {
+                      setLink({ step: "off" });
+                      addLinkRef.current?.focus();
+                    }}
+                  />
                 </Panel>
               ) : null}
               {selected && document ? (
@@ -430,14 +521,18 @@ export function DependencyMapPage() {
                     downstream={downstream}
                     links={graph.edges.filter((e) => e.source === selected.id || e.target === selected.id)}
                     saving={saving}
-                    onRemove={removeLink}
-                    onClose={() => setSelectedId(null)}
+                    panelRef={panelRef}
+                    onRemove={(edgeId) => removeLink(edgeId, "panel")}
+                    onClose={() => {
+                      setSelectedId(null);
+                      setRefocus({ kind: "box", id: selected.id });
+                    }}
                   />
                 </Panel>
               ) : null}
             </ReactFlow>
           </div>
-          <LinkMenu link={menuLink} anchor={anchor} saving={saving} onRemove={removeLink} onClose={() => setMenuEdge(null)} />
+          <LinkMenu link={menuLink} anchor={anchor} saving={saving} onRemove={(edgeId) => removeLink(edgeId, "menu")} onClose={closeMenu} />
         </div>
       </>
     );
@@ -483,6 +578,7 @@ export function DependencyMapPage() {
             target={link.step === "type" ? { kind: link.target.kind, name: link.target.name } : null}
             document={document}
             saving={saving}
+            returnFocus={addLinkRef}
             onSave={(change) => void runSave(change).then(() => setLink({ step: "off" }))}
           />
           <AddServiceDialog
@@ -493,6 +589,7 @@ export function DependencyMapPage() {
             document={document}
             defaultJob={selected?.kind === "job" ? selected.name : null}
             saving={saving}
+            returnFocus={addServiceRef}
             onSave={(change) => void runSave(change).then(() => setServiceOpen(false))}
           />
         </>
@@ -505,9 +602,16 @@ interface RefitProps {
   layoutKey: string;
 }
 
-/** Fits the view again when the boxes change place, after a save adds or removes one. The first fit is the fitView prop's. */
+/**
+ * Fits the view again when the boxes change place (a save added or removed
+ * one) and when the map's area changes size (an alert or a note above it came
+ * or went, or the window changed). The first fit is the fitView prop's.
+ */
 function Refit({ layoutKey }: RefitProps) {
   const { fitView } = useReactFlow();
+  // The size of the drawing area, which React Flow measures on every resize.
+  const width = useStore((state) => state.width);
+  const height = useStore((state) => state.height);
   const first = useRef(true);
   useEffect(() => {
     if (first.current) {
@@ -517,23 +621,26 @@ function Refit({ layoutKey }: RefitProps) {
     // After React Flow has taken the new nodes into its store.
     const frame = window.requestAnimationFrame(() => void fitView(FIT_OPTIONS));
     return () => window.cancelAnimationFrame(frame);
-  }, [layoutKey, fitView]);
+  }, [layoutKey, width, height, fitView]);
   return null;
 }
 
 interface LinkBannerProps {
   mode: Exclude<LinkMode, { step: "off" }>;
+  /** The banner's element, so Escape from inside it can move focus out before it goes. */
+  containerRef: RefObject<HTMLDivElement | null>;
   onCancel: () => void;
 }
 
 /** The step of adding a link, above the map, with Cancel. */
-function LinkBanner({ mode, onCancel }: LinkBannerProps) {
+function LinkBanner({ mode, containerRef, onCancel }: LinkBannerProps) {
   let text: string;
   if (mode.step === "source") text = "Pick the upstream job or service.";
   else if (mode.step === "target") text = mode.hint ?? `Now pick the job that depends on ${mode.source.name}.`;
   else text = `Choose how ${mode.target.name} depends on ${mode.source.name}.`;
   return (
     <div
+      ref={containerRef}
       className="flex max-w-md items-center gap-3 rounded-md border border-primary/40 bg-card py-1.5 pr-1.5 pl-3 text-sm shadow-sm"
       role="status"
       aria-live="polite"
@@ -552,18 +659,20 @@ interface LinkMenuProps {
   anchor: RefObject<Measurable>;
   saving: boolean;
   onRemove: (edgeId: string) => void;
-  onClose: () => void;
+  /** returnFocus is false when a click or focus outside closed the menu: focus stays where the person put it. */
+  onClose: (returnFocus: boolean) => void;
 }
 
 /** The menu that opens on a link: what it means, and Remove link. */
 function LinkMenu({ link, anchor, saving, onRemove, onClose }: LinkMenuProps) {
   const headingId = useId();
   const contentRef = useRef<HTMLDivElement>(null);
+  const outside = useRef(false);
   return (
     <Popover
       open={link !== null}
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (!open) onClose(!outside.current);
       }}
     >
       <PopoverAnchor virtualRef={anchor} />
@@ -575,7 +684,17 @@ function LinkMenu({ link, anchor, saving, onRemove, onClose }: LinkMenuProps) {
           // Focus the menu itself, not its first button: Enter or Space opened it, and the same key press would press that button.
           onOpenAutoFocus={(event) => {
             event.preventDefault();
+            outside.current = false;
             contentRef.current?.focus();
+          }}
+          onInteractOutside={() => {
+            outside.current = true;
+          }}
+          // The page moves focus on close: back to the link, or to a box when the link is gone.
+          onCloseAutoFocus={(event) => event.preventDefault()}
+          // Escape closes the menu and nothing else: React events bubble out of portals, and on the map Escape clears the selection.
+          onKeyDown={(event) => {
+            if (event.key === "Escape") event.stopPropagation();
           }}
           side="top"
           sideOffset={10}
@@ -589,7 +708,7 @@ function LinkMenu({ link, anchor, saving, onRemove, onClose }: LinkMenuProps) {
           <p className="mt-1 text-xs text-muted-foreground">{linkMeaning(link)}</p>
           {link.dependency.notes ? <p className="mt-2 text-xs text-foreground">{link.dependency.notes}</p> : null}
           <div className="mt-3 flex justify-end gap-2">
-            <Button variant="ghost" size="sm" onClick={onClose}>
+            <Button variant="ghost" size="sm" onClick={() => onClose(true)}>
               Close
             </Button>
             <Button variant="destructive" size="sm" disabled={saving} onClick={() => onRemove(link.id)}>
@@ -608,6 +727,8 @@ interface InspectorProps {
   downstream: Downstream | null;
   links: GraphEdge[];
   saving: boolean;
+  /** The panel's element, which takes focus after a link is removed in it. */
+  panelRef: RefObject<HTMLElement | null>;
   onRemove: (edgeId: string) => void;
   onClose: () => void;
 }
@@ -618,12 +739,14 @@ function affectsText(count: number): string {
 }
 
 /** The selected box: its status, what a failure there affects, and its links, each with Remove. */
-function Inspector({ box, document, downstream, links, saving, onRemove, onClose }: InspectorProps) {
+function Inspector({ box, document, downstream, links, saving, panelRef, onRemove, onClose }: InspectorProps) {
   const affected = downstream?.jobs ?? [];
   const parent = box.kind === "job" ? impactOf(document, box.name).parentJob : null;
   const tone = statusTone(box.status);
   return (
     <section
+      ref={panelRef}
+      tabIndex={-1}
       aria-label={box.name}
       className="flex max-h-[min(60svh,520px)] w-80 flex-col overflow-hidden rounded-md border border-border bg-card text-sm shadow-sm"
     >
