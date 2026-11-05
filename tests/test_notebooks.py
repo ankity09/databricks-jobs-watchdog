@@ -79,6 +79,11 @@ def test_notebook_02_installs_psycopg_only_when_it_reads_lakebase_inside_the_rec
     assert "config_source" in text and "config_loads" in text
 
 
+def test_notebook_11_installs_psycopg_with_its_own_message():
+    text = (NOTEBOOKS / "11_grant_app_access.py").read_text()
+    assert "psycopg_connect(GRANT_APP_ACCESS)" in text and "%pip" not in text
+
+
 def test_notebook_02_keeps_the_original_error_when_recording_a_failed_load_fails():
     text = (NOTEBOOKS / "02_load_config.py").read_text()
     handler = text[text.index("except Exception as err:"):text.index("record_config_load(spark, s.catalog, s.schema, ConfigLoad(now, scan_id, loaded.source")]

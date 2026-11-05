@@ -11,8 +11,9 @@ grant_app_access gives the new service principal what the app needs there:
 USAGE and CREATE on the schema (the app's startup check needs CREATE even when
 the table exists) and SELECT and INSERT on its tables. Notebook 11 runs it as
 the deploying identity (the watchdog_app_access job, which
-scripts/deploy_regions.py runs after each region's deploy). When the app owns
-the schema, or has those rights already, it changes nothing.
+scripts/deploy_regions.py runs after a deploy that gave the app a new service
+principal while the Lakebase project was kept). When the app owns the schema,
+or has those rights already, it changes nothing.
 
 The caller passes in an open database connection (psycopg's), so the tests
 run without one.

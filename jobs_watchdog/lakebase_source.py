@@ -31,13 +31,21 @@ class LakebaseSourceError(Exception):
 
 PSYCOPG_REQUIREMENT = "psycopg[binary]>=3.2,<4"
 
+# What each notebook needs psycopg for, and what to do when it cannot be installed.
+READ_JOB_LIST = ("reading the job list from Lakebase", "until then the scans use the last job list that loaded")
+GRANT_APP_ACCESS = ("giving the app access to its job list",
+                    "then run the watchdog_app_access job again, as a deploy runs it only when the app gets a new "
+                    "service principal")
 
-def psycopg_connect(run=subprocess.run, import_module=importlib.import_module):
+
+def psycopg_connect(purpose=READ_JOB_LIST, run=subprocess.run, import_module=importlib.import_module):
     """psycopg.connect, installing psycopg into this Python first when it is missing.
 
-    Only the Lakebase source needs psycopg, so a YAML load never reaches PyPI.
-    A failed install raises LakebaseSourceError on one line, which notebook 02
-    records as a FAILED config_loads row; the config tables keep their rows.
+    Only the Lakebase source (notebook 02) and the app access grant (notebook 11)
+    need psycopg, so a YAML load never reaches PyPI. A failed install raises
+    LakebaseSourceError on one line that says what purpose, one of the pairs above,
+    needs it: notebook 02 records it as a FAILED config_loads row, and the config
+    tables keep their rows.
     """
     try:
         return import_module("psycopg").connect
@@ -54,9 +62,9 @@ def psycopg_connect(run=subprocess.run, import_module=importlib.import_module):
         problem = str(err)
     if problem is not None:
         detail = " ".join(problem.removeprefix("ERROR:").split())[:160]
-        raise LakebaseSourceError(f"could not install {PSYCOPG_REQUIREMENT}, which reading the job list from Lakebase "
-                                  f"needs ({detail}). Let serverless compute reach PyPI or your package mirror; until "
-                                  "then the scans use the last job list that loaded")
+        needed_for, meanwhile = purpose
+        raise LakebaseSourceError(f"could not install {PSYCOPG_REQUIREMENT}, which {needed_for} needs ({detail}). "
+                                  f"Let serverless compute reach PyPI or your package mirror; {meanwhile}")
     importlib.invalidate_caches()
     return import_module("psycopg").connect
 

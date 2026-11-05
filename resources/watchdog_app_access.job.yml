@@ -2,8 +2,9 @@
 # Lakebase (notebook 11). Needed after a plain teardown and a new deploy: the
 # new app has a new service principal, and the kept list belongs to the
 # identity that ran the teardown. The job runs as the deploying identity and
-# changes nothing when the app already has access, so scripts/deploy_regions.py
-# runs it after each region's deploy. It has no schedule. The one task runs on
+# changes nothing when the app already has access. scripts/deploy_regions.py
+# runs it after a region's deploy that gave the app a new service principal
+# while the Lakebase project was kept. It has no schedule. The one task runs on
 # serverless compute and installs psycopg from PyPI (or your package mirror).
 resources:
   jobs:

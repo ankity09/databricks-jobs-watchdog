@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from jobs_watchdog.lakebase_source import (
+    GRANT_APP_ACCESS,
     PSYCOPG_REQUIREMENT,
     LakebaseSourceError,
     LakebaseTarget,
@@ -198,3 +199,13 @@ def test_an_install_that_cannot_start_is_a_lakebase_source_error_too():
         raise OSError("No such file or directory")
     with pytest.raises(LakebaseSourceError, match="could not install"):
         psycopg_connect(run=run, import_module=importer(9))
+
+
+def test_notebook_11_s_failed_install_is_about_the_app_s_access_not_the_scans():
+    run = pip(1, "ERROR: No matching distribution found for psycopg[binary]<4,>=3.2\n")
+    with pytest.raises(LakebaseSourceError) as err:
+        psycopg_connect(GRANT_APP_ACCESS, run=run, import_module=importer(9))
+    text = str(err.value)
+    assert text.startswith(f"could not install {PSYCOPG_REQUIREMENT}, which giving the app access to its job list needs")
+    assert "No matching distribution found" in text and "watchdog_app_access" in text
+    assert "scans" not in text and "\n" not in text

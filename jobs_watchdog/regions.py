@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
 from jobs_watchdog.bundle_vars import VARIABLES, bundle_variables
 from jobs_watchdog.config import ConfigError, load_accelerator
 from jobs_watchdog.sqlfiles import load_sql, repo_root
@@ -28,6 +30,8 @@ from jobs_watchdog.upgrade import VIEW_TEMPLATES, render_view, view_names
 
 TARGET = "production"
 STATEMENTS_API = "/api/2.0/sql/statements"
+DEPLOY = "deploy"
+APP_ACCESS = "app access"
 WAIT_TIMEOUT = "50s"  # the longest the statement API waits before the call returns
 
 
@@ -201,12 +205,42 @@ def deploy_steps(region, validate_only, run_app, ensure_tables=True, app_access=
         return steps
     if ensure_tables:
         steps += _ensure_tables_steps(region)
-    steps.append(Step("deploy", ["databricks", "bundle", "deploy", "-t", TARGET] + profile))
+    steps.append(Step(DEPLOY, ["databricks", "bundle", "deploy", "-t", TARGET] + profile))
     if run_app:
         steps.append(Step("run app", ["databricks", "bundle", "run", "watchdog_app", "-t", TARGET] + profile))
     if app_access:
-        steps.append(Step("app access", ["databricks", "bundle", "run", "watchdog_app_access", "-t", TARGET] + profile))
+        steps.append(Step(APP_ACCESS, ["databricks", "bundle", "run", "watchdog_app_access", "-t", TARGET] + profile))
     return steps
+
+
+# What an apps get answers when the app does not exist, and when the answer could not be read.
+APP_MISSING = "missing"
+UNKNOWN = "unknown"
+
+
+def app_and_project(env):
+    """(app name, Lakebase project ID) for a region's environment: its BUNDLE_VAR_ values, else the bundle's defaults."""
+    variables = (yaml.safe_load((repo_root() / "databricks.yml").read_text()) or {}).get("variables") or {}
+    return tuple(env.get(f"BUNDLE_VAR_{name}") or str(variables[name]["default"]) for name in ("app_name", "lakebase_project_id"))
+
+
+def app_access_needed(project_existed, principal_before, principal_after):
+    """(needed, why not) for the watchdog_app_access job after a deploy.
+
+    The app's service principal creates the app's schema on its first start and
+    owns it, so a grant is needed only when the app now has another service
+    principal than the one it had before the deploy (a plain teardown, or a new
+    app.name, creates a new app) and the Lakebase project, with its schema, was
+    there before the deploy. When the answers are unclear, it runs the job,
+    which changes nothing when there is nothing to grant.
+    """
+    if project_existed is False:
+        return False, "the Lakebase project is new, so the app creates its schema and owns it"
+    if UNKNOWN in (principal_before, principal_after) or principal_after == APP_MISSING:
+        return True, ""
+    if principal_before == principal_after:
+        return False, "the app kept its service principal, so its access to the job list is unchanged"
+    return True, ""
 
 
 def normal_host(host):

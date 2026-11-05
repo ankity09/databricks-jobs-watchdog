@@ -12,7 +12,7 @@ Unity Catalog system tables are regional. `system.lakeflow` in a region holds th
 - A catalog in that region's metastore, and a SQL warehouse in the workspace.
 - Databricks Apps, Lakebase and Genie turned on in the workspace.
 - User authorization for apps, with the `sql` and `dashboards.genie` scopes allowed (see [Who can use the app](#who-can-use-the-app)).
-- Serverless compute that can install `psycopg` from PyPI or your package mirror, when the scan reads the job list from the app (`scan.config_source: lakebase`) and for the `watchdog_app_access` job.
+- Serverless compute that can install `psycopg` from PyPI or your package mirror, when the scan reads the job list from the app (`scan.config_source: lakebase`), and for the `watchdog_app_access` job, which a deploy runs only after a teardown or a new `app.name`. A region without PyPI deploys and scans in YAML mode.
 - A deploying identity. For CI this is a service principal that signs in with OAuth M2M. It needs:
   - `USE CATALOG` and `CREATE SCHEMA` on the catalog (or, when the schema exists, `USE SCHEMA`, `CREATE TABLE`, `SELECT` and `MODIFY` on it);
   - `CAN USE` on the SQL warehouse;
@@ -105,7 +105,7 @@ For each region, in turn, the script runs:
 2. the tables step (see the next section), unless you pass `--skip-ensure-tables`
 3. `databricks bundle deploy -t production`
 4. `databricks bundle run watchdog_app -t production`, unless you pass `--no-app-run`
-5. `databricks bundle run watchdog_app_access -t production`, unless you pass `--skip-app-access`. After a teardown and a new deploy it gives the new app access to the job list the teardown kept (see [Deploy again after a teardown](#deploy-again-after-a-teardown)); otherwise it changes nothing.
+5. `databricks bundle run watchdog_app_access -t production`, when the deploy gave the app a new service principal and the Lakebase project was there before it: after a plain teardown, or a new `app.name`. It gives the new app access to the job list the project kept (see [Deploy again after a teardown](#deploy-again-after-a-teardown)). The script asks the CLI for the app's service principal before and after the deploy, and whether the project exists, and on any other deploy it prints `app access not needed` with the reason, as the app owns its schema. `--skip-app-access` always leaves the step out. If the step fails, for example because serverless cannot reach PyPI, run `databricks bundle run watchdog_app_access -t production` once it can: the next deploy does not run it again, since the service principal no longer changes.
 
 `--validate-only` runs step 1 and nothing else. If a step fails, the script skips the rest of that region, carries on with the next region, prints a summary table (region, step, result) and exits 1. It exits 2 when a region file is wrong. It does not print secrets: it hides the values of credential variables and access tokens in any error text.
 
