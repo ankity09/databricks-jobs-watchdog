@@ -65,7 +65,7 @@ def read_write_endpoint(api, target):
     for endpoint in (response or {}).get("endpoints") or []:
         status = endpoint.get("status") or {}
         host = (status.get("hosts") or {}).get("host")
-        if status.get("type") == "ENDPOINT_TYPE_READ_WRITE" and host:
+        if status.get("endpoint_type") == "ENDPOINT_TYPE_READ_WRITE" and host:
             return endpoint["name"], host
     raise LakebaseSourceError(f"{target.branch_path} has no read-write endpoint with a host: check that the "
                               "branch exists and its compute is set up")

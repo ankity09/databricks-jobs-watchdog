@@ -7,7 +7,7 @@ from jobs_watchdog.lakebase_source import LakebaseSourceError, LakebaseTarget, r
 
 TARGET = LakebaseTarget("jobs-watchdog", "dev-engine", "watchdog")
 ENDPOINTS = {"endpoints": [{"name": "projects/jobs-watchdog/branches/dev-engine/endpoints/primary",
-                            "status": {"type": "ENDPOINT_TYPE_READ_WRITE", "hosts": {"host": "ep-1.example"}}}]}
+                            "status": {"endpoint_type": "ENDPOINT_TYPE_READ_WRITE", "hosts": {"host": "ep-1.example"}}}]}
 
 
 class FakeApi:
@@ -108,7 +108,7 @@ def test_a_second_failure_is_reported():
 
 
 def test_a_branch_without_a_read_write_endpoint_is_explained():
-    api = FakeApi({"endpoints": [{"name": "x/endpoints/ro", "status": {"type": "ENDPOINT_TYPE_READ_ONLY",
+    api = FakeApi({"endpoints": [{"name": "x/endpoints/ro", "status": {"endpoint_type": "ENDPOINT_TYPE_READ_ONLY",
                                                                        "hosts": {"host": "h"}}}]})
     with pytest.raises(LakebaseSourceError, match="no read-write endpoint"):
         read_latest_job_list(api, TARGET, FakeConnection(None))
