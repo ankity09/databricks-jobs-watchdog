@@ -52,3 +52,17 @@ def record_config_load(spark, catalog, schema, load):
     row = tuple(getattr(load, name) for name, _ in COLUMNS)
     spark.createDataFrame([row], schema=ddl).createOrReplaceTempView(LOAD_VIEW)
     run_sql(spark, "sql/config/05_record_config_load.sql", catalog=catalog, schema=schema)
+
+
+def record_config_load_safely(spark, catalog, schema, load):
+    """Record a load, and return a short message instead of raising when that fails.
+
+    For the failure path of notebook 02, where the original error matters more
+    than the failure to write its row.
+    """
+    try:
+        record_config_load(spark, catalog, schema, load)
+    except Exception as err:
+        lines = str(err).strip().splitlines()
+        return f"{type(err).__name__}: {lines[0][:300] if lines else ''}"
+    return None

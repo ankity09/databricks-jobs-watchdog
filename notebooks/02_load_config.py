@@ -31,7 +31,7 @@ s = settings("catalog", "schema", "monitored_jobs_path", "config_source", "lakeb
 
 from datetime import datetime, timezone
 
-from jobs_watchdog.config_loads import ConfigLoad, record_config_load
+from jobs_watchdog.config_loads import ConfigLoad, record_config_load, record_config_load_safely
 from jobs_watchdog.config_source import load_config, source_ref_for
 from jobs_watchdog.config_tables import write_config
 from jobs_watchdog.findings import new_scan_id
@@ -49,8 +49,11 @@ try:
         loaded = load_config(s)
     write_config(spark, loaded.jobs, loaded.dependencies, s.catalog, s.schema, loaded.workspaces)
 except Exception as err:
-    record_config_load(spark, s.catalog, s.schema, ConfigLoad(now, scan_id, s.config_source, source_ref_for(s),
-                                                              None, None, "FAILED", short_error(err)))
+    problem = record_config_load_safely(spark, s.catalog, s.schema,
+                                        ConfigLoad(now, scan_id, s.config_source, source_ref_for(s),
+                                                   None, None, "FAILED", short_error(err)))
+    if problem:
+        print(f"Could not record the failed load in config_loads: {problem}")
     raise
 record_config_load(spark, s.catalog, s.schema, ConfigLoad(now, scan_id, loaded.source, loaded.source_ref,
                                                           loaded.version, len(loaded.jobs), "OK", None))

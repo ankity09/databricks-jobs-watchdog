@@ -72,3 +72,9 @@ def test_notebook_02_installs_psycopg_before_the_setup_and_reads_the_config_sour
     pip = '# MAGIC %pip install --quiet "psycopg[binary]>=3.2,<4"'
     assert pip in text and text.index(pip) < text.index("# MAGIC %run ./_setup")
     assert "config_source" in text and "config_loads" in text
+
+
+def test_notebook_02_keeps_the_original_error_when_recording_a_failed_load_fails():
+    text = (NOTEBOOKS / "02_load_config.py").read_text()
+    handler = text[text.index("except Exception as err:"):text.index("record_config_load(spark, s.catalog, s.schema, ConfigLoad(now, scan_id, loaded.source")]
+    assert "record_config_load_safely(" in handler and handler.rstrip().endswith("raise")

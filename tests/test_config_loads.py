@@ -65,3 +65,24 @@ def test_status_and_source_are_checked():
         ConfigLoad(NOW, "run-1", "yaml", "x", None, 1, "DONE", None)
     with pytest.raises(ValueError, match="lakebase.*yaml|yaml.*lakebase"):
         ConfigLoad(NOW, "run-1", "file", "x", None, 1, "OK", None)
+
+
+def test_a_failing_record_is_reported_not_raised():
+    from jobs_watchdog.config_loads import record_config_load_safely
+
+    class BrokenSpark(FakeSpark):
+        def sql(self, text, args=None):
+            raise RuntimeError("TABLE_OR_VIEW_NOT_FOUND: config_loads\nmore detail")
+
+    load = ConfigLoad(NOW, "run-1", "yaml", "x", None, None, "FAILED", "ConfigError: bad")
+    message = record_config_load_safely(BrokenSpark(), "main", "watchdog", load)
+    assert message == "RuntimeError: TABLE_OR_VIEW_NOT_FOUND: config_loads"
+
+
+def test_a_working_record_returns_nothing():
+    from jobs_watchdog.config_loads import record_config_load_safely
+
+    spark = FakeSpark()
+    load = ConfigLoad(NOW, "run-1", "yaml", "x", None, None, "FAILED", "ConfigError: bad")
+    assert record_config_load_safely(spark, "main", "watchdog", load) is None
+    assert len(spark.calls) == 1
