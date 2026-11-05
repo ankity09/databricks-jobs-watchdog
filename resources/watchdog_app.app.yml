@@ -1,6 +1,7 @@
 # The Watchdog app. bundle deploy creates or updates it; bundle run watchdog_app
-# deploys the code and starts it. Queries run as the person signed in (the sql
-# user scope); Lakebase, Scan now and the model run as the app.
+# deploys the code and starts it. Queries and the Genie copilot run as the person
+# signed in (the sql and dashboards.genie user scopes); Lakebase and Scan now
+# run as the app.
 resources:
   apps:
     watchdog_app:
@@ -9,6 +10,7 @@ resources:
       source_code_path: ../app
       user_api_scopes:
         - sql
+        - dashboards.genie
       resources:
         - name: sql-warehouse
           sql_warehouse:
@@ -23,11 +25,8 @@ resources:
           job:
             id: ${resources.jobs.watchdog_scan.id}
             permission: CAN_MANAGE_RUN
-        - name: agents-serving-endpoint
-          serving_endpoint:
-            name: ${var.copilot_model}
-            permission: CAN_QUERY
-        - name: agents-mlflow-experiment
-          experiment:
-            experiment_id: ${resources.experiments.watchdog_copilot.id}
-            permission: CAN_EDIT
+        - name: genie-space
+          genie_space:
+            name: watchdog-copilot
+            space_id: ${resources.genie_spaces.watchdog_copilot.id}
+            permission: CAN_RUN

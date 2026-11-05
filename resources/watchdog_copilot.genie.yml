@@ -1,0 +1,43 @@
+# The Watchdog copilot: a Genie agent over the Watchdog's tables. People ask it
+# questions in the Watchdog app; it writes and runs read-only SQL as the person
+# asking, so each person sees only what Unity Catalog lets them see.
+resources:
+  genie_spaces:
+    watchdog_copilot:
+      title: Watchdog copilot
+      description: Answers questions about the Watchdog's findings, the monitored jobs and their dependencies.
+      warehouse_id: ${var.warehouse_id}
+      parent_path: ${workspace.root_path}
+      permissions:
+        - group_name: users
+          level: CAN_RUN
+      serialized_space:
+        version: 2
+        config:
+          sample_questions:
+            - id: "a0000000000000000000000000000001"
+              question: ["What is failing right now?"]
+            - id: "a0000000000000000000000000000002"
+              question: ["Which jobs missed their schedule?"]
+            - id: "a0000000000000000000000000000003"
+              question: ["What breaks if orders_ingest fails?"]
+            - id: "a0000000000000000000000000000004"
+              question: ["Summarize the last 24 hours."]
+        data_sources:
+          tables:
+            - identifier: ${var.catalog}.${var.schema}.findings
+            - identifier: ${var.catalog}.${var.schema}.findings_latest
+            - identifier: ${var.catalog}.${var.schema}.job_dependencies
+            - identifier: ${var.catalog}.${var.schema}.monitored_job_environments
+            - identifier: ${var.catalog}.${var.schema}.monitored_jobs
+            - identifier: ${var.catalog}.${var.schema}.monitored_workspaces
+        instructions:
+          text_instructions:
+            - id: "b0000000000000000000000000000001"
+              content:
+                - "The Watchdog checks Databricks jobs and writes what it finds to findings. findings_latest holds the newest scan from each source: one row per job, check and source. findings holds every scan, as history."
+                - "status is HEALTHY, WARNING, FAILED or UNKNOWN. severity (CRITICAL or WARNING) is set only on rows that are not healthy. failure_category says what kind of problem it is."
+                - "For what is failing now, use findings_latest where status is FAILED or WARNING, and show job_name, workspace_name, check_id, status, severity, error_summary and run_page_url."
+                - "affected_jobs, on FAILED rows, lists every job downstream of the failed one. For the configured chain, use job_dependencies: a job link means job_name depends on depends_on, and a child_job link counts both ways."
+                - "monitored_jobs and monitored_job_environments hold the settings each job is checked against; monitored_workspaces gives each workspace an environment label."
+                - "Answer in plain language: what failed, when, the likely cause (from error_summary and failure_category), what it affects, and the next step. Include run_page_url when there is one. You cannot change anything; say so if asked."

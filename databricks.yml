@@ -80,9 +80,6 @@ variables:
   lakebase_database:
     description: Postgres database in that branch
     default: watchdog
-  copilot_model:
-    description: Streaming chat model endpoint for the copilot
-    default: databricks-claude-sonnet-5-5
   demo_schedule_status:
     description: PAUSED (default) or UNPAUSED; UNPAUSED runs the demo jobs on their schedules
     default: PAUSED

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -14,7 +15,7 @@ EXAMPLE_CONFIG = repo_root() / "config" / "monitored_jobs.example.yml"
 CUSTOM_CHECK = repo_root() / "notebooks" / "09_custom_check_example.py"
 APP_FILE = repo_root() / "resources" / "watchdog_app.app.yml"
 LAKEBASE_FILE = repo_root() / "resources" / "watchdog_lakebase.yml"
-EXPERIMENT_FILE = repo_root() / "resources" / "watchdog_copilot.experiment.yml"
+GENIE_FILE = repo_root() / "resources" / "watchdog_copilot.genie.yml"
 
 # Demo job schedules as Quartz cron expressions, in UTC.
 DEMO_SCHEDULES = {
@@ -370,23 +371,21 @@ def load_app():
     return yaml.safe_load(APP_FILE.read_text())["resources"]["apps"]["watchdog_app"]
 
 
-def test_the_app_uses_the_variables_and_only_the_sql_user_scope():
+def test_the_app_uses_the_variables_and_the_sql_and_genie_user_scopes():
     app = load_app()
     assert app["name"] == "${var.app_name}"
     assert app["source_code_path"] == "../app"
-    assert app["user_api_scopes"] == ["sql"]
+    assert app["user_api_scopes"] == ["sql", "dashboards.genie"]
 
 
 def test_the_app_resources_carry_the_appkit_keys_and_permissions():
     resources = {r["name"]: r for r in load_app()["resources"]}
-    assert set(resources) == {"sql-warehouse", "postgres", "job", "agents-serving-endpoint",
-                              "agents-mlflow-experiment"}
+    assert set(resources) == {"sql-warehouse", "postgres", "job", "genie-space"}
     assert resources["sql-warehouse"]["sql_warehouse"] == {"id": "${var.warehouse_id}", "permission": "CAN_USE"}
     assert resources["job"]["job"] == {"id": "${resources.jobs.watchdog_scan.id}", "permission": "CAN_MANAGE_RUN"}
-    assert resources["agents-serving-endpoint"]["serving_endpoint"] == {"name": "${var.copilot_model}",
-                                                                        "permission": "CAN_QUERY"}
+    assert resources["genie-space"]["genie_space"]["space_id"] == "${resources.genie_spaces.watchdog_copilot.id}"
+    assert resources["genie-space"]["genie_space"]["permission"] == "CAN_RUN"
     assert resources["postgres"]["postgres"]["permission"] == "CAN_CONNECT_AND_CREATE"
-    assert resources["agents-mlflow-experiment"]["experiment"]["permission"] == "CAN_EDIT"
 
 
 def test_the_lakebase_project_and_database_are_protected_and_use_the_variables():
@@ -409,7 +408,7 @@ def test_every_app_variable_is_declared_with_the_spec_defaults():
     assert variables["lakebase_project_id"]["default"] == "jobs-watchdog"
     assert variables["lakebase_branch"]["default"] == "production"
     assert variables["lakebase_database"]["default"] == "watchdog"
-    assert variables["copilot_model"]["default"] == "databricks-claude-sonnet-5-5"
+    assert "copilot_model" not in variables
 
 
 def test_accelerator_yaml_app_settings_match_the_bundle_defaults():
@@ -418,4 +417,47 @@ def test_accelerator_yaml_app_settings_match_the_bundle_defaults():
     assert data["scan"]["config_source"] == variables["config_source"]["default"]
     assert data["app"]["name"] == variables["app_name"]["default"]
     assert data["app"]["lakebase_project_id"] == variables["lakebase_project_id"]["default"]
-    assert data["app"]["copilot_model"] == variables["copilot_model"]["default"]
+    assert "copilot_model" not in data["app"]
+
+
+def load_genie():
+    return yaml.safe_load(GENIE_FILE.read_text())["resources"]["genie_spaces"]["watchdog_copilot"]
+
+
+def genie_space():
+    return load_genie()["serialized_space"]
+
+
+def test_the_genie_agent_runs_on_the_warehouse_variable():
+    assert load_genie()["warehouse_id"] == "${var.warehouse_id}"
+    assert not EXPERIMENT_GONE.exists()
+
+
+EXPERIMENT_GONE = repo_root() / "resources" / "watchdog_copilot.experiment.yml"
+
+
+def test_every_genie_table_is_in_the_catalog_and_schema_variables_and_sorted():
+    identifiers = [t["identifier"] for t in genie_space()["data_sources"]["tables"]]
+    assert identifiers
+    assert all(i.startswith("${var.catalog}.${var.schema}.") for i in identifiers)
+    assert identifiers == sorted(identifiers)
+
+
+def test_genie_ids_are_32_hex_characters_and_each_list_is_sorted_by_id():
+    space = genie_space()
+    lists = [space["config"]["sample_questions"], space["instructions"]["text_instructions"]]
+    lists += [space["instructions"].get("example_question_sqls", [])]
+    for items in lists:
+        ids = [item["id"] for item in items]
+        assert all(re.fullmatch(r"[0-9a-f]{32}", i) for i in ids)
+        assert ids == sorted(ids) and len(set(ids)) == len(ids)
+
+
+def test_genie_has_at_most_one_text_instruction_and_version_2():
+    assert len(genie_space()["instructions"]["text_instructions"]) <= 1
+    assert genie_space()["version"] == 2
+
+
+def test_the_genie_file_names_no_literal_catalog():
+    text = GENIE_FILE.read_text()
+    assert "main." not in text

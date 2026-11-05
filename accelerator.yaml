@@ -42,7 +42,6 @@ scan:
 app:
   name: watchdog-app                       # the Watchdog app's name, unique in the workspace
   lakebase_project_id: jobs-watchdog       # Lakebase project for the app's job list, unique in the workspace
-  copilot_model: databricks-claude-sonnet-5-5   # streaming chat endpoint for the copilot
 
 resources: {}                   # nothing extra is needed in Phase 1
 

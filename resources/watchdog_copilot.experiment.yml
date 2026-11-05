@@ -1,6 +1,0 @@
-# MLflow experiment for the copilot's traces: one trace per answer, with the
-# lookups it made. Used only for troubleshooting the copilot.
-resources:
-  experiments:
-    watchdog_copilot:
-      name: /Workspace/Users/${workspace.current_user.userName}/watchdog-app-copilot

@@ -106,7 +106,6 @@ APP_KEYS = """
 app:
   name: watchdog-app
   lakebase_project_id: jobs-watchdog
-  copilot_model: databricks-claude-sonnet-5-5
 """
 
 
@@ -118,7 +117,7 @@ def test_app_and_lakebase_settings_become_bundle_variables(tmp_path):
     assert variables["config_source"] == "lakebase"
     assert variables["app_name"] == "watchdog-app"
     assert variables["lakebase_project_id"] == "jobs-watchdog"
-    assert variables["copilot_model"] == "databricks-claude-sonnet-5-5"
+    assert "copilot_model" not in variables
 
 
 def test_files_without_the_app_section_still_export_the_rest(tmp_path):
