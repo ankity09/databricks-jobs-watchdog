@@ -4,9 +4,11 @@
  * Python's message text, so the first issue is the error Python raises. Unlike
  * Python, all issues are collected, so the form can show every problem.
  *
+ * Patterns are checked with a port of Python's own re parser (pyregex.ts), so a
+ * pattern compiles here exactly when re.compile accepts it, with Python's message.
+ *
  * Differences that cannot be avoided in JavaScript:
- * - Regexes are checked with `new RegExp`, so a Python-only pattern such as
- *   `(?P<x>...)` is reported as not compiling.
+ * - A \N{...} character name in a pattern is refused: the app has no Unicode name database to look it up.
  * - A float with no fraction (60.0) is told apart from 60 only if the YAML was
  *   parsed with pythonYamlOptions, which marks it with PyFloat; the rules reject the marker.
  * - Deliberate divergence: a count setting (max_gap_minutes and the like) above 9007199254740991
@@ -21,6 +23,7 @@
  * The rules accept the raw parse (integers as bigint, floats and timestamps marked), so
  * messages print values the way Python does; normalizeDocument is for storage afterwards.
  */
+import { pythonRegexError } from "./pyregex";
 import { PyFloat, pyRepr, pySorted, pyStr, pyStrip } from "./pyrepr";
 import type { Change, JobListDocument, RuleIssue } from "./types";
 
@@ -217,13 +220,10 @@ function optionalInt(c: Collector, path: string, raw: unknown, jobName: string, 
   }
 }
 
+/** re.compile(raw), as the loader runs it: Python's own message when it fails. */
 function compiled(c: Collector, path: string, raw: unknown, name: string, field: string): void {
-  try {
-    if (typeof raw !== "string") throw new Error("first argument must be string or compiled pattern");
-    new RegExp(raw);
-  } catch (err) {
-    c.add(path, `job ${name}: ${field} does not compile: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  const error = typeof raw === "string" ? pythonRegexError(raw) : "first argument must be string or compiled pattern";
+  if (error !== null) c.add(path, `job ${name}: ${field} does not compile: ${error}`);
 }
 
 function checkJobIds(c: Collector, path: string, raw: unknown, where: string): void {

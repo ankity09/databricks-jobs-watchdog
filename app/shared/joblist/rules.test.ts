@@ -99,9 +99,13 @@ describe("issue paths and collection", () => {
     expect(validateDocument({ jobs: [] }, "x.yml")[0].message).toBe("x.yml lists no jobs");
     expect(validateDocument({ jobs: [] })[0].message).toBe("the job list lists no jobs");
   });
-  it("a Python-only regex pattern is reported as not compiling", () => {
-    const issues = validateDocument(doc([{ job_name: "a", max_gap_minutes: 5, job_name_regex: "(?P<x>a)" }]));
-    expect(issues[0].message).toContain("job_name_regex does not compile");
+  it("checks a pattern the way Python's re does, with Python's message", () => {
+    const issues = (pattern: string) => validateDocument(doc([{ job_name: "a", max_gap_minutes: 5, job_name_regex: pattern }]));
+    expect(issues("(?P<x>a)(?P=x)")).toEqual([]);
+    expect(issues("(?i)^orders")).toEqual([]);
+    expect(issues("(?<x>a)")[0].message).toBe("job a: job_name_regex does not compile: unknown extension ?<x at position 1");
+    const exclude = validateDocument(doc([{ job_name: "a", max_gap_minutes: 5, job_name_exclude_regex: "\\k<x>" }]));
+    expect(exclude[0].message).toBe("job a: job_name_exclude_regex does not compile: bad escape \\k at position 0");
   });
 });
 

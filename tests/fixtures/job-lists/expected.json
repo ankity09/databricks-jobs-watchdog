@@ -39,6 +39,10 @@
     "ok": false,
     "error_contains": "has unknown keys ['notes']"
   },
+  "invalid_exclude_regex_named_group.yml": {
+    "ok": false,
+    "error_contains": "job_name_exclude_regex does not compile: unknown extension ?<c at position 1"
+  },
   "invalid_float_gap.yml": {
     "ok": false,
     "error_contains": "max_gap_minutes must be a whole number of zero or more, got 60.0"
@@ -70,6 +74,14 @@
   "invalid_regex.yml": {
     "ok": false,
     "error_contains": "job_name_regex does not compile"
+  },
+  "invalid_regex_unicode_class.yml": {
+    "ok": false,
+    "error_contains": "job_name_regex does not compile: bad escape \\p at position 8"
+  },
+  "invalid_regex_variable_lookbehind.yml": {
+    "ok": false,
+    "error_contains": "job_name_regex does not compile: look-behind requires fixed-width pattern"
   },
   "invalid_schedule_type.yml": {
     "ok": false,
@@ -127,6 +139,9 @@
     "ok": true
   },
   "valid_minimal.yml": {
+    "ok": true
+  },
+  "valid_python_only_patterns.yml": {
     "ok": true
   },
   "valid_service_dependency.yml": {

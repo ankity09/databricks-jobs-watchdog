@@ -1,0 +1,13 @@
+# Patterns Python's re accepts and JavaScript's RegExp refuses: an inline flag,
+# an atomic group, a possessive repeat and Python's named groups. The loader
+# accepts them, so the app must too.
+defaults:
+  max_gap_minutes: 60
+jobs:
+  - job_name: orders_ingest
+    job_name_regex: (?i)^orders_ingest$
+  - job_name: orders_enrich
+    job_name_regex: ^orders_(?>enrich|backfill)$
+    job_name_exclude_regex: _test_*+$
+  - job_name: orders_report
+    job_name_regex: ^(?P<base>orders)_report_(?P=base)$
