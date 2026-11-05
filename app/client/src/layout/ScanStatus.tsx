@@ -82,7 +82,9 @@ export function ScanStatus(): JSX.Element {
     detail = label;
   } else if (failed) {
     label = "Last scan unknown";
-    detail = configError?.message ?? query.error ?? "The app cannot read the scan results.";
+    detail =
+      configError?.message ??
+      (ready ? (query.error ?? "The scan results had an unexpected shape.") : "The scan job has no catalog, so the app cannot find the scan results.");
   } else if (newest === null) {
     label = "No scans yet";
     detail = "No scan results yet. Run the watchdog_scan job, or wait for its schedule.";

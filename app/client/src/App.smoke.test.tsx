@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -47,12 +47,16 @@ function respond(url: string): Response {
   return json({ error: "not_found", message: `No route for ${url}` }, 404);
 }
 
+/** Waits until the page has its data: the signed-in email shows and no skeleton is left, so every update lands inside the test. */
+async function settled() {
+  await screen.findByText("dana@example.com");
+  await waitFor(() => expect(document.querySelector('[data-slot="skeleton"]')).toBeNull());
+}
+
 async function renderAt(path: string) {
   const router = createMemoryRouter(routes, { initialEntries: [path] });
   render(<App router={router} />);
-  // Wait for the shell's own data (the scan time and the signed-in email), so every update lands inside the test.
-  await screen.findByText("No scans yet");
-  await screen.findByText("dana@example.com");
+  await settled();
   return router;
 }
 
@@ -98,7 +102,7 @@ describe("the app shell", () => {
     const router = createMemoryRouter(routes, { initialEntries: ["/monitoring"] });
     render(<App router={router} />);
     expect(await screen.findByRole("button", { name: "Expand sidebar" })).toBeInTheDocument();
-    await screen.findByText("dana@example.com");
+    await settled();
   });
 
   it("shows the region from the app config", async () => {
