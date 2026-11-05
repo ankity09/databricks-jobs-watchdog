@@ -1,0 +1,156 @@
+import express from "express";
+import request from "supertest";
+import { describe, expect, it } from "vitest";
+import { MemoryVersionRepo } from "./memory-repo";
+import { createJobListRouter } from "./routes";
+import { createJobListStore } from "./store";
+
+/** The fields the tests read from a response body; the routes' contract fixes their types. */
+interface Body {
+  error: string; message: string; latestVersion: number; version: number | null; savedBy: string; summary: string;
+  issues: { path: string; message: string }[]; diff: unknown[]; document: { jobs: unknown[] }; versions: Record<string, unknown>[];
+}
+const body = (res: { body: unknown }): Body => res.body as Body;
+
+function app() {
+  const server = express();
+  server.use("/api/job-list", createJobListRouter(createJobListStore(new MemoryVersionRepo())));
+  return server;
+}
+
+const upsert = (name: string, gap = 60) => ({
+  kind: "upsert", target: { type: "job", name }, value: { job_name: name, max_gap_minutes: gap },
+});
+const YAML = "jobs:\n  - job_name: orders_ingest\n    max_gap_minutes: 60\n  - job_name: orders_enrich\n    max_gap_minutes: 30\ndependencies:\n  - job_name: orders_enrich\n    depends_on: orders_ingest\n";
+
+describe("job-list routes", () => {
+  it("returns an empty state before anything is saved", async () => {
+    const res = await request(app()).get("/api/job-list");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ version: null, savedAt: null, savedBy: null, document: { jobs: [] } });
+  });
+
+  it("saves a change as the forwarded email and returns 201", async () => {
+    const a = app();
+    const res = await request(a).post("/api/job-list/changes").set("x-forwarded-email", "me@example.com")
+      .send({ baseVersion: null, change: upsert("orders_ingest") });
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ version: 1, summary: "Added job orders_ingest", document: { jobs: [{ job_name: "orders_ingest", max_gap_minutes: 60 }] } });
+    const state = await request(a).get("/api/job-list");
+    expect(state.body).toMatchObject({ version: 1, savedBy: "me@example.com" });
+    const versions = await request(a).get("/api/job-list/versions?limit=10");
+    expect(body(versions).versions).toHaveLength(1);
+    expect(body(versions).versions[0]).toMatchObject({ version: 1, savedBy: "me@example.com", changeKind: "create", changeTarget: "job:orders_ingest" });
+    expect(body(versions).versions[0]).not.toHaveProperty("document");
+  });
+
+  it("falls back to local-dev without the header", async () => {
+    const a = app();
+    await request(a).post("/api/job-list/changes").send({ baseVersion: null, change: upsert("a") });
+    expect(body(await request(a).get("/api/job-list")).savedBy).toBe("local-dev");
+  });
+
+  it("returns 409 with the latest version on a conflict", async () => {
+    const a = app();
+    await request(a).post("/api/job-list/changes").send({ baseVersion: null, change: upsert("a") });
+    await request(a).post("/api/job-list/changes").send({ baseVersion: 1, change: upsert("a", 90) });
+    const res = await request(a).post("/api/job-list/changes").send({ baseVersion: 1, change: upsert("a", 120) });
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: "conflict", message: "Someone else changed this since you opened it. Reload to see their change.", latestVersion: 2,
+    });
+  });
+
+  it("returns 422 with the issues for an invalid change", async () => {
+    const res = await request(app()).post("/api/job-list/changes").send({ baseVersion: null, change: upsert("a", -1) });
+    expect(res.status).toBe(422);
+    expect(body(res).error).toBe("invalid");
+    expect(body(res).message).toBe("The job list has a problem.");
+    expect(body(res).issues[0]).toMatchObject({ path: "jobs[a].max_gap_minutes" });
+  });
+
+  it("returns 400 with zod's message for a bad body", async () => {
+    const res = await request(app()).post("/api/job-list/changes").send({ baseVersion: "x", change: { kind: "nope" } });
+    expect(res.status).toBe(400);
+    expect(body(res).error).toBe("bad_request");
+    expect(body(res).message).toContain("baseVersion");
+  });
+
+  it("returns 404 for a missing version, and 400 for a bad limit", async () => {
+    const a = app();
+    expect((await request(a).get("/api/job-list/versions/7")).status).toBe(404);
+    expect((await request(a).get("/api/job-list/versions/abc")).status).toBe(404);
+    expect((await request(a).get("/api/job-list/versions?limit=0")).status).toBe(400);
+  });
+
+  it("returns a version's detail", async () => {
+    const a = app();
+    await request(a).post("/api/job-list/changes").send({ baseVersion: null, change: upsert("a") });
+    const res = await request(a).get("/api/job-list/versions/1");
+    expect(res.status).toBe(200);
+    expect(body(res).document.jobs).toHaveLength(1);
+    expect(body(res).summary).toBe("Added job a");
+  });
+
+  it("previews an import without saving", async () => {
+    const a = app();
+    const res = await request(a).post("/api/job-list/import/preview").send({ yaml: YAML });
+    expect(res.status).toBe(200);
+    expect(body(res).summary).toBe("Imported 2 jobs, 1 link and 0 workspace labels from YAML");
+    expect(body(res).issues).toEqual([]);
+    expect(body(res).diff).toContainEqual({ target: "job:orders_ingest", kind: "added", fields: [] });
+    expect(body(await request(a).get("/api/job-list")).version).toBeNull();
+  });
+
+  it("shows rule issues in a preview and rejects bad YAML with 400", async () => {
+    const a = app();
+    const issues = await request(a).post("/api/job-list/import/preview").send({ yaml: "jobs:\n  - job_name: a\n    max_gap_minutes: 60.0\n" });
+    expect(body(issues).issues[0].message).toContain("got 60.0");
+    const bad = await request(a).post("/api/job-list/import/preview").send({ yaml: "- a\n" });
+    expect(bad.status).toBe(400);
+    expect(body(bad).error).toBe("yaml");
+  });
+
+  it("imports, then exports with the headers", async () => {
+    const a = app();
+    const imp = await request(a).post("/api/job-list/import").set("x-forwarded-email", "me@example.com").send({ yaml: YAML, baseVersion: null });
+    expect(imp.status).toBe(201);
+    expect(body(imp).summary).toBe("Imported 2 jobs, 1 link and 0 workspace labels from YAML");
+    const stale = await request(a).post("/api/job-list/import").send({ yaml: YAML, baseVersion: null });
+    expect(stale.status).toBe(409);
+    const out = await request(a).get("/api/job-list/export");
+    expect(out.status).toBe(200);
+    expect(out.headers["content-type"]).toContain("text/yaml");
+    expect(out.headers["content-disposition"]).toBe('attachment; filename="monitored_jobs.v1.yml"');
+    expect(out.text).toContain("# Exported from the Watchdog app: version 1, saved ");
+    expect(out.text).toContain("by me@example.com");
+  });
+
+  it("rejects an import with rule problems using 422", async () => {
+    const res = await request(app()).post("/api/job-list/import").send({ yaml: "jobs: []\n", baseVersion: null });
+    expect(res.status).toBe(422);
+    expect(body(res).issues[0].message).toBe("the YAML file lists no jobs");
+  });
+
+  it("404s an export with nothing saved", async () => {
+    expect((await request(app()).get("/api/job-list/export")).status).toBe(404);
+  });
+
+  it("restores a version, and 404s a missing one", async () => {
+    const a = app();
+    await request(a).post("/api/job-list/changes").send({ baseVersion: null, change: upsert("a") });
+    await request(a).post("/api/job-list/changes").send({ baseVersion: 1, change: upsert("b") });
+    const res = await request(a).post("/api/job-list/restore").send({ version: 1, baseVersion: 2 });
+    expect(res.status).toBe(201);
+    expect(body(res).summary).toBe("Restored version 1");
+    expect((await request(a).post("/api/job-list/restore").send({ version: 9, baseVersion: 3 })).status).toBe(404);
+  });
+
+  it("returns a job's impact, 404 for an unknown job", async () => {
+    const a = app();
+    await request(a).post("/api/job-list/import").send({ yaml: YAML, baseVersion: null });
+    const res = await request(a).get("/api/job-list/impact/orders_ingest");
+    expect(res.body).toEqual({ jobName: "orders_ingest", parentJob: null, affectsDirectly: ["orders_enrich"], affectsInAll: ["orders_enrich"] });
+    expect((await request(a).get("/api/job-list/impact/nope")).status).toBe(404);
+  });
+});
