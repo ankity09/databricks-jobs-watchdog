@@ -17,6 +17,73 @@ declare module "@databricks/appkit-ui/react" {
         };
         result: unknown;
       };
+    pattern_check: {
+        name: "pattern_check";
+        parameters: {
+          /** STRING - use sql.string() */
+          pattern: SQLStringMarker;
+          /** STRING - use sql.string() */
+          exclude: SQLStringMarker;
+          /** INT - use sql.int() */
+          refresh: SQLNumberMarker;
+        };
+        result: Array<{
+          /** @sqlType BOOLEAN */
+          pattern_matches_empty: boolean;
+          /** @sqlType BOOLEAN */
+          exclude_matches_empty: boolean;
+          /** @sqlType INT */
+          refresh: number;
+        }>;
+      };
+    pattern_matches: {
+        name: "pattern_matches";
+        parameters: {
+          /** STRING - use sql.string() */
+          pattern: SQLStringMarker;
+          /** STRING - use sql.string() */
+          exclude: SQLStringMarker;
+          /** INT - use sql.int() */
+          refresh: SQLNumberMarker;
+        };
+        result: Array<{
+          /** The ID of the workspace this job belongs to. */
+          workspace_id: string;
+          /** The ID of the job. Only unique within a single workspace. */
+          job_id: string;
+          /** The user-supplied name of the job. */
+          name: string;
+          /** @sqlType BIGINT */
+          match_count: number;
+        }>;
+      };
+    region_jobs: {
+        name: "region_jobs";
+        parameters: {
+          /** STRING - use sql.string() */
+          search: SQLStringMarker;
+          /** INT - use sql.int() */
+          refresh: SQLNumberMarker;
+        };
+        result: Array<{
+          /** The ID of the workspace this job belongs to. */
+          workspace_id: string;
+          /** The human-readable name of the workspace. */
+          workspace_name: string;
+          /** The ID of the job. Only unique within a single workspace. */
+          job_id: string;
+          /** The user-supplied name of the job. */
+          name: string;
+          /** The type of trigger for the job. `MULTIPLE` indicates the job has 2 or more triggers; in that case the singular `trigger` column is NULL and `triggers` carries every trigger. **Not populated for rows emitted before late November 2025** */
+          trigger_type: string;
+          /** Indicates whether the job is paused. **Not populated for rows emitted before late November 2025** */
+          paused: boolean;
+          /** The email/ID of the service principal or group name who created the job. **Not populated for rows emitted before late November 2025** */
+          creator_user_name: string;
+          /** The time when the job was last modified. Timezone recorded as +00:00 (UTC). */
+          change_time: string;
+        }>;
+      };
     scan_freshness: {
         name: "scan_freshness";
         parameters: {
