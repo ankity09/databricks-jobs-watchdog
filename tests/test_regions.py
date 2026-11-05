@@ -3,7 +3,7 @@ import json
 import pytest
 
 from jobs_watchdog.config import ConfigError
-from jobs_watchdog.regions import RegionDeploy, deploy_steps, load_regions, region_env
+from jobs_watchdog.regions import RegionDeploy, deploy_steps, load_regions, normal_host, region_env, teardown_target
 from jobs_watchdog.sqlfiles import load_sql, repo_root
 from jobs_watchdog.upgrade import VIEW_TEMPLATES, render_view, view_names
 
@@ -262,3 +262,25 @@ def test_the_gitlab_example_has_a_matrix_job_per_stage_and_the_region_script():
     assert "--validate-only" in ci["validate"]["script"][0]
     assert ci["deploy"]["rules"][0]["when"] == "manual"
     assert ci["variables"]["DATABRICKS_CLI_VERSION"] == "1.23.0"
+
+
+# teardown_target
+
+
+def test_hosts_compare_without_case_scheme_or_a_trailing_slash():
+    assert normal_host("HTTPS://Prod-EU.example.com/") == normal_host("prod-eu.example.com") == "https://prod-eu.example.com"
+    assert normal_host("") == "" and normal_host(None) == ""
+
+
+def test_a_default_profile_is_a_profile_like_any_other(tmp_path):
+    config = tmp_path / "databrickscfg"
+    config.write_text("[DEFAULT]\nhost = https://prod-eu.example.com\n")
+    region_file = write(tmp_path, "accelerator.prod-eu.yaml", REGION_FILE.replace("example-eu.example.com", "prod-eu.example.com"))
+    target = teardown_target(region_file, "DEFAULT", {"DATABRICKS_CONFIG_FILE": str(config)})
+    assert (target.host, target.profile, target.checked) == ("https://prod-eu.example.com", "DEFAULT", True)
+
+
+def test_without_a_region_host_nothing_is_checked_and_the_shell_host_is_shown(tmp_path):
+    env = {"DATABRICKS_CONFIG_FILE": str(tmp_path / "none"), "DATABRICKS_HOST": "https://a.example.com/"}
+    target = teardown_target(None, "", env)
+    assert (target.host, target.profile, target.checked) == ("https://a.example.com", "", False)

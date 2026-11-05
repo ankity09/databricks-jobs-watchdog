@@ -15,6 +15,7 @@ CLI commands run in, and deploy_steps lists those commands. The script
 scripts/deploy_regions.py runs them.
 """
 
+import configparser
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -188,3 +189,51 @@ def deploy_steps(region, validate_only, run_app, ensure_tables=True, app_access=
     if app_access:
         steps.append(Step("app access", ["databricks", "bundle", "run", "watchdog_app_access", "-t", TARGET] + profile))
     return steps
+
+
+def normal_host(host):
+    """A workspace host as https://<name>, lowercase, with no slash at the end; "" when unset."""
+    host = str(host or "").strip().rstrip("/").lower()
+    return f"https://{host}" if host and "://" not in host else host
+
+
+def profile_hosts(env):
+    """(profile name -> host, config path) from the CLI's config file (DATABRICKS_CONFIG_FILE, else ~/.databrickscfg)."""
+    path = Path(env.get("DATABRICKS_CONFIG_FILE") or Path.home() / ".databrickscfg")
+    parser = configparser.ConfigParser(default_section="__no_default__", interpolation=None)
+    parser.read(path)
+    return {name: normal_host(parser[name].get("host")) for name in parser.sections()}, path
+
+
+@dataclass(frozen=True)
+class TeardownTarget:
+    host: str  # the workspace the teardown goes to, or "" when unknown
+    profile: str  # the profile every CLI call gets with --profile, or "" to use DATABRICKS_HOST
+    checked: bool  # True when an accelerator file named the host and the shell was checked against it
+
+
+def teardown_target(path, profile, env):
+    """Where teardown.sh sends its calls.
+
+    With an accelerator file that has deploy.workspace_host (a region file), the
+    teardown goes to that host and nowhere else: a DATABRICKS_HOST, a profile
+    (-p, the file's deploy.profile, or DATABRICKS_CONFIG_PROFILE) that points at
+    another workspace raises ConfigError before anything runs. Without one, it
+    only reports the host the CLI will use, as far as it can tell.
+    """
+    deploy = (load_accelerator(path).get("deploy") or {}) if path else {}
+    hosts, config = profile_hosts(env)
+    host = normal_host(deploy.get("workspace_host"))
+    chosen = profile or str(deploy.get("profile") or "").strip() or str(env.get("DATABRICKS_CONFIG_PROFILE") or "").strip()
+    if not host:
+        shown = hosts.get(chosen or "DEFAULT", "") if chosen or not env.get("DATABRICKS_HOST") else ""
+        return TeardownTarget(normal_host(env.get("DATABRICKS_HOST")) or shown, profile, False)
+    shell_host = normal_host(env.get("DATABRICKS_HOST"))
+    if shell_host and shell_host != host:
+        raise ConfigError(f"DATABRICKS_HOST points at {shell_host}, but {path} is the Watchdog in {host}")
+    if chosen:
+        if chosen not in hosts:
+            raise ConfigError(f"the profile {chosen} is not in {config}")
+        if hosts[chosen] != host:
+            raise ConfigError(f"the profile {chosen} points at {hosts[chosen]}, but {path} is the Watchdog in {host}")
+    return TeardownTarget(host, chosen, True)
