@@ -114,7 +114,7 @@ After every pull, restart Python on any notebook you have open, so it loads the 
 
    The file is git-ignored, so it stays out of commits and pulls. Every notebook widget takes its default from it, and you can still override any widget by hand.
 
-To write `job_name_regex` values, look at your real job names in `notebooks/explore/03_explore_system_tables` (query 12) or the Jobs page. A regex matches anywhere in the name unless you anchor it with `^` and `$`.
+To write `job_name_regex` values, look at your real job names in `notebooks/explore/03_explore_system_tables` (query 12) or the Jobs page. A regex matches anywhere in the name unless you anchor it with `^` and `$`. Both scans must be able to run it: the Jobs API scan uses Python's `re`, and the system table scan uses Spark's `regexp_like`, which is Java regex. The loader and the app refuse a pattern either one cannot compile, and name the part to change, such as a `(?P<name>...)` group or `{,2}`. `docs/data-model.md` lists what Java refuses.
 
 ### Exclude test copies
 
@@ -420,6 +420,7 @@ The history is what lets the alerts in Phase 3 fire once when a job breaks and o
 | `catalog is empty: type it in the catalog box at the top of the notebook, or set target.catalog in accelerator.local.yaml` | no catalog configured | type it in the `catalog` box, or fill in `accelerator.local.yaml` |
 | `catalog must be letters, digits or underscores` (or `schema`) | the name has a hyphen, space or quote | use a name with only letters, digits and underscores |
 | `job <name>: scheduled jobs need max_gap_minutes` (or another config error) | the YAML file has a mistake | fix the file; the message names the job and the field |
+| `job <name>: job_name_regex '<pattern>' uses <construct>, which the system-table scan can't run` (or `job_name_exclude_regex`) | Python compiles the pattern and Java's regex, which the system table scan's `regexp_like` uses, does not | rewrite that part, for example `(?P<env>...)` as `(...)` or `{,2}` as `{0,2}`; `docs/data-model.md` lists what Java refuses |
 | `job <name>: enabled must be true or false` | `enabled` was quoted, for example `"false"`, or has another value | write `enabled: false` without quotes |
 | `job <name>: unknown keys [...]; allowed: [...]` (or `defaults has unknown keys`, or `environments.<label> has unknown keys`) | a misspelled or unsupported setting | fix the key; the message lists the allowed ones |
 | `defaults cannot set <key>: set it on each job` | `defaults` holds `job_name`, `job_name_regex` or `environments` | move that key to the job entries |

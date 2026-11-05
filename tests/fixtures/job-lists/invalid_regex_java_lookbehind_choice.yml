@@ -1,0 +1,7 @@
+# Python accepts a look-behind of fixed length, and (?:dev|prd){1} is three characters
+# either way. Java cannot measure a repeated group that holds a choice, so it refuses
+# one inside a look-behind. Drop the {1}: (?<=^(?:dev|prd)_)orders$.
+jobs:
+  - job_name: orders_ingest
+    max_gap_minutes: 60
+    job_name_regex: '(?<=^(?:dev|prd){1}_)orders$'

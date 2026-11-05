@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 from jobs_watchdog.identifiers import validate_identifier
+from jobs_watchdog.java_regex import java_regex_clause, java_regex_problem
 
 # triggered: started by another job or by hand, so it has no schedule to check
 SCHEDULE_TYPES = {"continuous", "scheduled", "triggered"}
@@ -124,6 +125,11 @@ def _compiled(raw, name, field):
         re.compile(raw)
     except re.error as err:
         raise ConfigError(f"job {name}: {field} does not compile: {err}") from err
+    # The system-table scan matches with Spark's regexp_like, which compiles patterns as Java
+    # regex; one pattern Java refuses fails that scan for every job.
+    construct = java_regex_problem(raw)
+    if construct is not None:
+        raise ConfigError(f"job {name}: {field} {raw!r} {java_regex_clause(construct)}")
     return raw
 
 

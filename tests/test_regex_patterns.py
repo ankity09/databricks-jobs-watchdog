@@ -7,6 +7,10 @@ of Python's parser (app/shared/joblist/pyregex.ts) that accepts a pattern only
 when Python 3.10 to 3.14 all compile it; its test reads this file. This test
 keeps the file true to the Python it runs on: a row's verdict for this version
 is its python entry for the version, else its error.
+
+Both then check that the system-table scan's Java regex (Spark's regexp_like)
+can run the pattern: jobs_watchdog/java_regex.py here, javaregex.ts in the app.
+A row's java field is that check's verdict, pinned against regexp_like.
 """
 
 import json
@@ -16,6 +20,8 @@ import warnings
 from pathlib import Path
 
 import pytest
+
+from jobs_watchdog.java_regex import NAMED_CHARACTER, java_regex_problem
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "regex-patterns.json"
 DATA = json.loads(FIXTURE.read_text())
@@ -50,3 +56,28 @@ def test_the_fixture_covers_both_directions_and_the_python_versions():
 @pytest.mark.parametrize("row", PATTERNS, ids=lambda row: row["pattern"])
 def test_this_python_compiles_each_pattern_as_the_fixture_says(row):
     assert compile_error(row["pattern"]) == row.get("python", {}).get(VERSION, row["error"])
+
+
+def compiles_somewhere(row):
+    return row["error"] is None or any(verdict is None for verdict in row.get("python", {}).values())
+
+
+def test_every_pattern_some_python_compiles_has_a_java_verdict_and_only_those():
+    assert [row["pattern"] for row in PATTERNS if compiles_somewhere(row) != ("java" in row)] == []
+    java = {row["pattern"]: row["java"] for row in PATTERNS if "java" in row}
+    # Java refuses these, and Python 3.10 to 3.14 all compile them
+    for refused in ("(?P<x>a)(?P=x)", "a{,3}", "(?#a comment)a", "(?a)\\w", "\\0", "[\\b]", "(a)(?<=\\1)b",
+                    "(?<=(?:ab|cd){2})x", "(?x)[ ]", "[a[]", "[&&]", "\\b{gx}", "(?x)a#c\r("):
+        assert java[refused], refused
+    # and runs these
+    for runs in ("(?i)^orders", "\\101", "a{2147483647}", "\\b{g}", "(?<=(?:ab){2})x", "(?x)a{2 }", "[a[b]]", "(?u)\\w"):
+        assert java[runs] is None, runs
+    assert java["\\N{EM DASH}"] == NAMED_CHARACTER  # policy: Java knows this name, and others it does not
+
+
+@pytest.mark.skipif(VERSION not in DATA["versions"], reason=f"the fixture covers Python {DATA['versions']}")
+@pytest.mark.parametrize("row", [row for row in PATTERNS if "java" in row], ids=lambda row: row["pattern"])
+def test_the_java_check_gives_each_pattern_this_python_compiles_its_verdict(row):
+    if compile_error(row["pattern"]) is not None:
+        pytest.skip(f"Python {VERSION} refuses this pattern, so the loader never asks Java")
+    assert java_regex_problem(row["pattern"]) == row["java"]

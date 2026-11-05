@@ -53,7 +53,15 @@ About `job_name_regex` and `job_name_exclude_regex`:
 - Each can match anywhere in the name unless you anchor it with `^` and `$`. That is on purpose: a bundle deployed in development mode adds a `[dev <user>]` prefix, and an unanchored regex still matches.
 - `job_name_regex` can match several jobs, in one workspace or in many. Each match gets its own findings rows, with its workspace and job ID, so one entry covers a job in every workspace where it runs without listing job IDs. Excluded names get none.
 - When two or more jobs that a job's pattern matches in one workspace have exactly the same name, the system table scan writes a `duplicate_name` WARNING for that workspace. Different names (variants, copies in other workspaces) are normal and not flagged.
-- The system table scan matches with Spark's `regexp_like`; the Jobs API scan matches with Python's `re.search`. Simple patterns (letters, `^`, `$`, `|`, groups, character classes) behave the same in both. Avoid engine-specific syntax in either field.
+- The system table scan matches with Spark's `regexp_like`, which compiles each pattern as Java regex; the Jobs API scan matches with Python's `re.search`. A pattern one of them refuses would stop that scan for every job, so the loader and the app refuse it first: Python's `re` must compile it (the app checks Python 3.10 to 3.14, the loader the Python it runs on), and so must Java. Java refuses some patterns Python accepts:
+  - named groups `(?P<name>...)` (leave the group unnamed), conditionals `(?(1)...)`, `(?#...)` comments and the `a` flag;
+  - a `{` that is not a `{n}`, `{n,}` or `{n,m}` repeat, such as `{,2}` (write `{0,2}`) or a `{` meant as text (write `\{`), and a count above 2147483647;
+  - `\0` with no octal digit after it, `\U` escapes and `\N{...}` names (write the character itself);
+  - in a set: `\b`, octal escapes such as `\1`, an unescaped `[`, and `&&` with nothing on either side;
+  - in a verbose `(?x)` pattern, a space or `#` inside a set (Java skips them there; escape them), and a `#` comment with a line break other than `\n` in it;
+  - inside a look-behind, a back reference or a repeated group with a choice in it, such as `(?<=(?:dev|prd){1}_)`.
+
+  The error names the construct, for example `job orders_ingest: job_name_regex '^orders_(?P<env>dev|prod)$' uses a (?P<name>...) group, which the system-table scan can't run`. Simple patterns (letters, `^`, `$`, `|`, groups, character classes, `{n,m}`) compile and match the same in both. A few compile in both and match differently: `\101` is `A` in Python and a back reference in Java, and `\b{g}` is a word boundary and the text `{g}` in Python and a grapheme boundary in Java.
 - The example config sets `job_name_exclude_regex: "_test(_|$)"` in its `defaults` section, so every job skips test copies. It uses `_test(_|$)` rather than a bare `test`, because a bare `test` would also match names such as `daily_revenue_report_latest` and `contest`.
 
 About `job_ids`:

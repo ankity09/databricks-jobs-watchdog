@@ -21,7 +21,9 @@
  *
  * The one gap: a \N{...} character name. Python looks the name up in its
  * Unicode database, which JavaScript does not have, so the app refuses every
- * \N{...} rather than let an unknown name through to the scan.
+ * \N{...} rather than let an unknown name through to the scan. The loader
+ * refuses them too, with another message: the system-table scan's Java knows
+ * fewer names than Python (javaregex.ts).
  *
  * Positions count code points, as Python's do.
  */
@@ -63,6 +65,8 @@ const CATEGORY_POSITIONS = new Set(["\\A", "\\b", "\\B", "\\Z"]);
 
 /** Python's len(): code points, not UTF-16 units. */
 const len = (text: string): number => Array.from(text).length;
+/** The character after the backslash of an escape, as a whole code point: an escaped emoji is one character, not two surrogates. */
+const escaped = (escape: string): string => Array.from(escape)[1] ?? "";
 
 /** re.error, with str() as Python prints it. Other errors Python raises (OverflowError, ValueError) use their message alone. */
 class PatternError extends Error {
@@ -299,7 +303,7 @@ class Tokenizer {
 
 /** A \x, \u, \U, \N or octal escape, shared by sets and expressions. Returns null when the escape is not one of them. */
 function numericEscape(source: Tokenizer, escape: string): Node | null {
-  const c = escape.slice(1, 2);
+  const c = escaped(escape);
   if (c === "x" || c === "u" || c === "U") {
     const digits = c === "x" ? 2 : c === "u" ? 4 : 8;
     escape += source.getwhile(digits, HEXDIGITS);
@@ -323,7 +327,7 @@ function classEscape(source: Tokenizer, escape: string): Node {
   if (CATEGORY_SETS.has(escape)) return { op: "IN" };
   const numeric = numericEscape(source, escape);
   if (numeric) return numeric;
-  const c = escape.slice(1, 2);
+  const c = escaped(escape);
   if (OCTDIGITS.has(c)) {
     escape += source.getwhile(2, OCTDIGITS);
     const code = Number.parseInt(escape.slice(1), 8);
@@ -340,7 +344,7 @@ function expressionEscape(source: Tokenizer, escape: string, state: State): Node
   if (ESCAPES.has(escape)) return { op: "UNIT" };
   const numeric = numericEscape(source, escape);
   if (numeric) return numeric;
-  const c = escape.slice(1, 2);
+  const c = escaped(escape);
   if (c === "0") {
     source.getwhile(2, OCTDIGITS);
     return { op: "UNIT" };

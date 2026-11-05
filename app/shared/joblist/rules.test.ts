@@ -101,11 +101,29 @@ describe("issue paths and collection", () => {
   });
   it("checks a pattern the way Python's re does, with Python's message", () => {
     const issues = (pattern: string) => validateDocument(doc([{ job_name: "a", max_gap_minutes: 5, job_name_regex: pattern }]));
-    expect(issues("(?P<x>a)(?P=x)")).toEqual([]);
     expect(issues("(?i)^orders")).toEqual([]);
+    expect(issues("(?x) ^orders _ingest$")).toEqual([]);
     expect(issues("(?<x>a)")[0].message).toBe("job a: job_name_regex does not compile: unknown extension ?<x at position 1");
     const exclude = validateDocument(doc([{ job_name: "a", max_gap_minutes: 5, job_name_exclude_regex: "\\k<x>" }]));
     expect(exclude[0].message).toBe("job a: job_name_exclude_regex does not compile: bad escape \\k at position 0");
+  });
+  it("then checks that the system-table scan's Java regex can run it, with the loader's message", () => {
+    const issues = (field: string, pattern: string) => validateDocument(doc([{ job_name: "a", max_gap_minutes: 5, [field]: pattern }]));
+    expect(issues("job_name_regex", "(?P<x>a)(?P=x)")).toEqual([
+      {
+        path: "jobs[a].job_name_regex",
+        message: "job a: job_name_regex '(?P<x>a)(?P=x)' uses a (?P<name>...) group, which the system-table scan can't run",
+      },
+    ]);
+    expect(issues("job_name_exclude_regex", "_copy\\d{,2}$")[0].message).toBe(
+      "job a: job_name_exclude_regex '_copy\\\\d{,2}$' uses a { that is not a {n}, {n,} or {n,m} repeat, which the system-table scan can't run",
+    );
+    // Python's own error comes first, and a pattern gets one issue
+    expect(issues("job_name_regex", "(?P<x>a")).toEqual([
+      { path: "jobs[a].job_name_regex", message: "job a: job_name_regex does not compile: missing ), unterminated subpattern at position 0" },
+    ]);
+    const fromDefaults = validateDocument(doc([{ job_name: "a", max_gap_minutes: 5 }], { defaults: { job_name_exclude_regex: "(?#copies)_copy$" } }));
+    expect(fromDefaults[0].message).toBe("job a: job_name_exclude_regex '(?#copies)_copy$' uses a (?#...) comment, which the system-table scan can't run");
   });
 });
 

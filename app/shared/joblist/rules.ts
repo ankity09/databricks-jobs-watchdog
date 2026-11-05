@@ -8,12 +8,13 @@
  * scan's serverless Python may be any version from 3.10 to 3.14, so a pattern
  * passes only when all of them compile it, with Python's message.
  *
- * Like the loader, it does not check that Spark's regexp_like (Java regex), which the
- * system-table scan matches with, can use the pattern: Python's (?P<name>...) passes
- * both, and that scan then fails on it.
+ * Then, like the loader, it checks that Spark's regexp_like, which the system-table
+ * scan matches with, can run the pattern: that compiles it as Java regex, which refuses
+ * some patterns Python accepts, such as (?P<name>...) (javaregex.ts).
  *
  * Differences that cannot be avoided in JavaScript:
  * - A \N{...} character name in a pattern is refused: the app has no Unicode name database to look it up.
+ *   The loader refuses it too (the system-table scan may not know the name), with its own message.
  * - A float with no fraction (60.0) is told apart from 60 only if the YAML was
  *   parsed with pythonYamlOptions, which marks it with PyFloat; the rules reject the marker.
  * - Deliberate divergence: a count setting (max_gap_minutes and the like) above 9007199254740991
@@ -28,6 +29,7 @@
  * The rules accept the raw parse (integers as bigint, floats and timestamps marked), so
  * messages print values the way Python does; normalizeDocument is for storage afterwards.
  */
+import { javaRegexClause, javaRegexProblem } from "./javaregex";
 import { pythonRegexError } from "./pyregex";
 import { PyFloat, pyRepr, pySorted, pyStr, pyStrip } from "./pyrepr";
 import type { Change, JobListDocument, RuleIssue } from "./types";
@@ -225,10 +227,18 @@ function optionalInt(c: Collector, path: string, raw: unknown, jobName: string, 
   }
 }
 
-/** re.compile(raw), as the loader runs it: Python's own message when it fails. */
+/**
+ * re.compile(raw), as the loader runs it, with Python's own message when it fails; then the loader's
+ * check that the system-table scan's Java regex can run the pattern, with the loader's message.
+ */
 function compiled(c: Collector, path: string, raw: unknown, name: string, field: string): void {
   const error = typeof raw === "string" ? pythonRegexError(raw) : "first argument must be string or compiled pattern";
-  if (error !== null) c.add(path, `job ${name}: ${field} does not compile: ${error}`);
+  if (error !== null) {
+    c.add(path, `job ${name}: ${field} does not compile: ${error}`);
+    return;
+  }
+  const construct = typeof raw === "string" ? javaRegexProblem(raw) : null;
+  if (construct !== null) c.add(path, `job ${name}: ${field} ${pyRepr(raw)} ${javaRegexClause(construct)}`);
 }
 
 function checkJobIds(c: Collector, path: string, raw: unknown, where: string): void {

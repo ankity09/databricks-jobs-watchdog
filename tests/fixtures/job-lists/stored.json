@@ -258,6 +258,26 @@
    }
   ]
  },
+ "valid_java_compatible_patterns.yml": {
+  "defaults": {
+   "max_gap_minutes": 60
+  },
+  "jobs": [
+   {
+    "job_name": "orders_ingest",
+    "job_name_regex": "^orders_ingest_\\d{2,}$",
+    "job_name_exclude_regex": "(?<=_)(copy|test)$"
+   },
+   {
+    "job_name": "orders_enrich",
+    "job_name_regex": "(?<=^(?:dev|prd)_)orders_enrich$"
+   },
+   {
+    "job_name": "billing_report",
+    "job_name_regex": "(?u)^billing\\x5freport_\\u00e9t\\u00e9$"
+   }
+  ]
+ },
  "valid_job_ids_numbers_and_strings.yml": {
   "workspaces": [
    {
