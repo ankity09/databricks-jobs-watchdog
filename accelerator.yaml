@@ -14,7 +14,8 @@ target:
   catalog: ""                   # required: catalog that will hold the Watchdog schema
   schema: watchdog              # schema created for the Watchdog tables and view
   region: ""                    # required: cloud region of this metastore, for example us-east-2
-  warehouse_id: ""              # required for the Watchdog app: the SQL warehouse it reads findings through
+  warehouse_id: ""              # required for the Watchdog app: the SQL warehouse it reads findings through;
+                                # Pro or Serverless, as the copilot's Genie agent needs one
 
 auth:
   mode: current_workspace       # current_workspace: check only this workspace, as you

@@ -60,7 +60,7 @@ target:
   catalog: your_catalog
   schema: watchdog
   region: eu-west-1
-  warehouse_id: your_warehouse_id     # required
+  warehouse_id: your_warehouse_id     # required: a Pro or Serverless SQL warehouse (the Genie agent needs one)
 auth:
   mode: current_workspace
 scan:

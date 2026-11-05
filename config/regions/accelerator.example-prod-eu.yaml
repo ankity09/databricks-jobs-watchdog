@@ -11,7 +11,7 @@ target:
   catalog: your_catalog              # an existing catalog in this region's metastore
   schema: watchdog
   region: eu-west-1                  # cloud region of this metastore
-  warehouse_id: your_warehouse_id    # SQL warehouse in this workspace
+  warehouse_id: your_warehouse_id    # Pro or Serverless SQL warehouse in this workspace
 
 auth:
   mode: current_workspace

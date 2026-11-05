@@ -68,7 +68,7 @@ variables:
     description: watchdog_cleanup deletes findings scans older than this many days, keeping each source's newest scan; 0 keeps everything
     default: "30"
   warehouse_id:
-    description: SQL warehouse the Watchdog app reads findings through (required)
+    description: Pro or Serverless SQL warehouse the Watchdog app reads findings through (required; the copilot's Genie agent needs one)
   config_source:
     description: Where notebook 02 reads the job list, yaml (the monitored-jobs file) or lakebase (the Watchdog app)
     default: yaml

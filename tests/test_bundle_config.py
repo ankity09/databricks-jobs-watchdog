@@ -688,3 +688,10 @@ def test_the_app_package_declares_the_repo_license():
     package = json.loads((repo_root() / "app" / "package.json").read_text())
     lock = json.loads((repo_root() / "app" / "package-lock.json").read_text())
     assert package["license"] == lock["packages"][""]["license"] == "Apache-2.0"
+
+
+def test_every_place_that_asks_for_the_warehouse_says_the_genie_agent_needs_pro_or_serverless():
+    # Genie agents refuse a Classic SQL warehouse, so the first deploy would fail at the copilot's agent.
+    for name in ("README.md", "DEPLOY.md", "accelerator.yaml", "databricks.yml", "docs/multi-region.md",
+                 "config/regions/accelerator.example-lower.yaml", "config/regions/accelerator.example-prod-eu.yaml"):
+        assert "Pro or Serverless" in (repo_root() / name).read_text(), name

@@ -30,7 +30,7 @@ Ask for each value **one at a time**. Offer the default where there is one, and 
    **pipeline_url_parameter** (default `PIPELINE_URL`): the name of the job parameter that holds the link to the CI pipeline that deployed the job. Findings show it as `pipeline_url`.
 9. **Schedule** (default `0 0/20 * * * ?`, every 20 minutes in UTC, and `schedule_status` `PAUSED`): keep it paused until the first `watchdog_phase_1` run has passed. Then `UNPAUSED` turns the scan on, and the daily cleanup job with it.
 10. **retention_days** (default 30): the daily `watchdog_cleanup` job deletes findings scans older than this many days, always keeping each source's newest scan. 0 keeps everything. Ask how long the operator wants the history.
-11. **warehouse_id** (required): the SQL warehouse the Watchdog app, its copilot and the dashboard (notebook 08) read findings through, and that `scripts/ensure_tables.py` creates the tables through. The operator needs `CAN USE` on it, and so does everyone who will use the app.
+11. **warehouse_id** (required): the SQL warehouse the Watchdog app, its copilot and the dashboard (notebook 08) read findings through, and that `scripts/ensure_tables.py` creates the tables through. It must be a Pro or Serverless warehouse: the copilot's Genie agent needs one, and with a Classic warehouse the first `bundle deploy` fails at the agent. The operator needs `CAN USE` on it, and so does everyone who will use the app.
 12. **The app** (defaults `watchdog-app`, `jobs-watchdog` and `users`): `app.name` and `app.lakebase_project_id`, each unique in the workspace, and `app.users_group`, the workspace group whose members may open the app and ask its copilot. Ask whether the scan should read the job list from the app (`scan.config_source: lakebase`) or from the YAML file (`yaml`, the default). With `lakebase`, keep the schedule paused until the app holds the job list.
 
 ## Step 2. Preflight
@@ -50,7 +50,7 @@ Check what the workspace allows, **without creating or changing anything**. Note
 | Read the secret scope | service principal mode | `dbutils.secrets.list("<scope>")` lists both keys |
 | The service principal signs in to each workspace | service principal mode | notebook 00, section 4, one line per workspace |
 | Read the monitored-jobs file | notebook 02 | the file opens from a notebook at the given path |
-| A SQL warehouse the operator can use | the app, the copilot, the tables step and the dashboard | `databricks warehouses list`, then check that the operator has `CAN USE` on the chosen warehouse |
+| A Pro or Serverless SQL warehouse the operator can use | the app, the copilot (its Genie agent refuses a Classic warehouse), the tables step and the dashboard | `databricks warehouses list -o json`: the chosen warehouse's `warehouse_type` is not `CLASSIC`; then check that the operator has `CAN USE` on it |
 | Databricks Apps, Lakebase and Genie | the Watchdog app, its job list and its copilot | the workspace's Apps, Lakebase and Genie pages open, and the operator may create an app, a Lakebase project and a Genie space |
 | User authorization for apps | Monitoring, the job picker and the copilot, which run as the person | the workspace admin settings allow apps the `sql` and `dashboards.genie` scopes |
 | Users' grants | everyone who opens the app | the grants in [docs/multi-region.md](docs/multi-region.md#who-can-use-the-app); list who still needs them |
