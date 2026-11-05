@@ -20,8 +20,8 @@ import {
   TableRow,
   useAnalyticsQuery,
 } from "@databricks/appkit-ui/react";
-import { Lock, Plus, RotateCw, Search } from "lucide-react";
-import { type MouseEvent, useId, useMemo, useState } from "react";
+import { Lock, Plus, RotateCw, Search, X } from "lucide-react";
+import { type MouseEvent, useId, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import type { JobEntry, JobListDocument } from "../../../../shared/joblist/types";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
@@ -75,6 +75,7 @@ interface PickerBodyProps {
 
 function PickerBody({ document, onPick }: PickerBodyProps) {
   const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState("");
   const term = useDebouncedValue(search.trim(), SEARCH_DELAY_MS);
   const { refresh, bump } = useRefreshKey();
@@ -107,15 +108,31 @@ function PickerBody({ document, onPick }: PickerBodyProps) {
             Search jobs by name
           </label>
           <Input
+            ref={inputRef}
             id={inputId}
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Part of a job name, such as orders_ingest"
-            className="pl-8 font-mono text-[13px]"
+            // Chrome draws its own clear button in blue, not the app's accent: the button below takes its place.
+            className="pr-9 pl-8 font-mono text-[13px] [&::-webkit-search-cancel-button]:hidden"
             autoComplete="off"
             spellCheck={false}
           />
+          {search !== "" ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="absolute top-1/2 right-1 size-7 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              aria-label="Clear the search"
+              onClick={() => {
+                setSearch("");
+                inputRef.current?.focus();
+              }}
+            >
+              <X aria-hidden="true" />
+            </Button>
+          ) : null}
         </div>
         <div className="min-h-5 text-xs text-muted-foreground" role="status" aria-live="polite">
           {searching ? <Skeleton className="h-3.5 w-20" /> : count}

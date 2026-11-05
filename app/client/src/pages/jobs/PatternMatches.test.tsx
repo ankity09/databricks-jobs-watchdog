@@ -72,6 +72,19 @@ describe("PatternMatches", () => {
     expect(screen.queryByText("This pattern has an error.")).toBeNull();
   });
 
+  it("offers Retry, not a pattern error, when the pattern check fails for another reason", async () => {
+    // Its own pattern: AppKit shares a finished request with the next test that sends the same one.
+    renderMatches("^unchecked$", "", (call) =>
+      call.key === "pattern_check"
+        ? { error: "Network error. Please check your connection." }
+        : { error: "Query execution failed", errorCode: "BAD_REQUEST" },
+    );
+    expect(await screen.findByText("Could not check the pattern.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(screen.getByText("Network error. Please check your connection.")).toBeInTheDocument();
+    expect(screen.queryByText("This pattern has an error.")).toBeNull();
+  });
+
   it("offers Retry for other failures", async () => {
     renderMatches("^retry$", "", () => ({ error: "Network error. Please check your connection." }));
     expect(await screen.findByText("Could not check the pattern.")).toBeInTheDocument();

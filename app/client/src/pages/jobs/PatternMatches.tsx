@@ -70,6 +70,8 @@ export function PatternMatches({ pattern, exclude }: PatternMatchesProps) {
   const matches = useAnalyticsQuery("pattern_matches", parameters, { autoStart: ready });
   const failure = ready && matches.error !== null ? queryFailure(matches.error, matches.errorCode) : null;
   const check = useAnalyticsQuery("pattern_check", parameters, { autoStart: failure === "rejected" });
+  // Only the warehouse refusing pattern_check too says the pattern is bad; another failure of it says nothing about the pattern.
+  const checkFailure = failure === "rejected" && check.error !== null ? queryFailure(check.error, check.errorCode) : null;
 
   const parsed = useMemo(() => (matches.data === null ? null : PatternMatchRows.safeParse(matches.data)), [matches.data]);
   const answer = useMemo(
@@ -96,7 +98,7 @@ export function PatternMatches({ pattern, exclude }: PatternMatchesProps) {
     );
   }
 
-  if (failure === "rejected" && check.error !== null) {
+  if (checkFailure === "rejected") {
     return (
       <Frame>
         <p className="font-medium text-destructive">This pattern has an error.</p>
@@ -107,7 +109,10 @@ export function PatternMatches({ pattern, exclude }: PatternMatchesProps) {
     );
   }
 
-  if (failure === "other" || parsed?.success === false) {
+  if (failure === "other" || checkFailure !== null || parsed?.success === false) {
+    let detail = matches.error;
+    if (parsed?.success === false) detail = "The matches had an unexpected shape.";
+    else if (checkFailure !== null) detail = check.error;
     return (
       <Frame>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -117,7 +122,7 @@ export function PatternMatches({ pattern, exclude }: PatternMatchesProps) {
             Retry
           </Button>
         </div>
-        <p className="mt-0.5 text-muted-foreground">{parsed?.success === false ? "The matches had an unexpected shape." : matches.error}</p>
+        <p className="mt-0.5 text-muted-foreground">{detail}</p>
       </Frame>
     );
   }

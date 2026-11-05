@@ -2,8 +2,9 @@
 -- of each job's newest definition (system.lakeflow.jobs keeps a row per
 -- change), without deleted jobs. Runs as the signed-in person, so it needs
 -- SELECT on system.lakeflow.jobs and system.access.workspaces_latest.
--- A backslash in the search is doubled, so it matches itself instead of
--- breaking the ILIKE pattern.
+-- The search is a plain "contains" match: a backslash, % or _ in it is escaped
+-- (the backslash first), so each matches itself instead of acting as a
+-- wildcard or breaking the ILIKE pattern.
 -- @param search STRING = orders
 -- @param refresh INT = 0
 WITH latest_jobs AS (
@@ -23,7 +24,7 @@ SELECT
   j.change_time
 FROM latest_jobs j
 LEFT JOIN system.access.workspaces_latest w ON w.workspace_id = j.workspace_id
-WHERE j.name ILIKE concat('%', replace(:search, '\\', '\\\\'), '%')
+WHERE j.name ILIKE concat('%', replace(replace(replace(:search, '\\', '\\\\'), '%', '\\%'), '_', '\\_'), '%')
   AND :refresh >= 0
 ORDER BY j.name
 LIMIT 100

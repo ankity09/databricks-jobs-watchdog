@@ -132,6 +132,22 @@ describe("AddFromWorkspaceDialog", () => {
     expect(await screen.findByText("No job in this region has zzz in its name.")).toBeInTheDocument();
   });
 
+  it("clears the search with its own button: the browser's own one is hidden", async () => {
+    const user = userEvent.setup();
+    renderDialog(() => ({ rows: ROWS }));
+    const input = screen.getByRole("searchbox", { name: "Search jobs by name" });
+    // Chrome draws its clear button in blue, which is not the app's accent.
+    expect(input).toHaveClass("[&::-webkit-search-cancel-button]:hidden");
+    expect(screen.queryByRole("button", { name: "Clear the search" })).toBeNull();
+    await user.type(input, "orders");
+    await screen.findByRole("row", { name: /orders_ingest_prod/ });
+    await user.click(screen.getByRole("button", { name: "Clear the search" }));
+    expect(input).toHaveValue("");
+    expect(input).toHaveFocus();
+    expect(await screen.findByText("Type part of a job name to search every workspace in this region.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Clear the search" })).toBeNull();
+  });
+
   it("says when the list is cut at 100 jobs", async () => {
     const user = userEvent.setup();
     const many = Array.from({ length: 100 }, (_, i) => ({ ...ROWS[0], job_id: String(1000 + i), name: `orders_${1000 + i}` }));

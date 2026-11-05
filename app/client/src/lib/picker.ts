@@ -99,7 +99,16 @@ export function draftFromRegionJob(row: RegionJobRow, document: JobListDocument)
 
 const compiled = new Map<string, RegExp | null>();
 
-/** A pattern as a RegExp, or null when it does not compile. Cached, since every row checks every entry. */
+/**
+ * A pattern as a RegExp, or null when it does not compile. Cached, since every
+ * row checks every entry.
+ *
+ * This is JavaScript's RegExp, while the scans match with the warehouse's
+ * regexp_like, which is Java regex, so the "Monitored as" badge and the scan
+ * can disagree on a few patterns: an inline flag such as (?i) does not compile
+ * here (no badge), and \A and \z match the letters A and z here instead of the
+ * start and the end. The scan's answer is the one that counts.
+ */
 function regex(pattern: string): RegExp | null {
   if (!compiled.has(pattern)) {
     try {
