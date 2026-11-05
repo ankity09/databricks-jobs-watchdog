@@ -31,7 +31,14 @@ export function readJobListYaml(text: string, source = "the YAML file"): ReadRes
   const parsed = parseDocument(text, { ...pythonYamlOptions, uniqueKeys: true });
   const first = parsed.errors[0];
   if (first) throw new YamlError(first.message);
-  const raw: unknown = parsed.toJS();
+  let raw: unknown;
+  try {
+    raw = parsed.toJS();
+  } catch (error) {
+    // The yaml library refuses a file whose aliases expand past its limit (an alias bomb) with a ReferenceError.
+    if (error instanceof ReferenceError) throw new YamlError("The YAML file uses too many aliases.");
+    throw error;
+  }
   if (!isMap(raw)) throw new YamlError(`${source} must contain a YAML mapping at the top level`);
   const issues = validateDocument(raw, source);
   const normalized = normalizeDocument(raw);

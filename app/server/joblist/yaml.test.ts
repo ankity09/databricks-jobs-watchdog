@@ -6,6 +6,14 @@ import { parseJobListYaml, readJobListYaml, toJobListYaml, YamlError } from "./y
 const CORPUS = join(__dirname, "../../../tests/fixtures/job-lists");
 const META = { version: 3, savedAt: "2026-11-05T10:00:00Z", savedBy: "someone@example.com" };
 
+describe("an alias bomb", () => {
+  const bomb =
+    "a: &a [x, x, x, x, x, x, x, x, x]\nb: &b [*a, *a, *a, *a, *a, *a, *a, *a, *a]\nc: &c [*b, *b, *b, *b, *b, *b, *b, *b, *b]\nd: &d [*c, *c, *c, *c, *c, *c, *c, *c, *c]\ne: &e [*d, *d, *d, *d, *d, *d, *d, *d, *d]\nf: &f [*e, *e, *e, *e, *e, *e, *e, *e, *e]\njobs: []\n";
+  it("is a YamlError with a plain message", () => {
+    expect(() => readJobListYaml(bomb)).toThrow(new YamlError("The YAML file uses too many aliases."));
+  });
+});
+
 describe("parseJobListYaml", () => {
   it("keeps every digit of big IDs", () => {
     const doc = parseJobListYaml(

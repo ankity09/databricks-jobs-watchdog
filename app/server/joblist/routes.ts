@@ -81,6 +81,18 @@ export function createJobListRouter(store: JobListStore): express.Router {
       });
     };
 
+  // express.json fails before any handler runs: a body that is not JSON, or one over the limit.
+  router.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction): void => {
+    const type = typeof error === "object" && error !== null && "type" in error ? error.type : undefined;
+    if (type === "entity.too.large") {
+      res.status(413).json({ error: "too_large", message: "The request is larger than 2 MB." });
+    } else if (type === "entity.parse.failed") {
+      res.status(400).json({ error: "bad_request", message: "The request body is not valid JSON." });
+    } else {
+      next(error);
+    }
+  });
+
   const bad = (res: express.Response, error: z.ZodError): void => {
     res.status(400).json({ error: "bad_request", message: z.prettifyError(error) });
   };
