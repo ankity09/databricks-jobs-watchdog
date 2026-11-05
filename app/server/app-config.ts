@@ -51,14 +51,28 @@ async function readScanJobParameters(source: ScanJobSource): Promise<Record<stri
   }
 }
 
+/** The scan job's settings could not be read, and no environment variable names the catalog. */
+export class AppConfigError extends Error {
+  constructor() {
+    super("The app could not read the scan job's settings. Check that the app can view the scan job, then try again.");
+    this.name = "AppConfigError";
+  }
+}
+
 const cache = new WeakMap<ScanJobSource, { value: AppConfig; expiresAt: number }>();
 
-/** The app config, cached for 10 minutes. When the scan job cannot be read, the defaults apply and nothing is cached. */
+/**
+ * The app config, cached for 10 minutes. When the scan job cannot be read,
+ * nothing is cached. The defaults apply if WATCHDOG_CATALOG names the catalog;
+ * otherwise it throws an AppConfigError, since an empty catalog would only
+ * look like a missing setting.
+ */
 export async function getAppConfig(appkit: ScanJobSource): Promise<AppConfig> {
   const hit = cache.get(appkit);
   if (hit && hit.expiresAt > Date.now()) return hit.value;
   const parameters = await readScanJobParameters(appkit);
   const value = buildAppConfig(process.env, parameters ?? {});
+  if (!parameters && value.catalog === "") throw new AppConfigError();
   if (parameters) cache.set(appkit, { value, expiresAt: Date.now() + CACHE_MS });
   return value;
 }
@@ -69,7 +83,12 @@ export function registerAppConfigRoute(app: express.Application, appkit: ScanJob
     try {
       res.json(await getAppConfig(appkit));
     } catch (error) {
-      res.status(500).json({ error: "app_config", message: error instanceof Error ? error.message : "Could not read the app config" });
+      if (error instanceof AppConfigError) {
+        res.status(503).json({ error: "app_config", message: error.message });
+        return;
+      }
+      console.error("[app-config] Could not read the app config:", error);
+      res.status(500).json({ error: "app_config", message: "The app could not read its settings. Try again." });
     }
   });
 }

@@ -21,8 +21,8 @@ export interface LiveStatus {
  * `loading` is true and `byJob` keeps the last result.
  */
 export function useLiveStatus(): LiveStatus {
-  const { config, error: configError } = useAppConfig();
   const { refresh } = useRefreshKey();
+  const { config, error: configError } = useAppConfig(refresh);
   const ready = config !== null && config.catalog !== "";
   const parameters = useMemo(
     () => ({ catalog: sql.string(config?.catalog ?? ""), schema: sql.string(config?.schema ?? ""), refresh: sql.int(refresh) }),

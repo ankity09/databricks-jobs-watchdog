@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildAppConfig, getAppConfig } from "./app-config";
+import express from "express";
+import request from "supertest";
+import { AppConfigError, buildAppConfig, getAppConfig, registerAppConfigRoute } from "./app-config";
 
 const jobDefaults = { catalog: "main", schema: "watchdog_prod", region: "us-east-2", lakebase_project_id: "jobs-watchdog-east" };
 
@@ -54,12 +56,64 @@ describe("getAppConfig", () => {
     expect(getJob).toHaveBeenCalledTimes(2);
   });
 
-  it("falls back to the defaults, and asks again next time, when the job cannot be read", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("throws, and asks again next time, when the job cannot be read and no variable names the catalog", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubEnv("WATCHDOG_CATALOG", "");
     const { getJob, appkit } = scanJob({ ok: false, status: 403, message: "no access" });
-    expect(await getAppConfig(appkit)).toMatchObject({ schema: "watchdog", lakebaseProject: "jobs-watchdog" });
+    await expect(getAppConfig(appkit)).rejects.toBeInstanceOf(AppConfigError);
+    await expect(getAppConfig(appkit)).rejects.toBeInstanceOf(AppConfigError);
+    expect(getJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the defaults, uncached, when the job cannot be read but WATCHDOG_CATALOG names the catalog", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubEnv("WATCHDOG_CATALOG", "dev_catalog");
+    vi.stubEnv("WATCHDOG_SCHEMA", "");
+    const { getJob, appkit } = scanJob({ ok: false, status: 403, message: "no access" });
+    expect(await getAppConfig(appkit)).toMatchObject({ catalog: "dev_catalog", schema: "watchdog", lakebaseProject: "jobs-watchdog" });
     await getAppConfig(appkit);
     expect(getJob).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalled();
+  });
+
+  it("throws when reading the job throws", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubEnv("WATCHDOG_CATALOG", "");
+    const appkit = { jobs: () => ({ getJob: vi.fn().mockRejectedValue(new Error("socket hang up")) }) };
+    await expect(getAppConfig(appkit)).rejects.toBeInstanceOf(AppConfigError);
+  });
+});
+
+describe("GET /api/app-config", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  function appWith(getJob: () => Promise<unknown>) {
+    const app = express();
+    registerAppConfigRoute(app, { jobs: () => ({ getJob }) } as never);
+    return app;
+  }
+
+  it("answers 503 with the app_config error when the scan job cannot be read", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubEnv("WATCHDOG_CATALOG", "");
+    const res = await request(appWith(() => Promise.resolve({ ok: false, status: 403, message: "secret detail" }))).get("/api/app-config");
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({
+      error: "app_config",
+      message: "The app could not read the scan job's settings. Check that the app can view the scan job, then try again.",
+    });
+    expect(JSON.stringify(res.body)).not.toContain("secret detail");
+  });
+
+  it("answers 200 with the config when the job is read", async () => {
+    vi.stubEnv("WATCHDOG_CATALOG", "");
+    const res = await request(
+      appWith(() => Promise.resolve({ ok: true, data: { settings: { parameters: [{ name: "catalog", default: "route_main" }] } } })),
+    ).get("/api/app-config");
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ catalog: "route_main" });
   });
 });
