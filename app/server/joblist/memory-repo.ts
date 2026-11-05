@@ -13,8 +13,9 @@ export class MemoryVersionRepo implements VersionRepo {
     return Promise.resolve(this.rows.find((r) => r.version === version) ?? null);
   }
 
-  list(limit: number): Promise<VersionRow[]> {
-    return Promise.resolve([...this.rows].reverse().slice(0, limit));
+  list(limit: number, before?: number): Promise<VersionRow[]> {
+    const rows = before === undefined ? this.rows : this.rows.filter((r) => r.version < before);
+    return Promise.resolve([...rows].reverse().slice(0, limit));
   }
 
   transaction<T>(fn: (tx: VersionTx) => Promise<T>): Promise<T> {

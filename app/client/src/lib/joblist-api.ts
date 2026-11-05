@@ -89,9 +89,10 @@ export function getJobList(): Promise<JobListState> {
   return apiFetch("/api/job-list", JobListStateSchema);
 }
 
-/** GET /api/job-list/versions: the saved versions, newest first. */
-export async function listVersions(limit = 50): Promise<VersionSummary[]> {
-  const result = await apiFetch(`/api/job-list/versions?limit=${limit}`, z.object({ versions: z.array(VersionSummarySchema) }));
+/** GET /api/job-list/versions: the newest `limit` versions, newest first; with `before`, the ones older than that version. */
+export async function listVersions(limit = 50, before?: number): Promise<VersionSummary[]> {
+  const query = before === undefined ? `limit=${limit}` : `limit=${limit}&before=${before}`;
+  const result = await apiFetch(`/api/job-list/versions?${query}`, z.object({ versions: z.array(VersionSummarySchema) }));
   return result.versions;
 }
 

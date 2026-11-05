@@ -16,6 +16,13 @@ const PAGES = [
   ["/copilot/example-thread", "Copilot"],
 ] as const;
 
+/** Each job page's empty state, with no jobs and no versions saved. */
+const EMPTY_STATES = [
+  ["/jobs", "The job list is empty"],
+  ["/jobs/changes", "Nothing is saved yet"],
+  ["/jobs/settings", "Add jobs first"],
+] as const;
+
 const NAV_LINKS = [
   "Monitoring",
   "Jobs and dependencies",
@@ -41,6 +48,8 @@ function respond(url: string): Response {
     return json({ catalog: "main", schema: "watchdog", region: "us-east-2", appName: "watchdog-app", lakebaseProject: "jobs-watchdog" });
   }
   if (url.startsWith("/api/whoami")) return json({ user: "4321@1234", email: "dana@example.com" });
+  if (url === "/api/job-list") return json({ version: null, savedAt: null, savedBy: null, document: { jobs: [] } });
+  if (url.startsWith("/api/job-list/versions?")) return json({ versions: [] });
   if (url.startsWith("/api/analytics/query/")) {
     return new Response('data: {"type":"result","data":[]}\n\n', { headers: { "Content-Type": "text/event-stream" } });
   }
@@ -75,6 +84,11 @@ describe("the app shell", () => {
     const nav = screen.getByRole("navigation", { name: "Main" });
     for (const name of NAV_LINKS) expect(within(nav).getByRole("link", { name })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Collapse sidebar" })).toBeInTheDocument();
+  });
+
+  it.each(EMPTY_STATES)("settles %s into its empty state: %s", async (path, title) => {
+    await renderAt(path);
+    expect(screen.getByText(title)).toBeInTheDocument();
   });
 
   it("sends / to Monitoring", async () => {

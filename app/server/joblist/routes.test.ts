@@ -50,6 +50,26 @@ describe("job-list routes", () => {
     expect(body(await request(a).get("/api/job-list")).savedBy).toBe("local-dev");
   });
 
+  it("pages through older versions with before, in the same shape", async () => {
+    const a = app();
+    for (let n = 1; n <= 5; n++) {
+      await request(a).post("/api/job-list/changes").send({ baseVersion: n === 1 ? null : n - 1, change: upsert("a", n * 10) });
+    }
+    const listed = async (query: string) => {
+      const res = await request(a).get(`/api/job-list/versions${query}`);
+      expect(res.status).toBe(200);
+      expect(Object.keys(res.body as object)).toEqual(["versions"]);
+      return body(res).versions.map((v) => v.version);
+    };
+    expect(await listed("?limit=2")).toEqual([5, 4]);
+    expect(await listed("?limit=2&before=4")).toEqual([3, 2]);
+    expect(await listed("?limit=2&before=2")).toEqual([1]);
+    expect(await listed("?before=1")).toEqual([]);
+    expect(await listed("?before=99")).toEqual([5, 4, 3, 2, 1]);
+    expect((await request(a).get("/api/job-list/versions?before=0")).status).toBe(400);
+    expect((await request(a).get("/api/job-list/versions?before=abc")).status).toBe(400);
+  });
+
   it("returns 409 with the latest version on a conflict", async () => {
     const a = app();
     await request(a).post("/api/job-list/changes").send({ baseVersion: null, change: upsert("a") });

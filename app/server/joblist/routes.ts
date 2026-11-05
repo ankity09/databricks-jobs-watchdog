@@ -32,7 +32,11 @@ const ChangeRequest = z.object({ baseVersion: Base, change: ChangeBody });
 const PreviewRequest = z.object({ yaml: z.string() });
 const ImportRequest = z.object({ yaml: z.string(), baseVersion: Base });
 const RestoreRequest = z.object({ version: Version, baseVersion: Base });
-const ListQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) });
+/** `before` pages back: the versions older than it. The answer has the same shape with or without it. */
+const ListQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  before: z.coerce.number().int().min(1).optional(),
+});
 
 function param(req: express.Request, name: string): string {
   const value: unknown = req.params[name];
@@ -92,7 +96,7 @@ export function createJobListRouter(store: JobListStore): express.Router {
   router.get("/versions", handle(async (req, res) => {
     const query = ListQuery.safeParse(req.query);
     if (!query.success) return bad(res, query.error);
-    const rows = await store.list(query.data.limit);
+    const rows = await store.list(query.data.limit, query.data.before);
     res.json({ versions: rows.map(summaryOf) });
   }));
 
