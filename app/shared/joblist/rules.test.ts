@@ -66,9 +66,21 @@ describe("normalizeDocument", () => {
       workspaces: [{ workspace_id: "9007199254740995", environment: "p" }],
     });
   });
-  it("an unsafe big number outside IDs becomes a string, which the rules reject", () => {
-    const out = normalizeDocument({ jobs: [{ job_name: "a", max_gap_minutes: 9007199254740993n }] });
-    expect(validateDocument(out)[0].message).toContain("max_gap_minutes must be a whole number");
+  it("an unsafe big number outside IDs is rejected as too large, before and after normalizing", () => {
+    const raw = { jobs: [{ job_name: "a", max_gap_minutes: 99999999999999999999n }] };
+    const message = "job a: max_gap_minutes is too large (at most 9007199254740991), got 99999999999999999999";
+    expect(validateDocument(raw)[0].message).toBe(message);
+    expect(validateDocument(normalizeDocument(raw))[0].message).toBe(message);
+  });
+  it("safe bigints in count settings become numbers, at every level", () => {
+    const out = normalizeDocument({
+      defaults: { max_runtime_minutes: 9007199254740991n },
+      jobs: [{ job_name: "a", max_gap_minutes: 5n, environments: { p: { max_retries: 2n } } }],
+    });
+    expect(out).toEqual({
+      defaults: { max_runtime_minutes: 9007199254740991 },
+      jobs: [{ job_name: "a", max_gap_minutes: 5, environments: { p: { max_retries: 2 } } }],
+    });
   });
 });
 
@@ -77,8 +89,12 @@ describe("raw parse messages", () => {
   it("prints a marked float like Python", () => {
     expect(gap(new PyFloat(60))[0].message).toBe("job a: max_gap_minutes must be a whole number of zero or more, got 60.0");
   });
-  it("accepts bigint integers, including unsafe ones", () => {
-    expect(gap(9007199254740993n)).toEqual([]);
+  it("accepts bigint integers up to the safe limit and rejects larger ones", () => {
+    expect(gap(9007199254740991n)).toEqual([]);
+    expect(gap(9007199254740992n)[0].message).toContain("is too large");
+    const env = validateDocument({ workspaces: [{ workspace_id: "1", environment: "p" }], jobs: [{ job_name: "a", max_gap_minutes: 1, environments: { p: { max_retries: 10n ** 20n } } }] });
+    expect(env[0].message).toContain("environments.p.max_retries is too large");
+    expect(validateDocument({ defaults: { max_retries: 10n ** 20n }, jobs: [{ job_name: "a", max_gap_minutes: 1 }] })[0].message).toContain("max_retries is too large");
     expect(gap(-5n)[0].message).toContain("got -5");
   });
   it("job IDs print as numbers and float IDs are rejected", () => {

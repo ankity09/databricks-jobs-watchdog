@@ -9,6 +9,9 @@
  *   `(?P<x>...)` is reported as not compiling.
  * - A float with no fraction (60.0) is told apart from 60 only if the YAML was
  *   parsed with pythonYamlOptions, which marks it with PyFloat; the rules reject the marker.
+ * - Deliberate divergence: a count setting (max_gap_minutes and the like) above 9007199254740991
+ *   is rejected as too large, because it could not be stored as a number; Python has no limit.
+ *   IDs (job_ids, workspace_id) are strings of any length.
  * - A section that is not a list gets the issue "... must be a list"; Python fails differently.
  * The rules accept the raw parse (integers as bigint, floats marked), so messages
  * print values the way Python does; normalizeDocument is for storage afterwards.
@@ -97,8 +100,16 @@ class Collector {
   }
 }
 
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+
 function optionalInt(c: Collector, path: string, raw: unknown, jobName: string, field: string): void {
   if (raw === null || raw === undefined) return;
+  // a bigint from the raw parse, or the string normalizeDocument made of one
+  const big = typeof raw === "bigint" ? raw : typeof raw === "string" && /^[0-9]+$/.test(raw) ? BigInt(raw) : null;
+  if (big !== null && big > MAX_SAFE) {
+    c.add(path, `job ${jobName}: ${field} is too large (at most ${Number.MAX_SAFE_INTEGER}), got ${big}`);
+    return;
+  }
   if (typeof raw === "boolean" || !isWholeNumber(raw) || raw < 0) {
     c.add(path, `job ${jobName}: ${field} must be a whole number of zero or more, got ${pyRepr(raw)}`);
   }

@@ -111,6 +111,21 @@ describe("job-list routes", () => {
     expect(body(bad).error).toBe("yaml");
   });
 
+  it("preview and import agree on a too-large number, and a large safe one passes", async () => {
+    const a = app();
+    const huge = "jobs:\n  - job_name: orders_ingest\n    max_gap_minutes: 99999999999999999999\n";
+    const preview = await request(a).post("/api/job-list/import/preview").send({ yaml: huge });
+    const imported = await request(a).post("/api/job-list/import").send({ yaml: huge, baseVersion: null });
+    const message = "job orders_ingest: max_gap_minutes is too large (at most 9007199254740991), got 99999999999999999999";
+    expect(preview.status).toBe(200);
+    expect(body(preview).issues[0].message).toBe(message);
+    expect(imported.status).toBe(422);
+    expect(body(imported).issues[0].message).toBe(message);
+    const safe = "jobs:\n  - job_name: orders_ingest\n    max_gap_minutes: 9007199254740991\n";
+    expect(body(await request(a).post("/api/job-list/import/preview").send({ yaml: safe })).issues).toEqual([]);
+    expect((await request(a).post("/api/job-list/import").send({ yaml: safe, baseVersion: null })).status).toBe(201);
+  });
+
   it("imports, then exports with the headers", async () => {
     const a = app();
     const imp = await request(a).post("/api/job-list/import").set("x-forwarded-email", "me@example.com").send({ yaml: YAML, baseVersion: null });
