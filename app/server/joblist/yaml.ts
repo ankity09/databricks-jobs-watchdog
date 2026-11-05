@@ -35,8 +35,9 @@ export function readJobListYaml(text: string, source = "the YAML file"): ReadRes
   try {
     raw = parsed.toJS();
   } catch (error) {
-    // The yaml library refuses a file whose aliases expand past its limit (an alias bomb) with a ReferenceError.
-    if (error instanceof ReferenceError) throw new YamlError("The YAML file uses too many aliases.");
+    // The yaml library refuses a file whose aliases expand past its limit (an alias bomb) with a ReferenceError
+    // that says "Excessive alias count". Any other error is not the file's fault and stays a server error.
+    if (error instanceof ReferenceError && /alias count/i.test(error.message)) throw new YamlError("The YAML file uses too many aliases.");
     throw error;
   }
   if (!isMap(raw)) throw new YamlError(`${source} must contain a YAML mapping at the top level`);

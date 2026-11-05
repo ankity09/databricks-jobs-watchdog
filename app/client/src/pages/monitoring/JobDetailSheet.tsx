@@ -42,7 +42,7 @@ function ExternalLink({ href, children }: { href: string; children: ReactNode })
       href={href}
       target="_blank"
       rel="noreferrer"
-      className="inline-flex max-w-full items-center gap-0.5 rounded-sm font-mono text-xs text-foreground underline decoration-border underline-offset-4 outline-none hover:text-primary hover:decoration-primary focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="inline-flex max-w-full items-center gap-0.5 rounded-sm font-mono text-xs text-foreground underline decoration-border underline-offset-4 outline-none hover:text-primary hover:decoration-primary focus-visible:ring-[3px] focus-visible:ring-ring"
     >
       <span className="truncate">{children}</span>
       <ArrowUpRight className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />

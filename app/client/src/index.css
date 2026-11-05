@@ -102,3 +102,12 @@ html {
 .dark {
   color-scheme: light;
 }
+
+/*
+ * Focus rings at full strength. AppKit's components focus with `ring-ring/50`, a 50% blue that is
+ * about 2:1 on white, too faint for a button with no border. This rule is outside every @layer, so it
+ * beats the utilities in Tailwind's layers. Controls marked invalid keep their red ring.
+ */
+[data-slot]:focus-visible:not([aria-invalid="true"]) {
+  --tw-ring-color: var(--ring);
+}
