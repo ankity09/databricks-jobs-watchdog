@@ -9,7 +9,7 @@ const FIXTURE = join(__dirname, "../../../tests/fixtures/regex-patterns.json");
 type Row = { pattern: string; error: string | null; raises?: string; python?: Record<string, string | null> };
 const rows = (JSON.parse(readFileSync(FIXTURE, "utf8")) as { patterns: Row[] }).patterns;
 
-/** Python looks \N{...} names up in its Unicode database, which the app does not have, so it refuses them all. */
+/** Python looks \N{...} names up in its Unicode database, which the app does not have, so the port cannot match it on names. */
 const NAMED_CHARACTER = /\\N\{/;
 
 describe("pythonRegexError agrees with Python's re", () => {
@@ -19,11 +19,12 @@ describe("pythonRegexError agrees with Python's re", () => {
   it.each(rows.filter((row) => !NAMED_CHARACTER.test(row.pattern)))("$pattern", ({ pattern, error }) => {
     expect(pythonRegexError(pattern)).toBe(error);
   });
-  it("refuses a \\N{...} name it cannot look up, at the position Python gives a bad name", () => {
-    expect(pythonRegexError("\\N{EM DASH}")).toBe(
-      "the app cannot check the character name 'EM DASH'; write the character itself at position 0",
-    );
+  it("reads a \\N{...} escape's syntax as Python does but leaves the name to the Java check, which refuses them all", () => {
+    for (const pattern of ["\\N{EM DASH}", "[a-\\N{EM DASH}]", "\\N{NOT A NAME}"]) expect(pythonRegexError(pattern)).toBeNull();
     expect(pythonRegexError("\\N")).toBe("missing { at position 2");
+    expect(pythonRegexError("\\N{}")).toBe("missing character name at position 3");
+    expect(pythonRegexError("\\N{EM DASH")).toBe("missing }, unterminated name at position 3");
+    expect(pythonRegexError("[\\N]")).toBe("missing { at position 3");
   });
 });
 

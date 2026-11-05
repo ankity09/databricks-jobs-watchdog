@@ -13,8 +13,9 @@
  * some patterns Python accepts, such as (?P<name>...) (javaregex.ts).
  *
  * Differences that cannot be avoided in JavaScript:
- * - A \N{...} character name in a pattern is refused: the app has no Unicode name database to look it up.
- *   The loader refuses it too (the system-table scan may not know the name), with its own message.
+ * - A \N{...} character name is refused with the loader's message, as the system-table scan may not know
+ *   the name. With no Unicode name database, the app cannot tell a name Python does not know: it gets
+ *   the same message, where the loader says "undefined character name".
  * - A float with no fraction (60.0) is told apart from 60 only if the YAML was
  *   parsed with pythonYamlOptions, which marks it with PyFloat; the rules reject the marker.
  * - Deliberate divergence: a count setting (max_gap_minutes and the like) above 9007199254740991

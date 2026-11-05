@@ -20,10 +20,13 @@
  * found no pattern where the port and Python disagree on compiling.
  *
  * The one gap: a \N{...} character name. Python looks the name up in its
- * Unicode database, which JavaScript does not have, so the app refuses every
- * \N{...} rather than let an unknown name through to the scan. The loader
- * refuses them too, with another message: the system-table scan's Java knows
- * fewer names than Python (javaregex.ts).
+ * Unicode database, which JavaScript does not have. So the port checks the
+ * escape's syntax only, with Python's messages, and leaves the name unchecked.
+ * That lets no name through: the rules then refuse every \N{...} with the
+ * loader's message, as the system-table scan's Java knows fewer names than
+ * Python (javaregex.ts). A name Python does not know, or one in a reversed set
+ * range, therefore gets that message in the app, where the loader gives
+ * Python's "undefined character name" or "bad character range".
  *
  * Positions count code points, as Python's do.
  */
@@ -314,9 +317,10 @@ function numericEscape(source: Tokenizer, escape: string): Node | null {
   }
   if (c === "N") {
     if (!source.match("{")) throw source.error("missing {");
-    const charname = source.getuntil("}", "character name");
-    // Python looks the name up in its Unicode database; the app cannot, so it refuses the escape.
-    throw source.error(`the app cannot check the character name ${repr(charname)}; write the character itself`, len(charname) + 4);
+    source.getuntil("}", "character name");
+    // Python looks the name up in its Unicode database, which the app does not have: the name's code point is
+    // unknown (NaN, so a set range with it is not checked), and javaregex.ts refuses every \N{...} anyway.
+    return { op: "LITERAL", code: Number.NaN };
   }
   return null;
 }

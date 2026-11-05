@@ -95,6 +95,10 @@
     "ok": false,
     "error_contains": "job orders_ingest: job_name_regex '^orders_(?P<env>dev|prod)$' uses a (?P<name>...) group, which the system-table scan can't run"
   },
+  "invalid_regex_named_character.yml": {
+    "ok": false,
+    "error_contains": "job orders_ingest: job_name_regex '^orders\\\\N{EM DASH}ingest$' uses a \\N{...} character name, which the system-table scan may not know; write the character itself"
+  },
   "invalid_regex_unicode_class.yml": {
     "ok": false,
     "error_contains": "job_name_regex does not compile: bad escape \\p at position 8"
