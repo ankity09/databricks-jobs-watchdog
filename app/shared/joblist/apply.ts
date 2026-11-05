@@ -70,7 +70,8 @@ function asRecord(entry: unknown): Record<string, unknown> {
   return typeof entry === "object" && entry !== null ? Object.fromEntries(Object.entries(entry)) : {};
 }
 
-function changedFields(before: unknown, after: unknown): string[] {
+/** The keys whose values differ between two entries, sorted the Python way. */
+export function changedFields(before: unknown, after: unknown): string[] {
   const b = asRecord(before);
   const a = asRecord(after);
   const keys = new Set([...Object.keys(b), ...Object.keys(a)]);

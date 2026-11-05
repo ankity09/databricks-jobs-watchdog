@@ -87,6 +87,10 @@
     "ok": false,
     "error_contains": "triggered jobs have no schedule check, so remove max_gap_minutes"
   },
+  "invalid_unknown_job_after_two_parents.yml": {
+    "ok": false,
+    "error_contains": "dependency orders_report -> missing_job: missing_job is not a configured job"
+  },
   "invalid_unknown_job_key.yml": {
     "ok": false,
     "error_contains": "unknown keys ['max_gap']"

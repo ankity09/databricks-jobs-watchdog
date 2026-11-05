@@ -473,17 +473,18 @@ export function validateDocument(doc: unknown, source = "the job list"): RuleIss
     seen.add(name);
   }
 
+  // Python reads every link first and looks for a second parent after, so a bad link is reported first.
+  const deps = section(c, doc, "dependencies").map((raw, index) => checkDependency(c, raw, index, seen));
   const parents = new Map<string, string>();
-  section(c, doc, "dependencies").forEach((raw, index) => {
-    const dep = checkDependency(c, raw, index, seen);
-    if (dep === null || dep.type !== "child_job") return;
+  for (const dep of deps) {
+    if (dep === null || dep.type !== "child_job") continue;
     const parent = parents.get(dep.job);
     if (parent !== undefined && parent !== dep.on) {
       c.add(`dependencies[${dep.job}->${dep.on}:child_job]`,
         `job ${dep.job} is a child_job of both ${parent} and ${dep.on}; a job can have only one parent`);
     }
     parents.set(dep.job, dep.on);
-  });
+  }
 
   const keys = new Set<string>();
   parsedWorkspaces.forEach((workspace) => {
