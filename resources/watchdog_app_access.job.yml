@@ -1,13 +1,13 @@
 # Gives the Watchdog app's service principal access to the job list it keeps in
 # Lakebase (notebook 11). Needed after a plain teardown and a new deploy: the
 # new app has a new service principal, and the kept list belongs to another
-# role (the identity that ran the teardown, as Databricks describes deleting an
-# app; docs/multi-region.md says how to check it). The job runs as the
-# deploying identity and changes nothing when the app already has access.
+# role: the teardown gives everything the old app's role owned to the identity
+# that ran it. The job runs as the deploying identity and changes nothing when
+# the app already has access.
 # scripts/deploy_regions.py runs it after a region's deploy that gave the app a
 # new service principal while the Lakebase project was kept. It has no
-# schedule. The one task runs on serverless compute and installs psycopg from
-# PyPI (or your package mirror).
+# schedule. The one task runs on serverless compute and installs pg8000, a
+# pure-Python Postgres driver, from PyPI (or your package mirror).
 resources:
   jobs:
     watchdog_app_access:

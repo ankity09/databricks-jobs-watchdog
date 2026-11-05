@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Removes what the Watchdog bundle deployed.
 #
-#   ./teardown.sh [-t dev|demo|production] [-p profile] [-c accelerator-file] [--drop-schema] [--drop-lakebase] [-y]
+#   ./teardown.sh [-t target] [-p profile] [-c accelerator-file] [--drop-schema] [--drop-lakebase] [-y]
 #
+# -t is the bundle target to remove: dev (the default), demo, production, or
+# any target in databricks.yml.
 # -c reads the settings from that file instead of accelerator.local.yaml; use it
 # with a region file to tear down one region's Watchdog (docs/multi-region.md).
 # A region file names its workspace (deploy.workspace_host), and every call goes
@@ -15,7 +17,9 @@
 # jobs (and, for -t demo, the four demo jobs), the Watchdog app (watchdog_app),
 # the copilot's Genie agent with everyone's copilot conversations, and the
 # bundle's workspace files. It does not delete the dashboard from notebook 08;
-# move that to the trash in the workspace yourself.
+# move that to the trash in the workspace yourself. Deleting the app also
+# deletes its service principal, which leaves an empty home folder,
+# /Workspace/Users/<old client ID>, that you can delete.
 #
 # The Lakebase project, its database and the database's owner role (watchdog_db,
 # watchdog_database and watchdog_owner) are unbound from the bundle first, so a
@@ -24,7 +28,9 @@
 # after the unbind (a plain teardown, a declined --drop-lakebase, or a destroy
 # that failed), it prints the commands for deploying again with the list kept.
 # --drop-lakebase also deletes the project, with everything in it, after the
-# destroy. You type the project ID to confirm unless -y.
+# destroy. You type the project ID to confirm unless -y. Lakebase keeps a
+# deleted project for 7 days: `databricks postgres undelete-project` brings it
+# back (Beta), and `databricks postgres delete-project --purge` deletes it for good.
 #
 # --drop-schema also drops <catalog>.<schema> with its tables and view
 # (monitored_jobs, job_dependencies, findings, monitored_workspaces,
@@ -82,6 +88,10 @@ vars="$(python3 scripts/bundle_vars.py --export ${config:+"$config"})" || exit 2
 eval "$vars"
 schema_name="${BUNDLE_VAR_catalog}.${BUNDLE_VAR_schema}"
 lakebase_project="${BUNDLE_VAR_lakebase_project_id:-jobs-watchdog}"
+app_name="${BUNDLE_VAR_app_name:-watchdog-app}"
+# The settings file bundle_vars.py read, for the redeploy steps the hint prints.
+vars_file="${config:-accelerator.local.yaml}"
+if [[ -z "$config" && ! -f accelerator.local.yaml ]]; then vars_file="accelerator.yaml"; fi
 
 # Which workspace every call goes to; a region file whose host the shell disagrees with stops here.
 host_vars="$(python3 scripts/region_host.py ${config:+--config "$config"} --profile "$profile")" || exit 2
@@ -89,6 +99,8 @@ eval "$host_vars"
 profile_args=()
 if [[ -n "${teardown_profile:-}" ]]; then profile_args=(--profile "$teardown_profile"); fi
 where="${teardown_host:+ in ${teardown_host}}"
+# The same workspace for every command the script prints.
+on="${teardown_profile:+ --profile $(printf '%q' "$teardown_profile")}"
 
 if $drop_schema; then
   listing="$(databricks tables list "$BUNDLE_VAR_catalog" "$BUNDLE_VAR_schema" --include-browse -o json \
@@ -131,15 +143,23 @@ project_deleted=false
 print_bind_hint() {
   if $unbound && ! $project_deleted; then
     local branch="projects/${lakebase_project}/branches/${BUNDLE_VAR_lakebase_branch:-production}"
-    echo "The Lakebase project ${lakebase_project} and its job list were kept. To deploy again and keep them,"
-    echo "bind them before the next bundle deploy (the resource IDs are the Lakebase resource names):"
-    echo "  databricks bundle deployment bind watchdog_db projects/${lakebase_project} -t ${target} --auto-approve"
-    echo "  databricks bundle deployment bind watchdog_owner ${branch}/roles/watchdog-owner -t ${target} --auto-approve"
-    echo "  databricks bundle deployment bind watchdog_database ${branch}/databases/${BUNDLE_VAR_lakebase_database:-watchdog} -t ${target} --auto-approve"
+    echo "The Lakebase project ${lakebase_project} and its job list were kept. To deploy again and keep them, run"
+    echo "these from the repo root. Set the bundle variables, then bind the kept Lakebase resources before the next"
+    echo "bundle deploy (the resource IDs are the Lakebase resource names):"
+    if [[ -z "${teardown_profile:-}" && -n "${DATABRICKS_HOST:-}" ]]; then
+      echo "  export DATABRICKS_HOST=$(printf '%q' "$DATABRICKS_HOST")"
+    fi
+    echo "  eval \"\$(python3 scripts/bundle_vars.py --export $(printf '%q' "$vars_file"))\""
+    echo "  databricks bundle deployment bind watchdog_db projects/${lakebase_project} -t ${target} --auto-approve${on}"
+    echo "  databricks bundle deployment bind watchdog_owner ${branch}/roles/watchdog-owner -t ${target} --auto-approve${on}"
+    echo "  databricks bundle deployment bind watchdog_database ${branch}/databases/${BUNDLE_VAR_lakebase_database:-watchdog} -t ${target} --auto-approve${on}"
+    echo "A deleted app takes about a minute to go. Before you deploy, wait until this says the app ${app_name}"
+    echo "does not exist:"
+    echo "  databricks apps get ${app_name}${on}"
     echo "Then deploy, start the app, and give the new app's service principal access to the kept list:"
-    echo "  databricks bundle deploy -t ${target}"
-    echo "  databricks bundle run watchdog_app -t ${target}"
-    echo "  databricks bundle run watchdog_app_access -t ${target}"
+    echo "  databricks bundle deploy -t ${target}${on}"
+    echo "  databricks bundle run watchdog_app -t ${target}${on}"
+    echo "  databricks bundle run watchdog_app_access -t ${target}${on}"
   fi
 }
 trap print_bind_hint EXIT
@@ -163,7 +183,10 @@ if $drop_lakebase; then
   if $confirmed; then
     databricks postgres delete-project "projects/${lakebase_project}" ${profile_args[@]+"${profile_args[@]}"}
     project_deleted=true
-    echo "Deleted the Lakebase project ${lakebase_project}."
+    echo "Deleted the Lakebase project ${lakebase_project}. Lakebase keeps it for 7 days, so you can still bring it"
+    echo "back with the job list, or delete it for good now:"
+    echo "  databricks postgres undelete-project projects/${lakebase_project}${on}"
+    echo "  databricks postgres delete-project projects/${lakebase_project} --purge${on}"
   else
     echo "Lakebase project kept."
   fi

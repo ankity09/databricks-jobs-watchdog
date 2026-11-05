@@ -223,7 +223,8 @@ describe("when the app cannot use its schema", () => {
       .get("/api/job-list");
     expect(res.status).toBe(503);
     expect(body(res).error).toBe("no_access");
-    expect(body(res).message).toContain("watchdog_app_access");
+    // without -t the CLI runs the bundle's default target, dev, which may not be the one deployed
+    expect(body(res).message).toContain("databricks bundle run watchdog_app_access -t <target>");
   });
 
   it("answers 503 not_ready when the database did not answer, and lets the request through once it is ready", async () => {

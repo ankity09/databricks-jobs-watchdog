@@ -383,3 +383,91 @@ def test_declining_to_delete_the_project_prints_the_bind_hint(sandbox):
     assert result.returncode == 0
     assert "Lakebase project kept." in result.stdout
     assert "bundle deployment bind watchdog_db" in result.stdout
+
+
+# The redeploy steps the hint prints: runnable as printed, in the same workspace and with the same settings.
+
+def plain_run(sandbox, *args, accelerator=ACCELERATOR):
+    """teardown.sh without a region file, with a CLI config of the sandbox's own (profile eu)."""
+    (sandbox / "accelerator.local.yaml").write_text(accelerator)
+    (sandbox / "databrickscfg").write_text(CLI_CONFIG)
+    log = sandbox / "calls.log"
+    env = {key: value for key, value in os.environ.items() if not key.startswith("DATABRICKS_")}
+    env.update(PATH=f"{sandbox / 'bin'}:{os.environ['PATH']}", FAKE_LOG=str(log),
+               DATABRICKS_CONFIG_FILE=str(sandbox / "databrickscfg"))
+    result = subprocess.run(["bash", str(sandbox / "teardown.sh"), *args], capture_output=True, text=True, env=env)
+    return result, log.read_text().splitlines() if log.exists() else []
+
+
+def printed_commands(out):
+    return [line.strip() for line in out.splitlines() if line.startswith("  ")]
+
+
+def test_the_redeploy_steps_set_the_bundle_variables_first_and_carry_the_profile(sandbox):
+    result, _ = plain_run(sandbox, "-y", "-p", "eu")
+    assert result.returncode == 0, result.stderr
+    commands = printed_commands(result.stdout)
+    assert commands[0] == 'eval "$(python3 scripts/bundle_vars.py --export accelerator.local.yaml)"'
+    cli = [command for command in commands if command.startswith("databricks ")]
+    assert len(cli) == 7 and all(command.endswith(" --profile eu") for command in cli)
+
+
+def test_after_a_region_teardown_the_redeploy_steps_read_the_region_file(sandbox):
+    result, _ = region_run(sandbox, "-y", "-p", "eu")
+    assert result.returncode == 0, result.stderr
+    commands = printed_commands(result.stdout)
+    assert commands[0].startswith('eval "$(python3 scripts/bundle_vars.py --export /')
+    assert commands[0].endswith('/accelerator.prod-eu.yaml)"')
+    bundle = [command for command in commands if command.startswith("databricks bundle ")]
+    assert len(bundle) == 6 and all(" -t production " in command and command.endswith(" --profile eu")
+                                    for command in bundle)
+
+
+def test_a_region_teardown_without_a_profile_prints_the_host_the_redeploy_goes_to(sandbox):
+    result, _ = region_run(sandbox, "-y")
+    assert result.returncode == 0, result.stderr
+    commands = printed_commands(result.stdout)
+    assert commands[0] == "export DATABRICKS_HOST=https://prod-eu.example.com"
+    assert commands[1].startswith('eval "$(python3 scripts/bundle_vars.py --export ')
+    assert not any("--profile" in command for command in commands)
+
+
+def test_the_redeploy_steps_wait_for_the_deleted_app_to_go_before_the_deploy(sandbox):
+    result, _ = plain_run(sandbox, "-y", "-p", "eu", accelerator=ACCELERATOR + "app:\n  name: my-watchdog\n")
+    wait = "databricks apps get my-watchdog --profile eu"
+    assert wait in printed_commands(result.stdout) and "does not exist" in result.stdout
+    assert result.stdout.index(wait) < result.stdout.index("databricks bundle deploy -t dev")
+
+
+def test_dropping_the_lakebase_project_says_how_to_undo_it_within_7_days(sandbox):
+    result, calls = plain_run(sandbox, "--drop-lakebase", "-y", "-p", "eu")
+    assert result.returncode == 0, result.stderr
+    assert calls[-1] == "postgres delete-project projects/jobs-watchdog --profile eu"  # the same soft delete as before
+    assert "databricks postgres undelete-project projects/jobs-watchdog --profile eu" in result.stdout
+    assert "7 days" in result.stdout and "--purge" in result.stdout
+
+
+def test_any_bundle_target_can_be_torn_down(sandbox):
+    result, calls = run(sandbox, [], "-t", "scratch", "-y")
+    assert result.returncode == 0, result.stderr
+    assert "bundle destroy -t scratch --auto-approve" in calls
+
+
+def test_help_says_any_target_works_and_what_a_deleted_app_leaves_behind(sandbox):
+    out = subprocess.run(["bash", str(sandbox / "teardown.sh"), "-h"], capture_output=True, text=True).stdout
+    assert "dev|demo|production" not in out and "any target in databricks.yml" in out
+    assert "/Workspace/Users/<old client ID>" in out
+    assert "undelete-project" in out and "--purge" in out
+
+
+def test_a_profile_name_with_a_space_reaches_the_cli_as_one_argument_from_the_printed_steps(sandbox):
+    result, calls = plain_run(sandbox, "-y", "-p", "my eu")
+    assert result.returncode == 0, result.stderr
+    assert calls and all(call.endswith(" --profile my eu") for call in calls)
+    deploy = next(command for command in printed_commands(result.stdout) if command.startswith("databricks bundle deploy -t "))
+    # run the printed line as an operator would paste it, with a CLI that records its arguments
+    (sandbox / "bin" / "databricks").write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$ARGV_LOG"\n')
+    argv_log = sandbox / "argv.log"
+    subprocess.run(["bash", "-c", deploy], check=True, env=dict(os.environ, PATH=f"{sandbox / 'bin'}:{os.environ['PATH']}",
+                                                               ARGV_LOG=str(argv_log)))
+    assert argv_log.read_text().splitlines() == ["bundle", "deploy", "-t", "dev", "--profile", "my eu"]

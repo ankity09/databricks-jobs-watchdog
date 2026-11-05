@@ -1,4 +1,5 @@
 import pytest
+from pg8000.exceptions import DatabaseError, InterfaceError
 
 from jobs_watchdog.app_access import AppAccessError, app_service_principal, grant_app_access
 
@@ -7,31 +8,31 @@ ME = "someone@example.com"
 
 
 class FakeCursor:
-    """Answers the catalog queries grant_app_access sends, and records every statement."""
+    """A pg8000.dbapi cursor that answers the catalog queries grant_app_access sends, and records every statement.
+
+    Like pg8000's, it has no with block, and its rows are lists.
+    """
 
     def __init__(self, db):
         self.db = db
         self.rows = []
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def execute(self, sql, params=()):
-        self.db.statements.append((" ".join(sql.split()), params))
+    def execute(self, sql, args=()):
+        self.db.statements.append((" ".join(sql.split()), args))
+        for part, error in self.db.errors.items():
+            if part in sql:
+                raise error
         if "FROM pg_namespace" in sql:
-            owner = self.db.cache_owner if params[0] == "appkit" else self.db.owner
-            self.rows = [(owner,)] if owner else []
+            owner = self.db.cache_owner if args[0] == "appkit" else self.db.owner
+            self.rows = [[owner]] if owner else []
         elif "FROM pg_roles" in sql:
-            self.rows = [(1,)] if params[0] in self.db.roles else []
+            self.rows = [[1]] if args[0] in self.db.roles else []
         elif "FROM pg_class" in sql:
-            self.rows = [(name,) for name in self.db.tables]
+            self.rows = [[name] for name in self.db.tables]
         elif "has_schema_privilege" in sql:
-            self.rows = [(self.db.has_access,) * 4]
+            self.rows = [[self.db.has_access] * 4]
         elif "pg_has_role" in sql:
-            self.rows = [(ME, params[0] in self.db.mine)]
+            self.rows = [[ME, args[0] in self.db.mine]]
         else:
             self.rows = []
 
@@ -39,13 +40,18 @@ class FakeCursor:
         return self.rows[0] if self.rows else None
 
     def fetchall(self):
-        return self.rows
+        return tuple(self.rows)
+
+    def close(self):
+        pass
 
 
 class FakeDb:
-    def __init__(self, owner=ME, roles=(SP, ME), tables=("job_list_versions",), has_access=False, mine=(ME,), cache_owner=None):
+    def __init__(self, owner=ME, roles=(SP, ME), tables=("job_list_versions",), has_access=False, mine=(ME,), cache_owner=None,
+                 errors=None):
         self.owner, self.roles, self.tables, self.has_access, self.mine = owner, set(roles), list(tables), has_access, set(mine)
         self.cache_owner = cache_owner  # who owns AppKit's cache schema appkit, None when it does not exist
+        self.errors = errors or {}  # part of a statement, and what the driver raises for it
         self.statements = []
         self.committed = False
         self.rolled_back = False
@@ -115,6 +121,28 @@ def test_an_owner_this_identity_cannot_act_for_is_named_with_what_to_do():
         grant_app_access(FakeDb(owner=old, roles=(SP, ME, old)), SP)
     text = str(err.value)
     assert old in text and ME in text and f"dbrx-apps-{old}" in text and "reassign" in text
+
+
+def test_a_postgres_error_is_one_readable_line_and_ends_the_transaction():
+    # pg8000 raises a server error with one dict of its fields; the notebook prints Postgres's message instead.
+    denied = DatabaseError({"S": "ERROR", "V": "ERROR", "C": "42501", "M": "permission denied for schema watchdog_app",
+                            "F": "aclchk.c", "L": "2814", "R": "aclcheck_error"})
+    db = FakeDb(errors={"has_schema_privilege": denied})
+    with pytest.raises(AppAccessError) as err:
+        grant_app_access(db, SP)
+    assert str(err.value) == (f"could not give {SP} access to watchdog_app: DatabaseError: permission denied for "
+                              "schema watchdog_app (SQLSTATE 42501)")
+    assert err.value.__cause__ is denied and db.rolled_back and not db.committed
+
+
+def test_a_connection_that_is_gone_does_not_hide_the_error():
+    db = FakeDb(errors={"FROM pg_roles": InterfaceError("network error")})
+
+    def rollback():
+        raise InterfaceError("connection is closed")
+    db.rollback = rollback
+    with pytest.raises(AppAccessError, match="InterfaceError: network error$"):
+        grant_app_access(db, SP)
 
 
 def test_role_names_are_quoted_so_they_cannot_break_out_of_the_statement():
