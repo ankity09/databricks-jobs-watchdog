@@ -12,7 +12,9 @@
 import { applyChange, ChangeError, sameTargetValue } from "../../shared/joblist/apply";
 import { importSummary } from "../../shared/joblist/diff";
 import { storedChange, storedDocument, validateDocument } from "../../shared/joblist/rules";
-import { EMPTY_DOCUMENT, type Change, type ChangeKind, type JobListDocument, type RuleIssue } from "../../shared/joblist/types";
+import {
+  EMPTY_DOCUMENT, type Change, type ChangeKind, type JobListDocument, type RuleIssue, type VersionFacets,
+} from "../../shared/joblist/types";
 
 export interface VersionRow {
   version: number;
@@ -30,13 +32,32 @@ export interface VersionTx {
   insert(row: Omit<VersionRow, "savedAt">): Promise<VersionRow>;
 }
 
+/** What the change log can narrow to. All of them combine with AND; a missing one does not filter. */
+export interface VersionFilter {
+  /** The exact `saved_by` email. */
+  person?: string;
+  kinds?: ChangeKind[];
+  /** An exact job name: its own changes, and the links that have it at either end. */
+  job?: string;
+  /** Saved at or after this instant. */
+  from?: Date;
+  /** Saved before this instant (exclusive). */
+  until?: Date;
+  /** A case-insensitive substring of the summary. */
+  q?: string;
+}
+
 export interface VersionRepo {
   /** Runs fn in one transaction that no other transaction of this repo overlaps. */
   transaction<T>(fn: (tx: VersionTx) => Promise<T>): Promise<T>;
   latest(): Promise<VersionRow | null>;
   get(version: number): Promise<VersionRow | null>;
   /** The newest `limit` versions, newest first; with `before`, only the versions older than it. */
-  list(limit: number, before?: number): Promise<VersionRow[]>;
+  list(limit: number, before?: number, filter?: VersionFilter): Promise<VersionRow[]>;
+  /** How many versions match the filter, ignoring paging. */
+  count(filter?: VersionFilter): Promise<number>;
+  /** The people, jobs and kinds found over every version. */
+  facets(): Promise<VersionFacets>;
 }
 
 export class ConflictError extends Error {
@@ -67,7 +88,9 @@ export class NotFoundError extends Error {
 export interface JobListStore {
   latest(): Promise<VersionRow | null>;
   get(version: number): Promise<VersionRow | null>;
-  list(limit: number, before?: number): Promise<VersionRow[]>;
+  list(limit: number, before?: number, filter?: VersionFilter): Promise<VersionRow[]>;
+  count(filter?: VersionFilter): Promise<number>;
+  facets(): Promise<VersionFacets>;
   saveChange(args: { baseVersion: number | null; change: Change; savedBy: string }): Promise<VersionRow>;
   importDocument(args: { baseVersion: number | null; document: JobListDocument; savedBy: string }): Promise<VersionRow>;
   restore(args: { version: number; baseVersion: number | null; savedBy: string }): Promise<VersionRow>;
@@ -87,7 +110,10 @@ export function createJobListStore(repo: VersionRepo): JobListStore {
   return {
     latest: async () => readable(await repo.latest()),
     get: async (version) => readable(await repo.get(version)),
-    list: async (limit, before) => (await repo.list(limit, before)).map((row) => ({ ...row, document: storedDocument(row.document) })),
+    list: async (limit, before, filter) =>
+      (await repo.list(limit, before, filter)).map((row) => ({ ...row, document: storedDocument(row.document) })),
+    count: (filter) => repo.count(filter),
+    facets: () => repo.facets(),
 
     saveChange: ({ baseVersion, change: requested, savedBy }) =>
       repo.transaction(async (tx) => {

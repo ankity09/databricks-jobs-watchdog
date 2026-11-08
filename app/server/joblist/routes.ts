@@ -4,13 +4,14 @@ import { z } from "zod";
 import { diffDocuments, importSummary } from "../../shared/joblist/diff";
 import { impactOf } from "../../shared/joblist/impact";
 import {
-  EMPTY_DOCUMENT,
-  type Change, type ImportPreview, type JobListState, type SaveResult, type VersionDetail, type VersionSummary,
+  CHANGE_KINDS, EMPTY_DOCUMENT,
+  type Change, type ChangeKind, type ImportPreview, type JobListState, type SaveResult, type VersionDetail, type VersionList,
+  type VersionSummary,
 } from "../../shared/joblist/types";
 import { isPermissionDenied, NO_ACCESS_MESSAGE } from "../db/schema";
 import { principal } from "../identity";
 import { createPgVersionRepo } from "./pg-repo";
-import { ConflictError, createJobListStore, InvalidError, NotFoundError, type JobListStore, type VersionRow } from "./store";
+import { ConflictError, createJobListStore, InvalidError, NotFoundError, type JobListStore, type VersionFilter, type VersionRow } from "./store";
 import { readJobListYaml, toJobListYaml, YamlError } from "./yaml";
 
 const Target = z.discriminatedUnion("type", [
@@ -33,10 +34,67 @@ const ChangeRequest = z.object({ baseVersion: Base, change: ChangeBody });
 const PreviewRequest = z.object({ yaml: z.string() });
 const ImportRequest = z.object({ yaml: z.string(), baseVersion: Base });
 const RestoreRequest = z.object({ version: Version, baseVersion: Base });
-/** `before` pages back: the versions older than it. The answer has the same shape with or without it. */
+/** An optional text parameter: a missing or empty one is not set. */
+const Optional = (schema: z.ZodString) => z.preprocess((value) => (value === "" ? undefined : value), schema.optional());
+
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/;
+const HAS_ZONE = /(Z|[+-]\d{2}:\d{2})$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** A date (`2026-03-02`, the whole day in UTC) or a date-time (UTC unless it names an offset), as an instant. */
+function instantOf(text: string): { at: Date; wholeDay: boolean } | null {
+  const wholeDay = DATE.test(text);
+  if (!wholeDay && !DATE_TIME.test(text)) return null;
+  // V8 reads 2026-02-30 as March 2: the day has to be a real one.
+  const [y, m, d] = text.slice(0, 10).split("-").map(Number);
+  const day = new Date(Date.UTC(y, m - 1, d));
+  if (day.getUTCFullYear() !== y || day.getUTCMonth() !== m - 1 || day.getUTCDate() !== d) return null;
+  const at = new Date(wholeDay || HAS_ZONE.test(text) ? text : `${text}Z`);
+  return Number.isNaN(at.getTime()) ? null : { at, wholeDay };
+}
+
+const DateParam = (name: string) =>
+  Optional(z.string()).transform((text, ctx) => {
+    if (text === undefined) return undefined;
+    const instant = instantOf(text);
+    if (!instant) {
+      ctx.addIssue({ code: "custom", message: `${name} must be a date like 2026-03-02 or a date-time like 2026-03-02T09:30:00Z.` });
+      return z.NEVER;
+    }
+    return instant;
+  });
+
+/** `before` pages back: the versions older than it. All the filters combine with AND; `before` and `limit` page inside them. */
 const ListQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
   before: z.coerce.number().int().min(1).optional(),
+  person: Optional(z.string()),
+  kind: Optional(z.string()),
+  job: Optional(z.string()),
+  from: DateParam("from"),
+  to: DateParam("to"),
+  q: Optional(z.string().max(200, "q must be at most 200 characters.")),
+}).transform((query, ctx) => {
+  const kinds: ChangeKind[] = [];
+  for (const part of query.kind === undefined ? [] : query.kind.split(",")) {
+    const kind = CHANGE_KINDS.find((k) => k === part);
+    if (!kind) {
+      ctx.addIssue({ code: "custom", path: ["kind"], message: `kind has "${part}", which is not one of ${CHANGE_KINDS.join(", ")}.` });
+      return z.NEVER;
+    }
+    if (!kinds.includes(kind)) kinds.push(kind);
+  }
+  // A plain date `to` runs to the end of that day; a date-time `to` is inclusive.
+  const until = query.to === undefined ? undefined : new Date(query.to.at.getTime() + (query.to.wholeDay ? DAY_MS : 1));
+  if (query.from !== undefined && until !== undefined && query.from.at.getTime() >= until.getTime()) {
+    ctx.addIssue({ code: "custom", path: ["from"], message: "from must not be after to." });
+    return z.NEVER;
+  }
+  const filter: VersionFilter = {
+    person: query.person, kinds: kinds.length > 0 ? kinds : undefined, job: query.job, from: query.from?.at, until, q: query.q,
+  };
+  return { limit: query.limit, before: query.before, filter };
 });
 
 function param(req: express.Request, name: string): string {
@@ -140,8 +198,14 @@ export function createJobListRouter(store: JobListStore, options: JobListRouterO
   router.get("/versions", handle(async (req, res) => {
     const query = ListQuery.safeParse(req.query);
     if (!query.success) return bad(res, query.error);
-    const rows = await store.list(query.data.limit, query.data.before);
-    res.json({ versions: rows.map(summaryOf) });
+    const { limit, before, filter } = query.data;
+    const [rows, total] = await Promise.all([store.list(limit, before, filter), store.count(filter)]);
+    const list: VersionList = { versions: rows.map(summaryOf), total };
+    res.json(list);
+  }));
+
+  router.get("/versions/facets", handle(async (_req, res) => {
+    res.json(await store.facets());
   }));
 
   router.get("/versions/:version", handle(async (req, res) => {

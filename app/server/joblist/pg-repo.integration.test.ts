@@ -3,6 +3,7 @@ import { createLakebasePool } from "@databricks/appkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Change } from "../../shared/joblist/types";
 import { ensureSchema } from "../db/schema";
+import { describeFilters, SCOPE, SEEDS } from "./filters.contract";
 import { createPgVersionRepo } from "./pg-repo";
 import { ConflictError, createJobListStore } from "./store";
 
@@ -66,4 +67,23 @@ describe.skipIf(!enabled)("pg version repo (Lakebase)", () => {
     expect(versions(await repo.list(2, 900102))).toEqual([900101, 900100]);
     expect(versions(await repo.list(1, 900101))).toEqual([900100]);
   }, 60_000);
+
+  // The filter cases of the contract, on Lakebase. The seeds are dated 2001 and use fz_ names, so real versions stay out.
+  let seeded: Promise<void> | undefined;
+  const seed = () => {
+    seeded ??= (async () => {
+      for (const row of SEEDS) {
+        await pool.query(
+          `INSERT INTO watchdog_app.job_list_versions (version, document, saved_by, saved_at, change_kind, change_target, summary)
+           VALUES ($1, '{"jobs":[]}'::jsonb, $2, $3, $4, $5, $6)`,
+          [row.version, row.savedBy, row.savedAt, row.changeKind, row.changeTarget, row.summary],
+        );
+      }
+    })();
+    return seeded;
+  };
+  describeFilters(async () => {
+    await seed();
+    return { repo: createPgVersionRepo(pool), scope: SCOPE };
+  });
 });
