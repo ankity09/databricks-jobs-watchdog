@@ -30,12 +30,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@databricks/appkit-ui/react";
-import { CircleAlert, CircleCheck, Download, ListChecks, Pencil, Plus, RotateCw, ScanSearch, Search, Trash2, Upload, X } from "lucide-react";
+import { CircleAlert, CircleCheck, Download, History, ListChecks, Pencil, Plus, RotateCw, ScanSearch, Search, Trash2, Upload, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { type Change, dependencyKey, type JobEntry, type JobListDocument, type SaveResult } from "../../../../shared/joblist/types";
 import { type ReloadJobList, type SaveOutcome, useJobList, useOpenedVersion } from "../../hooks/useJobList";
 import { type LiveStatus, useLiveStatus } from "../../hooks/useLiveStatus";
 import { useRefreshKey } from "../../hooks/useRefreshKey";
+import { Link } from "react-router";
+import { jobHistoryPath } from "../../lib/changeFilters";
 import { changeIssues, linksRemovedWith } from "../../lib/draft";
 import { blocksDefault, inheritedSettings, type InheritedSettings, type NumberKey, pyReEscape } from "../../lib/job-form";
 import { exportUrl } from "../../lib/joblist-api";
@@ -718,6 +720,16 @@ function JobRow({ job, inherited, live, pending, onEdit, onDelete, onToggle }: J
       </TableCell>
       <TableCell className="px-2 py-2.5 text-right">
         <span className="inline-flex gap-0.5">
+          <Button
+            asChild
+            variant="ghost"
+            size="icon-sm"
+            className="size-7 text-muted-foreground hover:text-foreground"
+          >
+            <Link to={jobHistoryPath(job.job_name)} aria-label={`View history of ${job.job_name}`}>
+              <History aria-hidden="true" />
+            </Link>
+          </Button>
           <Button
             variant="ghost"
             size="icon-sm"

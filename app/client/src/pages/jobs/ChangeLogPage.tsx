@@ -17,97 +17,165 @@ import {
   TableHeader,
   TableRow,
 } from "@databricks/appkit-ui/react";
-import { CircleAlert, History, RotateCw } from "lucide-react";
+import { CircleAlert, History, RotateCw, SearchX } from "lucide-react";
 import { type ReactNode, type RefObject, useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
-import type { ChangeKind, VersionSummary } from "../../../../shared/joblist/types";
+import { Link, useSearchParams } from "react-router";
+import type { VersionFacets, VersionList, VersionSummary } from "../../../../shared/joblist/types";
 import { type ApiError, toApiError } from "../../lib/api";
-import { listVersions } from "../../lib/joblist-api";
+import { type ChangeFilters, hasFilters, parseFilters, writeFilters } from "../../lib/changeFilters";
+import { getVersionFacets, listVersions } from "../../lib/joblist-api";
 import { formatUtc } from "../../lib/time";
 import { cn } from "../../lib/utils";
 import { PageHeader } from "../../layout/PageHeader";
+import { KIND_STYLE } from "./changeKinds";
+import { ChangeLogFilters, ClearFiltersButton, type FacetsState } from "./ChangeLogFilters";
 import { ConfigBanner } from "./ConfigBanner";
 import { VersionDiffSheet } from "./VersionDiffSheet";
 
 /** Versions load 50 at a time: the newest first, then older ones on request. */
 const PAGE = 50;
 
-const KIND_STYLE: Record<ChangeKind, string> = {
-  import: "border-foreground/20 bg-background text-foreground",
-  create: "border-success/30 bg-success/10 text-success",
-  update: "border-border bg-secondary text-secondary-foreground",
-  delete: "border-destructive/30 bg-destructive/10 text-destructive",
-  restore: "border-warning/30 bg-warning/10 text-warning",
-};
-
 interface VersionsState {
+  /** The filters (as their URL query) these versions answer; another query starts over. */
+  key: string;
   /** Newest first: the newest page, and the older pages loaded since. */
   versions: VersionSummary[] | null;
+  /** How many versions match the filters, whatever is shown. */
+  total: number | null;
+  /** The newest saved version of the job list, filtered or not (undefined while unknown). */
+  latest: number | null | undefined;
   /** The newest page did not load. */
   error: ApiError | null;
   /** The newest page is loading: at first, after Retry and after Refresh. */
   loading: boolean;
-  /** Older versions can exist past the oldest one shown. */
+  /** Older matching versions can exist past the oldest one shown. */
   more: boolean;
   older: { loading: boolean; error: ApiError | null };
 }
 
 const OLDER_IDLE = { loading: false, error: null };
 
-/** Versions count up from 1, so a full page whose oldest version is above 1 has older ones behind it. */
-function moreAfter(page: VersionSummary[]): boolean {
-  const oldest = page[page.length - 1];
-  return page.length === PAGE && oldest !== undefined && oldest.version > 1;
+function initial(key: string): VersionsState {
+  return { key, versions: null, total: null, latest: undefined, error: null, loading: true, more: false, older: OLDER_IDLE };
+}
+
+/** A full page with matches left over has older ones behind it. */
+function moreAfter(page: VersionSummary[], total: number, shown: number): boolean {
+  return page.length === PAGE && shown < total;
 }
 
 /** The newest page joined to the versions shown when the two meet, so a refresh keeps the older pages; else the newest page alone. */
-function withNewest(current: VersionsState, page: VersionSummary[]): VersionsState {
+function withNewest(current: VersionsState, page: VersionList, latest: number | null | undefined): VersionsState {
   const shown = current.versions ?? [];
   const newestShown = shown[0]?.version;
-  const oldestNew = page[page.length - 1]?.version;
-  if (newestShown === undefined || oldestNew === undefined || !moreAfter(page) || oldestNew > newestShown) {
-    return { versions: page, error: null, loading: false, more: moreAfter(page), older: OLDER_IDLE };
+  const oldestNew = page.versions[page.versions.length - 1]?.version;
+  const base = { ...current, total: page.total, latest, error: null, loading: false };
+  if (newestShown === undefined || oldestNew === undefined || page.versions.length < PAGE || oldestNew > newestShown) {
+    return { ...base, versions: page.versions, more: moreAfter(page.versions, page.total, page.versions.length), older: OLDER_IDLE };
   }
   const byVersion = new Map(shown.map((v) => [v.version, v]));
-  for (const v of page) byVersion.set(v.version, v);
-  return { ...current, versions: [...byVersion.values()].sort((a, b) => b.version - a.version), error: null, loading: false };
+  for (const v of page.versions) byVersion.set(v.version, v);
+  return { ...base, versions: [...byVersion.values()].sort((a, b) => b.version - a.version) };
 }
 
-/** The saved versions, newest first, 50 at a time. A failed load keeps the versions already shown. */
-function useVersions() {
-  const [state, setState] = useState<VersionsState>({ versions: null, error: null, loading: true, more: false, older: OLDER_IDLE });
+/** The saved versions that match the filters, newest first, 50 at a time. A failed load keeps the versions already shown. */
+function useVersions(key: string) {
+  const [raw, setRaw] = useState<VersionsState>(() => initial(key));
+  // Another set of filters starts over at once, with no rows from the old ones.
+  const state = raw.key === key ? raw : initial(key);
+  const live = useRef(key);
+  useEffect(() => {
+    live.current = key;
+  }, [key]);
+  const update = useCallback(
+    (change: (current: VersionsState) => VersionsState) => {
+      setRaw((current) => (live.current === key ? change(current.key === key ? current : initial(key)) : current));
+    },
+    [key],
+  );
   const reload = useCallback(async () => {
-    setState((current) => ({ ...current, loading: true }));
+    const filters = parseFilters(new URLSearchParams(key));
+    update((current) => ({ ...current, loading: true }));
     try {
-      const page = await listVersions(PAGE);
-      setState((current) => withNewest(current, page));
+      // With filters, the newest page is not the newest version: the banner needs that one too.
+      const [page, latest] = await Promise.all([
+        listVersions(PAGE, undefined, filters),
+        hasFilters(filters) ? listVersions(1).then((l) => l.versions[0]?.version ?? null, () => undefined) : Promise.resolve(undefined),
+      ]);
+      update((current) => withNewest(current, page, latest === undefined ? (page.versions[0]?.version ?? null) : latest));
     } catch (error) {
-      setState((current) => ({ ...current, error: toApiError(error), loading: false }));
+      update((current) => ({ ...current, error: toApiError(error), loading: false }));
     }
-  }, []);
-  const loadOlder = useCallback(async (before: number) => {
-    setState((current) => ({ ...current, older: { loading: true, error: null } }));
-    try {
-      const page = await listVersions(PAGE, before);
-      setState((current) => {
-        const shown = current.versions ?? [];
-        // A refresh can replace the versions meanwhile: add the page only where it continues them.
-        if (shown[shown.length - 1]?.version !== before) return { ...current, older: OLDER_IDLE };
-        return { ...current, versions: [...shown, ...page], more: moreAfter(page), older: OLDER_IDLE };
-      });
-    } catch (error) {
-      setState((current) => ({ ...current, older: { loading: false, error: toApiError(error) } }));
-    }
-  }, []);
+  }, [key, update]);
+  const loadOlder = useCallback(
+    async (before: number) => {
+      const filters = parseFilters(new URLSearchParams(key));
+      update((current) => ({ ...current, older: { loading: true, error: null } }));
+      try {
+        const page = await listVersions(PAGE, before, filters);
+        update((current) => {
+          const shown = current.versions ?? [];
+          // A refresh can replace the versions meanwhile: add the page only where it continues them.
+          if (shown[shown.length - 1]?.version !== before) return { ...current, older: OLDER_IDLE };
+          return {
+            ...current,
+            versions: [...shown, ...page.versions],
+            total: page.total,
+            more: moreAfter(page.versions, page.total, shown.length + page.versions.length),
+            older: OLDER_IDLE,
+          };
+        });
+      } catch (error) {
+        update((current) => ({ ...current, older: { loading: false, error: toApiError(error) } }));
+      }
+    },
+    [key, update],
+  );
   useEffect(() => {
     void reload();
   }, [reload]);
   return { ...state, reload, loadOlder };
 }
 
+/** The people, jobs and kinds to filter by, over every version. */
+function useFacets(): FacetsState & { reload: () => void } {
+  const [state, setState] = useState<{ facets: VersionFacets | null; failed: boolean }>({ facets: null, failed: false });
+  const load = useCallback(() => {
+    getVersionFacets().then(
+      (facets) => setState({ facets, failed: false }),
+      () => setState((current) => ({ ...current, failed: true })),
+    );
+  }, []);
+  const reload = useCallback(() => {
+    setState((current) => ({ ...current, failed: false }));
+    load();
+  }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
+  return { ...state, retry: reload, reload };
+}
+
 /** Every saved version of the job list: who saved it, when, and what changed. */
 export function ChangeLogPage() {
-  const { versions, error, loading, more, older, reload, loadOlder } = useVersions();
+  const [params, setParams] = useSearchParams();
+  const filters = parseFilters(params);
+  const key = writeFilters(filters).toString();
+  const filtered = hasFilters(filters);
+  const { versions, total, latest, error, loading, more, older, reload, loadOlder } = useVersions(key);
+  const facets = useFacets();
+  const allVersions = facets.facets === null ? null : facets.facets.kinds.reduce((sum, k) => sum + k.count, 0);
+  const change = (patch: Partial<ChangeFilters>) => {
+    // Typing in Search replaces the history entry, so the back button does not step through every pause.
+    const onlyText = Object.keys(patch).length === 1 && "q" in patch;
+    setParams(writeFilters({ ...filters, ...patch }), { replace: onlyText });
+  };
+  // Clear filters also drops a search that is still waiting to be sent: the filter bar starts its Search box again.
+  const [cleared, setCleared] = useState(0);
+  const clearFilters = () => {
+    setCleared((n) => n + 1);
+    setParams(new URLSearchParams());
+  };
   const [open, setOpen] = useState<VersionSummary | null>(null);
   // Focus goes back to the version's summary when its changes close, else to Refresh (a refresh replaced the rows).
   const opener = useRef<HTMLElement | null>(null);
@@ -140,6 +208,23 @@ export function ChangeLogPage() {
   let body: ReactNode;
   if (versions === null) {
     body = error && !loading ? <LoadError message={error.message} retryRef={retryButton} onRetry={retry} /> : <TableSkeleton />;
+  } else if (versions.length === 0 && filtered) {
+    body = (
+      <Empty className="flex-none border border-dashed border-border bg-muted/40 md:py-14">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <SearchX aria-hidden="true" />
+          </EmptyMedia>
+          <EmptyTitle>No changes match these filters.</EmptyTitle>
+          <EmptyDescription>Try fewer filters, or a wider time range.</EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button variant="outline" size="sm" onClick={clearFilters}>
+            Clear filters
+          </Button>
+        </EmptyContent>
+      </Empty>
+    );
   } else if (versions.length === 0) {
     body = (
       <Empty className="flex-none border border-dashed border-border bg-muted/40 md:py-14">
@@ -240,7 +325,11 @@ export function ChangeLogPage() {
             </Button>
           ) : null}
           <p className="text-xs text-muted-foreground" aria-live="polite">
-            {more ? `The newest ${versions.length} versions.` : versions.length > PAGE ? `All ${versions.length} versions.` : ""}
+            {more
+              ? `The newest ${versions.length} ${filtered ? "matching versions" : "versions"}.`
+              : versions.length > PAGE
+                ? `All ${versions.length} ${filtered ? "matching versions" : "versions"}.`
+                : ""}
           </p>
           {older.error ? (
             <p role="alert" className="flex items-center gap-1.5 text-xs text-destructive">
@@ -269,7 +358,9 @@ export function ChangeLogPage() {
               aria-disabled={loading}
               aria-busy={loading}
               onClick={() => {
-                if (!loading) void reload();
+                if (loading) return;
+                void reload();
+                facets.reload();
               }}
             >
               <RotateCw aria-hidden="true" />
@@ -278,7 +369,16 @@ export function ChangeLogPage() {
           ) : null
         }
       />
-      <ConfigBanner savedVersion={versions === null ? undefined : (versions[0]?.version ?? null)} />
+      <ConfigBanner savedVersion={versions === null ? undefined : latest} />
+      <div className="flex flex-col gap-2">
+        <ChangeLogFilters filters={filters} facets={facets} onChange={change} resetKey={cleared} />
+        <div className="flex min-h-7 flex-wrap items-center gap-x-3 gap-y-1">
+          <p className="text-[13px] text-muted-foreground" aria-live="polite">
+            {versions === null || total === null ? null : <CountLine total={total} all={allVersions} filtered={filtered} />}
+          </p>
+          {filtered ? <ClearFiltersButton onClick={clearFilters} /> : null}
+        </div>
+      </div>
       {/* tabIndex -1: focus waits here while the versions load. */}
       <div
         ref={versionsArea}
@@ -299,6 +399,14 @@ export function ChangeLogPage() {
       />
     </>
   );
+}
+
+/** "312 versions", or "12 of 312 versions match" when filters are on (the 312 is every version, from the facets). */
+function CountLine({ total, all, filtered }: { total: number; all: number | null; filtered: boolean }) {
+  const n = (value: number) => <span className="font-mono tabular-nums text-foreground">{value}</span>;
+  if (!filtered) return <>{n(total)} {total === 1 ? "version" : "versions"}</>;
+  if (all === null) return <>{n(total)} {total === 1 ? "version matches" : "versions match"}</>;
+  return <>{n(total)} of {n(all)} {all === 1 ? "version matches" : "versions match"}</>;
 }
 
 function LoadError({ message, retryRef, onRetry }: { message: string; retryRef: RefObject<HTMLButtonElement | null>; onRetry: () => void }) {

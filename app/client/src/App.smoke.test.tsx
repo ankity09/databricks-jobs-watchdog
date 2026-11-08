@@ -54,7 +54,8 @@ function respond(url: string): Response {
   }
   if (url.startsWith("/api/whoami")) return json({ user: "4321@1234", email: "dana@example.com" });
   if (url === "/api/job-list") return json({ version: null, savedAt: null, savedBy: null, document: { jobs: [] } });
-  if (url.startsWith("/api/job-list/versions?")) return json({ versions: [] });
+  if (url.startsWith("/api/job-list/versions?")) return json({ versions: [], total: 0 });
+  if (url === "/api/job-list/versions/facets") return json({ people: [], jobs: [], kinds: [], firstSavedAt: null, lastSavedAt: null });
   if (url.startsWith("/api/copilot/conversations")) return json({ conversations: [] });
   if (url.startsWith("/api/genie/")) {
     // A saved chat with no messages: Genie's history info and nothing else.

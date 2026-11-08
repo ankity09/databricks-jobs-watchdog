@@ -50,13 +50,27 @@ function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
+/** What the facets route answers for these versions: the people, the jobs in the targets, the kinds. */
+function facetsOf(versions: VersionSummary[]) {
+  const count = <T,>(items: T[], key: (item: T) => string) => {
+    const counts = new Map<string, number>();
+    for (const item of items) counts.set(key(item), (counts.get(key(item)) ?? 0) + 1);
+    return counts;
+  };
+  const people = [...count(versions, (v) => v.savedBy)].map(([email, n]) => ({ email, count: n }));
+  const jobs = [...count(versions.filter((v) => v.changeTarget?.startsWith("job:")), (v) => (v.changeTarget ?? "").slice(4))].map(([name, n]) => ({ name, count: n }));
+  const kinds = [...count(versions, (v) => v.changeKind)].map(([kind, n]) => ({ kind, count: n }));
+  return { people, jobs, kinds, firstSavedAt: versions[0]?.savedAt ?? null, lastSavedAt: versions[versions.length - 1]?.savedAt ?? null };
+}
+
 function mockApi(versions: VersionDetail[]) {
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
       const url = urlOf(input);
       if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
-      if (url.startsWith("/api/job-list/versions?")) return Promise.resolve(json(200, { versions: [...versions].reverse().map(summary) }));
+      if (url === "/api/job-list/versions/facets") return Promise.resolve(json(200, facetsOf(versions)));
+      if (url.startsWith("/api/job-list/versions?")) return Promise.resolve(json(200, { versions: [...versions].reverse().map(summary), total: versions.length }));
       const match = /^\/api\/job-list\/versions\/(\d+)$/.exec(url);
       if (match) {
         const found = versions.find((v) => v.version === Number(match[1]));
@@ -87,6 +101,7 @@ function mockPagedApi(count: number, options: { failOlderOnce?: boolean } = {}) 
     vi.fn((input: RequestInfo | URL) => {
       const url = urlOf(input);
       if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
+      if (url === "/api/job-list/versions/facets") return Promise.resolve(json(200, facetsOf(versions)));
       if (url.startsWith("/api/job-list/versions?")) {
         asked.push(url);
         const query = new URLSearchParams(url.slice(url.indexOf("?") + 1));
@@ -100,7 +115,7 @@ function mockPagedApi(count: number, options: { failOlderOnce?: boolean } = {}) 
           .filter((v) => v.version < before)
           .reverse()
           .slice(0, limit);
-        return Promise.resolve(json(200, { versions: page }));
+        return Promise.resolve(json(200, { versions: page, total: versions.length }));
       }
       if (url.startsWith("/api/analytics/query/")) {
         return Promise.resolve(new Response('data: {"type":"result","data":[]}\n\n', { headers: { "Content-Type": "text/event-stream" } }));
@@ -245,8 +260,9 @@ describe("ChangeLogPage", () => {
       vi.fn((input: RequestInfo | URL) => {
         const url = urlOf(input);
         if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
+        if (url === "/api/job-list/versions/facets") return Promise.resolve(json(200, facetsOf([V1, V2].map(summary))));
         if (url.startsWith("/api/job-list/versions?")) {
-          const ok = () => json(200, { versions: [V2, V1].map(summary) });
+          const ok = () => json(200, { versions: [V2, V1].map(summary), total: 2 });
           if (answer === "fail") return Promise.resolve(json(500, { error: "server", message: "The job list could not be read or saved. Try again." }));
           if (answer === "ok") return Promise.resolve(ok());
           return new Promise<Response>((resolve) => held.push(() => resolve(ok())));
@@ -306,10 +322,11 @@ describe("ChangeLogPage keeps focus through a load", () => {
       vi.fn((input: RequestInfo | URL) => {
         const url = urlOf(input);
         if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
+        if (url === "/api/job-list/versions/facets") return Promise.resolve(json(200, facetsOf([V1, V2].map(summary))));
         if (url.startsWith("/api/job-list/versions?")) {
           return new Promise<Response>((resolve) =>
             waiting.push((ok) =>
-              resolve(ok ? json(200, { versions: [V2, V1].map(summary) }) : json(500, { error: "server", message: "The job list could not be read or saved. Try again." })),
+              resolve(ok ? json(200, { versions: [V2, V1].map(summary), total: 2 }) : json(500, { error: "server", message: "The job list could not be read or saved. Try again." })),
             ),
           );
         }
