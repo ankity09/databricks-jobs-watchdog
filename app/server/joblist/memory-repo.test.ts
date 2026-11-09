@@ -19,11 +19,11 @@ describe("memory repo facets", () => {
     const { repo } = await seeded();
     const facets = await repo.facets();
     expect(facets.kinds).toEqual([
-      { kind: "import", count: 1 }, { kind: "create", count: 4 }, { kind: "update", count: 5 },
+      { kind: "import", count: 1 }, { kind: "create", count: 4 }, { kind: "update", count: 6 },
       { kind: "delete", count: 1 }, { kind: "restore", count: 1 },
     ]);
     expect(facets.firstSavedAt).toBe("2001-03-01T10:00:00.000Z");
-    expect(facets.lastSavedAt).toBe("2001-03-10T09:00:00.000Z");
+    expect(facets.lastSavedAt).toBe("2001-03-11T09:00:00.000Z");
   });
 
   it("is empty for an empty repo", async () => {

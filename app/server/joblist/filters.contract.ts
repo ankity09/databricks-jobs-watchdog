@@ -12,6 +12,7 @@ const at = (iso: string) => new Date(iso);
 const ALICE = "alice@filters.example.com";
 const BOB = "bob@filters.example.com";
 const CAROL = "carol@filters.example.com";
+const DAN = "dan@filters.example.com";
 const V = 900200;
 
 export const SEEDS: Seed[] = [
@@ -27,6 +28,8 @@ export const SEEDS: Seed[] = [
   { version: V + 10, savedBy: CAROL, savedAt: at("2001-03-08T09:00:00Z"), changeKind: "update", changeTarget: "workspace:1", summary: "Renamed label a_b" },
   { version: V + 11, savedBy: CAROL, savedAt: at("2001-03-09T09:00:00Z"), changeKind: "update", changeTarget: "workspace:2", summary: "Path c\\d changed" },
   { version: V + 12, savedBy: BOB, savedAt: at("2001-03-10T09:00:00Z"), changeKind: "update", changeTarget: "job:fz_orders", summary: "Changed max_gap_minutes of fz_orders" },
+  // A job name that holds "->": the left end is what follows "dependency:" up to "->" (see targetMentionsJob).
+  { version: V + 13, savedBy: DAN, savedAt: at("2001-03-11T09:00:00Z"), changeKind: "update", changeTarget: "dependency:fz_x->fz_y->fz_z:job", summary: "Changed a link with an arrow in a name" },
 ];
 
 export const SCOPE: VersionFilter = { from: at("2001-01-01T00:00:00Z"), until: at("2002-01-01T00:00:00Z") };
@@ -63,7 +66,7 @@ export function describeFilters(setup: () => Promise<Fixture>, timeout = 60_000)
 
   describe("filters", () => {
     it("counts every seeded version, newest first, with no filter", async () => {
-      await check({}, [12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
+      await check({}, [13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
     }, timeout);
 
     it("filters by person, exactly", async () => {
@@ -75,7 +78,7 @@ export function describeFilters(setup: () => Promise<Fixture>, timeout = 60_000)
     it("filters by one or several kinds", async () => {
       await check({ kinds: ["create"] }, [2, 3, 5, 6]);
       await check({ kinds: ["delete", "restore", "import"] }, [1, 7, 8]);
-      await check({ kinds: ["create", "update"] }, [2, 3, 4, 5, 6, 9, 10, 11, 12]);
+      await check({ kinds: ["create", "update"] }, [2, 3, 4, 5, 6, 9, 10, 11, 12, 13]);
     }, timeout);
 
     it("matches a job by its own changes and by either end of a link", async () => {
@@ -96,13 +99,22 @@ export function describeFilters(setup: () => Promise<Fixture>, timeout = 60_000)
       await check({ job: "fz_orders_" }, []);
     }, timeout);
 
+    it("reads a job name with an arrow the same way on every repo", async () => {
+      // The left end is whatever follows "dependency:" up to an arrow; the right end is what follows the first arrow, up to the type.
+      await check({ job: "fz_x->fz_y" }, [13]);
+      await check({ job: "fz_x" }, [13]);
+      await check({ job: "fz_y->fz_z" }, [13]);
+      await check({ job: "fz_z" }, []);
+      await check({ job: "fz_y" }, []);
+    }, timeout);
+
     it("does not match a service as a job", async () => {
       await check({ job: "fz_billing_svc" }, []);
     }, timeout);
 
     it("bounds by date on both sides: from is inclusive, until is exclusive", async () => {
-      await check({ from: at("2001-03-02T00:00:00Z") }, [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-      await check({ from: at("2001-03-02T00:00:01Z") }, [4, 5, 6, 7, 8, 9, 10, 11, 12]);
+      await check({ from: at("2001-03-02T00:00:00Z") }, [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+      await check({ from: at("2001-03-02T00:00:01Z") }, [4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
       await check({ until: at("2001-03-03T00:00:00Z") }, [1, 2, 3, 4]);
       await check({ until: at("2001-03-02T00:00:00Z") }, [1, 2]);
       await check({ from: at("2001-03-02T00:00:00Z"), until: at("2001-03-03T00:00:00Z") }, [3, 4]);
@@ -138,7 +150,7 @@ export function describeFilters(setup: () => Promise<Fixture>, timeout = 60_000)
 
     it("counts the total ignoring before and limit", async () => {
       const { repo, scope } = await setup();
-      expect(await repo.count(scope)).toBe(12);
+      expect(await repo.count(scope)).toBe(13);
       expect(await repo.count({ ...scope, kinds: ["create"] })).toBe(4);
       expect(await run({ kinds: ["create"] }, 1)).toEqual([6]);
     }, timeout);
@@ -149,7 +161,7 @@ export function describeFilters(setup: () => Promise<Fixture>, timeout = 60_000)
       const { repo } = await setup();
       const facets = await repo.facets();
       expect(facets.people.filter((p) => p.email.endsWith("@filters.example.com"))).toEqual([
-        { email: ALICE, count: 5 }, { email: BOB, count: 4 }, { email: CAROL, count: 3 },
+        { email: ALICE, count: 5 }, { email: BOB, count: 4 }, { email: CAROL, count: 3 }, { email: DAN, count: 1 },
       ]);
       const counts = facets.people.map((p) => p.count);
       expect(counts).toEqual([...counts].sort((a, b) => b - a));
@@ -157,13 +169,14 @@ export function describeFilters(setup: () => Promise<Fixture>, timeout = 60_000)
       expect(facets.jobs.filter((j) => j.name.startsWith("fz_"))).toEqual([
         { name: "fz_orders", count: 2 }, { name: "fz_ordersXingest", count: 1 },
         { name: "fz_orders_ingest", count: 4 }, { name: "fz_orders_report", count: 1 },
+        { name: "fz_x", count: 1 }, { name: "fz_y->fz_z", count: 1 },
       ]);
       const order = ["import", "create", "update", "delete", "restore"];
       const kinds = facets.kinds.map((k) => order.indexOf(k.kind));
       expect(kinds).toEqual([...kinds].sort((a, b) => a - b));
       expect(kinds.every((k) => k >= 0)).toBe(true);
       expect(new Date(facets.firstSavedAt ?? "").getTime()).toBeLessThanOrEqual(at("2001-03-01T10:00:00Z").getTime());
-      expect(new Date(facets.lastSavedAt ?? "").getTime()).toBeGreaterThanOrEqual(at("2001-03-10T09:00:00Z").getTime());
+      expect(new Date(facets.lastSavedAt ?? "").getTime()).toBeGreaterThanOrEqual(at("2001-03-11T09:00:00Z").getTime());
     }, timeout);
   });
 }

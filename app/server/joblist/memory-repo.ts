@@ -1,11 +1,11 @@
-import { jobsInTarget } from "../../shared/joblist/changelog";
+import { jobsInTarget, targetMentionsJob } from "../../shared/joblist/changelog";
 import { CHANGE_KINDS, type VersionFacets } from "../../shared/joblist/types";
 import type { VersionFilter, VersionRepo, VersionRow, VersionTx } from "./store";
 
 function matches(row: VersionRow, f: VersionFilter): boolean {
   if (f.person !== undefined && row.savedBy !== f.person) return false;
   if (f.kinds !== undefined && !f.kinds.includes(row.changeKind)) return false;
-  if (f.job !== undefined && !jobsInTarget(row.changeTarget).includes(f.job)) return false;
+  if (f.job !== undefined && !targetMentionsJob(row.changeTarget, f.job)) return false;
   if (f.from !== undefined && row.savedAt < f.from) return false;
   if (f.until !== undefined && row.savedAt >= f.until) return false;
   if (f.q !== undefined && !row.summary.toLowerCase().includes(f.q.toLowerCase())) return false;

@@ -136,6 +136,22 @@ describe("job-list routes", () => {
       expect((await filtered(a, `?q=${"x".repeat(200)}`)).status).toBe(200);
     });
 
+    it("rejects a year before 1000 and a NUL character, in a plain sentence", async () => {
+      const a = seed();
+      for (const [query, expected] of [
+        ["?from=0002-11-05", "from must be a date in the year 1000 or later."],
+        ["?to=0020-11-05", "to must be a date in the year 1000 or later."],
+        ["?to=0202-11-05T10:00:00Z", "to must be a date in the year 1000 or later."],
+        ["?q=a%00b", "q must not contain a NUL character."],
+        ["?person=a%00b", "person must not contain a NUL character."],
+        ["?job=a%00b", "job must not contain a NUL character."],
+      ] as const) {
+        const res = await request(a).get(`/api/job-list/versions${query}`);
+        expect([query, res.status, body(res).message]).toEqual([query, 400, expected]);
+      }
+      expect((await request(a).get("/api/job-list/versions?from=1000-01-01")).status).toBe(200);
+    });
+
     it("treats empty filters as not set", async () => {
       const a = seed();
       expect(await filtered(a, "?person=&kind=&job=&from=&to=&q=")).toMatchObject({ status: 200, total: 4 });

@@ -26,3 +26,19 @@ export function jobsInTarget(target: string | null): string[] {
   const names = type === "service" ? [left] : [left, right];
   return [...new Set(names.filter((name) => name !== ""))];
 }
+
+/**
+ * Whether a job filter matches a change target. This is the filter's rule, and the SQL in pg-repo.ts says the same
+ * thing: the job's own `job:<name>`; a link whose left end is the job (the text after `dependency:` starts with
+ * `<name>->`); or a job or child_job link whose right end is the job (the text after the first `->` is `<name>:job` or
+ * `<name>:child_job`). A job name that holds `->` is read by these two string tests, not by splitting the link.
+ */
+export function targetMentionsJob(target: string | null, job: string): boolean {
+  if (target === null) return false;
+  if (target === `job:${job}`) return true;
+  if (!target.startsWith("dependency:")) return false;
+  if (target.startsWith(`dependency:${job}->`)) return true;
+  const arrow = target.indexOf("->");
+  const right = arrow < 0 ? "" : target.slice(arrow + 2);
+  return right === `${job}:job` || right === `${job}:child_job`;
+}

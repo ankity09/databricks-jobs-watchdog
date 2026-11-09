@@ -37,19 +37,31 @@ const RestoreRequest = z.object({ version: Version, baseVersion: Base });
 /** An optional text parameter: a missing or empty one is not set. */
 const Optional = (schema: z.ZodString) => z.preprocess((value) => (value === "" ? undefined : value), schema.optional());
 
+/** Postgres refuses a NUL character in text, so a filter that has one is a bad request, not a server error. */
+const Text = (name: string, max?: number) =>
+  Optional(
+    (max === undefined ? z.string() : z.string().max(max, `${name} must be at most ${max} characters.`)).refine((text) => !text.includes("\u0000"), {
+      message: `${name} must not contain a NUL character.`,
+    }),
+  );
+
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/;
 const HAS_ZONE = /(Z|[+-]\d{2}:\d{2})$/;
+/** A year typed one digit at a time (0002, 0020) is not a date to search: the parser would also read year 2 as 1902. */
+const MIN_YEAR = 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** A date (`2026-03-02`, the whole day in UTC) or a date-time (UTC unless it names an offset), as an instant. */
-function instantOf(text: string): { at: Date; wholeDay: boolean } | null {
+function instantOf(text: string): { at: Date; wholeDay: boolean } | { tooEarly: true } | null {
   const wholeDay = DATE.test(text);
   if (!wholeDay && !DATE_TIME.test(text)) return null;
-  // V8 reads 2026-02-30 as March 2: the day has to be a real one.
+  // V8 reads 2026-02-30 as March 2: the day has to be a real one. setUTCFullYear keeps a year below 100 as it is.
   const [y, m, d] = text.slice(0, 10).split("-").map(Number);
-  const day = new Date(Date.UTC(y, m - 1, d));
+  const day = new Date(0);
+  day.setUTCFullYear(y, m - 1, d);
   if (day.getUTCFullYear() !== y || day.getUTCMonth() !== m - 1 || day.getUTCDate() !== d) return null;
+  if (y < MIN_YEAR) return { tooEarly: true };
   const at = new Date(wholeDay || HAS_ZONE.test(text) ? text : `${text}Z`);
   return Number.isNaN(at.getTime()) ? null : { at, wholeDay };
 }
@@ -58,6 +70,10 @@ const DateParam = (name: string) =>
   Optional(z.string()).transform((text, ctx) => {
     if (text === undefined) return undefined;
     const instant = instantOf(text);
+    if (instant !== null && "tooEarly" in instant) {
+      ctx.addIssue({ code: "custom", message: `${name} must be a date in the year ${MIN_YEAR} or later.` });
+      return z.NEVER;
+    }
     if (!instant) {
       ctx.addIssue({ code: "custom", message: `${name} must be a date like 2026-03-02 or a date-time like 2026-03-02T09:30:00Z.` });
       return z.NEVER;
@@ -69,12 +85,12 @@ const DateParam = (name: string) =>
 const ListQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
   before: z.coerce.number().int().min(1).optional(),
-  person: Optional(z.string()),
+  person: Text("person"),
   kind: Optional(z.string()),
-  job: Optional(z.string()),
+  job: Text("job"),
   from: DateParam("from"),
   to: DateParam("to"),
-  q: Optional(z.string().max(200, "q must be at most 200 characters.")),
+  q: Text("q", 200),
 }).transform((query, ctx) => {
   const kinds: ChangeKind[] = [];
   for (const part of query.kind === undefined ? [] : query.kind.split(",")) {
