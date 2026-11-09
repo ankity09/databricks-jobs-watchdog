@@ -59,6 +59,7 @@ export function jobHistoryPath(name: string): string {
 
 export type WhenPreset = "any" | "24h" | "7d" | "30d" | "custom";
 
+const HAS_ZONE = /(Z|[+-]\d{2}:\d{2})$/;
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 const day = (at: Date) => at.toISOString().slice(0, 10);
@@ -85,5 +86,3 @@ export function presetOf(filters: ChangeFilters, now: Date): WhenPreset {
   }
   return "custom";
 }
-
-const HAS_ZONE = /(Z|[+-]\d{2}:\d{2})$/;

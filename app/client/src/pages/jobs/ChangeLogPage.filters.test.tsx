@@ -1,13 +1,22 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, useLocation } from "react-router";
+import { MemoryRouter, useLocation, useNavigate } from "react-router";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { jobsInTarget } from "../../../../shared/joblist/changelog";
 import type { ChangeKind, VersionSummary } from "../../../../shared/joblist/types";
 import { RefreshProvider } from "../../hooks/useRefreshKey";
 import { presetFrom } from "../../lib/changeFilters";
 import { ChangeLogPage } from "./ChangeLogPage";
+
+// The banner's real queries are not under test: this stand-in records what the page hands it.
+const bannerProps: Array<number | null | undefined> = [];
+vi.mock("./ConfigBanner", () => ({
+  ConfigBanner: ({ savedVersion }: { savedVersion: number | null | undefined }) => {
+    bannerProps.push(savedVersion);
+    return <output data-testid="banner">{String(savedVersion)}</output>;
+  },
+}));
 
 const CONFIG = { catalog: "main", schema: "watchdog", region: "us-east-2", appName: "watchdog-app", lakebaseProject: "jobs-watchdog" };
 
@@ -60,11 +69,11 @@ function facets() {
   };
 }
 
-function mockApi(options: { facetsFail?: () => boolean } = {}) {
+function mockApi(options: { facetsFail?: () => boolean; hold?: (query: URLSearchParams) => Promise<void> | undefined; failNewest?: boolean } = {}) {
   const asked: URLSearchParams[] = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn((input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL) => {
       const url = urlOf(input);
       if (url.startsWith("/api/app-config")) return Promise.resolve(json(200, CONFIG));
       if (url === "/api/job-list/versions/facets") {
@@ -73,11 +82,13 @@ function mockApi(options: { facetsFail?: () => boolean } = {}) {
       if (url.startsWith("/api/job-list/versions?")) {
         const query = new URLSearchParams(url.slice(url.indexOf("?") + 1));
         asked.push(query);
+        await options.hold?.(query);
+        if (options.failNewest && query.get("limit") === "1") return json(500, { error: "server", message: "Nope." });
         const limit = Number(query.get("limit") ?? "50");
         const before = query.get("before") === null ? Infinity : Number(query.get("before"));
         const all = matching(query);
         const page = all.filter((v) => v.version < before).reverse().slice(0, limit);
-        return Promise.resolve(json(200, { versions: page, total: all.length }));
+        return json(200, { versions: page, total: all.length });
       }
       if (url.startsWith("/api/analytics/query/")) {
         return Promise.resolve(new Response('data: {"type":"result","data":[]}\n\n', { headers: { "Content-Type": "text/event-stream" } }));
@@ -102,6 +113,20 @@ function renderAt(path = "/jobs/changes") {
         <Probe />
       </MemoryRouter>
     </RefreshProvider>,
+  );
+}
+
+function Navigate() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button type="button" onClick={() => void navigate(-1)}>
+        Go back
+      </button>
+      <button type="button" onClick={() => void navigate(1)}>
+        Go forward
+      </button>
+    </>
   );
 }
 
@@ -340,25 +365,213 @@ describe("change log filters", () => {
     expect(rows().length).toBeGreaterThan(0);
   });
 
-  it("follows the URL when it changes under it, like the back button", async () => {
+  it("goes back and forward through filter changes, and the controls follow", async () => {
     mockApi();
-    function Back() {
-      return null;
-    }
     const user = userEvent.setup();
     render(
       <RefreshProvider>
-        <MemoryRouter initialEntries={["/jobs/changes", "/jobs/changes?q=Change+number+1"]} initialIndex={1}>
+        <MemoryRouter initialEntries={["/jobs/changes"]}>
           <ChangeLogPage />
           <Probe />
-          <Back />
+          <Navigate />
         </MemoryRouter>
       </RefreshProvider>,
     );
-    await waitFor(() => expect(count()).toBe("11 of 60 versions match"));
-    expect(screen.getByRole("searchbox")).toHaveValue("Change number 1");
+    await waitFor(() => expect(count()).toBe("60 versions"));
+    await user.click(screen.getByRole("button", { name: "Added" }));
+    await waitFor(() => expect(count()).toBe("15 of 60 versions match"));
+    await user.type(screen.getByRole("searchbox"), "number 1");
+    await waitFor(() => expect(url()).toBe("/jobs/changes?kind=create&q=number+1"), { timeout: 2000 });
+    await waitFor(() => expect(count()).toBe("3 of 60 versions match"));
+
+    // The search took the place of the chip's entry, so one step back is the page before either.
+    await user.click(screen.getByRole("button", { name: "Go back" }));
+    await waitFor(() => expect(url()).toBe("/jobs/changes"));
+    await waitFor(() => expect(count()).toBe("60 versions"));
+    expect(screen.getByRole("searchbox")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Added" })).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(screen.getByRole("button", { name: "Go forward" }));
+    await waitFor(() => expect(url()).toBe("/jobs/changes?kind=create&q=number+1"));
+    expect(screen.getByRole("searchbox")).toHaveValue("number 1");
+    expect(screen.getByRole("button", { name: "Added" })).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => expect(count()).toBe("3 of 60 versions match"));
+
+    // A second real change adds an entry of its own; back from it keeps the first.
+    await user.click(screen.getByRole("button", { name: "Changed" }));
+    await waitFor(() => expect(url()).toBe("/jobs/changes?kind=create%2Cupdate&q=number+1"));
+    await user.click(screen.getByRole("button", { name: "Go back" }));
+    await waitFor(() => expect(url()).toBe("/jobs/changes?kind=create&q=number+1"));
+    expect(screen.getByRole("button", { name: "Changed" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("shows only the newer filter's rows when two answers come back out of order", async () => {
+    const releases: Array<() => void> = [];
+    const firstHeld = { done: false };
+    mockApi({
+      hold: (query) => {
+        if (query.get("limit") === "1" || query.get("kind") !== "create" || firstHeld.done) return undefined;
+        firstHeld.done = true;
+        return new Promise<void>((resolve) => releases.push(resolve));
+      },
+    });
+    const user = userEvent.setup();
+    renderAt();
+    await waitFor(() => expect(count()).toBe("60 versions"));
+    // Added is asked first and held; Deleted is asked next and answers at once.
+    await user.click(screen.getByRole("button", { name: "Added" }));
+    await waitFor(() => expect(releases).toHaveLength(1));
+    await user.click(screen.getByRole("button", { name: "Added" }));
+    await user.click(screen.getByRole("button", { name: "Deleted" }));
+    await waitFor(() => expect(count()).toBe("15 of 60 versions match"));
+    const newer = rows().map((row) => row.textContent);
+    releases[0]();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(count()).toBe("15 of 60 versions match");
+    expect(rows().map((row) => row.textContent)).toEqual(newer);
+    expect(url()).toBe("/jobs/changes?kind=delete");
+    expect(rows().every((row) => within(row).queryByText("delete") !== null)).toBe(true);
+  });
+
+  it("keeps the banner mounted, with the newest saved version, across a filter change", async () => {
+    mockApi();
+    const user = userEvent.setup();
+    renderAt();
+    await waitFor(() => expect(screen.getByTestId("banner")).toHaveTextContent("60"));
+    const banner = screen.getByTestId("banner");
+    bannerProps.length = 0;
+    await user.click(screen.getByRole("button", { name: "Added" }));
+    await waitFor(() => expect(count()).toBe("15 of 60 versions match"));
+    expect(screen.getByTestId("banner")).toBe(banner);
+    expect(banner).toHaveTextContent("60");
+    expect(bannerProps.every((v) => v === 60)).toBe(true);
+  });
+
+  it("hands the banner nothing, not the newest filtered version, when the newest-version lookup fails", async () => {
+    mockApi({ failNewest: true });
+    renderAt("/jobs/changes?kind=create");
+    await waitFor(() => expect(count()).toBe("15 of 60 versions match"));
+    expect(screen.getByTestId("banner")).toHaveTextContent("undefined");
+  });
+
+  it("marks a pressed chip with a check, a darker border and weight, and an unpressed one with none", async () => {
+    mockApi();
+    const user = userEvent.setup();
+    renderAt();
+    await waitFor(() => expect(count()).toBe("60 versions"));
+    for (const name of ["Imported", "Added", "Changed", "Deleted", "Restored"]) {
+      const chip = screen.getByRole("button", { name });
+      expect(chip).toHaveAttribute("aria-pressed", "false");
+      expect(chip.querySelector("svg")).toBeNull();
+      await user.click(chip);
+      await waitFor(() => expect(chip).toHaveAttribute("aria-pressed", "true"));
+      expect(chip.querySelector("svg")).not.toBeNull();
+      expect(chip.className).toMatch(/data-\[state=on\]:font-medium/);
+      expect(chip.className).toMatch(/data-\[state=on\]:border-/);
+      await user.click(chip);
+      await waitFor(() => expect(chip).toHaveAttribute("aria-pressed", "false"));
+      expect(chip.querySelector("svg")).toBeNull();
+    }
+  });
+
+  it("does not move a date while a year is half typed, and applies it when the date is complete", async () => {
+    const api = mockApi();
+    renderAt("/jobs/changes?from=2026-11-01&to=2026-11-09");
+    const to = await screen.findByLabelText("To", { exact: true });
+    await waitFor(() => expect(count()).toBe("60 of 60 versions match"));
+    const asks = api.asked.length;
+    // Chrome reports 0002, 0020, 0202 on the way to 2026; none of them is a date to filter by.
+    for (const year of ["0002", "0020", "0202"]) fireEvent.change(to, { target: { value: `${year}-11-05` } });
+    expect(url()).toBe("/jobs/changes?from=2026-11-01&to=2026-11-09");
+    expect(api.asked.length).toBe(asks);
+    expect(screen.getByLabelText("From", { exact: true })).toHaveValue("2026-11-01");
+    fireEvent.change(to, { target: { value: "2026-11-05" } });
+    await waitFor(() => expect(url()).toBe("/jobs/changes?from=2026-11-01&to=2026-11-05"));
+  });
+
+  it("puts the date back when the box is left with a half-typed year", async () => {
+    mockApi();
+    renderAt("/jobs/changes?from=2026-11-01&to=2026-11-09");
+    const to = await screen.findByLabelText("To", { exact: true });
+    fireEvent.change(to, { target: { value: "0002-11-05" } });
+    expect(to).toHaveValue("0002-11-05");
+    fireEvent.blur(to);
+    expect(to).toHaveValue("2026-11-09");
+    expect(url()).toBe("/jobs/changes?from=2026-11-01&to=2026-11-09");
+  });
+
+  it("changing a date does not stack history entries, and Any time to Custom adds none", async () => {
+    mockApi();
+    const user = userEvent.setup();
+    render(
+      <RefreshProvider>
+        <MemoryRouter initialEntries={["/jobs/changes"]}>
+          <ChangeLogPage />
+          <Probe />
+          <Navigate />
+        </MemoryRouter>
+      </RefreshProvider>,
+    );
+    await waitFor(() => expect(count()).toBe("60 versions"));
+    await user.click(screen.getByRole("button", { name: "Added" }));
+    await waitFor(() => expect(url()).toBe("/jobs/changes?kind=create"));
+    await user.click(screen.getByRole("combobox", { name: "When" }));
+    await user.click(await screen.findByRole("option", { name: "Custom" }));
+    expect(url()).toBe("/jobs/changes?kind=create");
+    fireEvent.change(await screen.findByLabelText("From", { exact: true }), { target: { value: "2026-11-01" } });
+    fireEvent.change(screen.getByLabelText("To", { exact: true }), { target: { value: "2026-11-05" } });
+    fireEvent.change(screen.getByLabelText("To", { exact: true }), { target: { value: "2026-11-06" } });
+    await waitFor(() => expect(url()).toBe("/jobs/changes?kind=create&from=2026-11-01&to=2026-11-06"));
+    // The dates took the chip's entry: one step back is the page before the chip, not an earlier date.
+    await user.click(screen.getByRole("button", { name: "Go back" }));
+    await waitFor(() => expect(url()).toBe("/jobs/changes"));
+  });
+
+  it("turns a 24-hour window into a date when Custom is picked, so the input and the URL agree", async () => {
+    mockApi();
+    const user = userEvent.setup();
+    renderAt();
+    await waitFor(() => expect(count()).toBe("60 versions"));
+    await user.click(screen.getByRole("combobox", { name: "When" }));
+    await user.click(await screen.findByRole("option", { name: "Last 24 hours" }));
+    await waitFor(() => expect(url()).toMatch(/from=\d{4}-\d{2}-\d{2}T/));
+    await user.click(screen.getByRole("combobox", { name: "When" }));
+    await user.click(await screen.findByRole("option", { name: "Custom" }));
+    const from = await screen.findByLabelText("From", { exact: true });
+    await waitFor(() => expect(url()).toBe(`/jobs/changes?from=${(from as HTMLInputElement).value}`));
+  });
+
+  it("limits the search to 200 characters", async () => {
+    mockApi();
+    renderAt();
+    expect(await screen.findByRole("searchbox")).toHaveAttribute("maxlength", "200");
+  });
+
+  it("moves focus to the Search box after Clear filters, from either button", async () => {
+    mockApi();
+    const user = userEvent.setup();
+    renderAt("/jobs/changes?q=zzz");
+    await screen.findByText("No changes match these filters.");
+    await user.click(screen.getAllByRole("button", { name: "Clear filters" })[1]);
+    await waitFor(() => expect(count()).toBe("60 versions"));
+    expect(screen.getByRole("searchbox")).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: "Added" }));
+    await waitFor(() => expect(count()).toBe("15 of 60 versions match"));
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
     await waitFor(() => expect(count()).toBe("60 versions"));
+    expect(screen.getByRole("searchbox")).toHaveFocus();
+  });
+
+  it("keeps a keystroke typed right after a search was sent", async () => {
+    mockApi();
+    const user = userEvent.setup();
+    renderAt();
+    await waitFor(() => expect(count()).toBe("60 versions"));
+    await user.type(screen.getByRole("searchbox"), "nu");
+    await waitFor(() => expect(url()).toBe("/jobs/changes?q=nu"), { timeout: 2000 });
+    await user.type(screen.getByRole("searchbox"), "m");
+    await waitFor(() => expect(url()).toBe("/jobs/changes?q=num"), { timeout: 2000 });
   });
 
   it("keeps the list working when the options do not load, says so, and Retry gets them", async () => {

@@ -18,11 +18,11 @@ export const KIND_LABEL: Record<ChangeKind, string> = {
   restore: "Restored",
 };
 
-/** A filter chip that is on wears its kind's colors. */
+/** A filter chip that is on wears its kind's colors, a darker border and a heavier weight (and a check, in the chip). */
 export const KIND_CHIP_ON: Record<ChangeKind, string> = {
-  import: "data-[state=on]:border-foreground/20 data-[state=on]:bg-background data-[state=on]:text-foreground",
-  create: "data-[state=on]:border-success/30 data-[state=on]:bg-success/10 data-[state=on]:text-success",
-  update: "data-[state=on]:border-border data-[state=on]:bg-secondary data-[state=on]:text-secondary-foreground",
-  delete: "data-[state=on]:border-destructive/30 data-[state=on]:bg-destructive/10 data-[state=on]:text-destructive",
-  restore: "data-[state=on]:border-warning/30 data-[state=on]:bg-warning/10 data-[state=on]:text-warning",
+  import: "data-[state=on]:border-foreground/60 data-[state=on]:bg-background data-[state=on]:text-foreground",
+  create: "data-[state=on]:border-success data-[state=on]:bg-success/10 data-[state=on]:text-success",
+  update: "data-[state=on]:border-foreground/60 data-[state=on]:bg-secondary data-[state=on]:text-secondary-foreground",
+  delete: "data-[state=on]:border-destructive data-[state=on]:bg-destructive/10 data-[state=on]:text-destructive",
+  restore: "data-[state=on]:border-warning data-[state=on]:bg-warning/10 data-[state=on]:text-warning",
 };

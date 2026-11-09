@@ -30,6 +30,9 @@ import { KIND_CHIP_ON, KIND_LABEL } from "./changeKinds";
 /** How long typing in Search waits before the list is asked again. */
 export const SEARCH_DELAY_MS = 300;
 
+/** How long a date box waits after the last change before it tells the page. */
+export const DATE_DELAY_MS = 500;
+
 /** The people, jobs and kinds to pick from. A failed load leaves the list working: the controls say so and offer Retry. */
 export interface FacetsState {
   facets: VersionFacets | null;
@@ -40,7 +43,8 @@ export interface FacetsState {
 export interface ChangeLogFiltersProps {
   filters: ChangeFilters;
   facets: FacetsState;
-  onChange: (patch: Partial<ChangeFilters>) => void;
+  /** `replace`: this change takes the place of the history entry, instead of adding one. */
+  onChange: (patch: Partial<ChangeFilters>, replace?: boolean) => void;
   /** A new value starts the Search box again, dropping text that is still waiting to be sent. */
   resetKey?: number;
 }
@@ -101,8 +105,9 @@ export function ChangeLogFilters({ filters, facets, onChange, resetKey = 0 }: Ch
             <ToggleGroupItem
               key={kind}
               value={kind}
-              className={cn("h-8 rounded-md! border px-1.5 text-[13px] font-normal", KIND_CHIP_ON[kind])}
+              className={cn("h-8 gap-1 rounded-md! border px-1.5 text-[13px] font-normal data-[state=on]:font-medium", KIND_CHIP_ON[kind])}
             >
+              {filters.kinds.includes(kind) ? <Check className="size-3" aria-hidden="true" /> : null}
               {KIND_LABEL[kind]}
             </ToggleGroupItem>
           ))}
@@ -113,7 +118,7 @@ export function ChangeLogFilters({ filters, facets, onChange, resetKey = 0 }: Ch
       </Field>
       <WhenFields key={resetKey} id={id} filters={filters} onChange={onChange} />
       <Field label="Search" htmlFor={`${id}-search`}>
-        <SearchBox key={resetKey} id={`${id}-search`} value={filters.q} onCommit={(q) => onChange({ q })} />
+        <SearchBox key={resetKey} id={`${id}-search`} value={filters.q} focusOnMount={resetKey > 0} onCommit={(q) => onChange({ q }, true)} />
       </Field>
     </div>
   );
@@ -220,7 +225,7 @@ function JobCombobox({ value, facets, onChange }: { value: string | null; facets
   );
 }
 
-function WhenFields({ id, filters, onChange }: { id: string; filters: ChangeFilters; onChange: (patch: Partial<ChangeFilters>) => void }) {
+function WhenFields({ id, filters, onChange }: { id: string; filters: ChangeFilters; onChange: (patch: Partial<ChangeFilters>, replace?: boolean) => void }) {
   // "Custom" with no dates yet is only on the page: the URL holds dates, never the preset's name.
   const [customOpen, setCustomOpen] = useState(false);
   const preset = presetOf(filters, new Date());
@@ -235,7 +240,8 @@ function WhenFields({ id, filters, onChange }: { id: string; filters: ChangeFilt
             const when = WHEN_ORDER.find((option) => option === next) ?? "any";
             setCustomOpen(when === "custom");
             if (when === "any") onChange({ from: null, to: null });
-            else if (when === "custom") onChange(preset === "any" || preset === "custom" ? {} : { to: null });
+            // A preset becomes the dates the inputs show (a 24-hour date-time becomes its date); from Any time there is nothing to change.
+            else if (when === "custom") onChange(preset === "any" || preset === "custom" ? {} : { from: filters.from?.slice(0, 10) ?? null, to: null });
             else onChange({ from: presetFrom(when, new Date()), to: null });
           }}
         >
@@ -254,30 +260,20 @@ function WhenFields({ id, filters, onChange }: { id: string; filters: ChangeFilt
       {shown === "custom" ? (
         <>
           <Field label="From" htmlFor={`${id}-from`}>
-            <Input
+            <DateBox
               id={`${id}-from`}
-              type="date"
-              className="h-8 w-40 bg-background font-mono text-xs"
               value={filters.from?.slice(0, 10) ?? ""}
               max={filters.to?.slice(0, 10) || undefined}
               // A From after To would match nothing: To moves with it.
-              onChange={(event) => {
-                const from = event.target.value || null;
-                onChange(from !== null && filters.to !== null && from > filters.to.slice(0, 10) ? { from, to: from } : { from });
-              }}
+              onCommit={(from) => onChange(from !== null && filters.to !== null && from > filters.to.slice(0, 10) ? { from, to: from } : { from }, true)}
             />
           </Field>
           <Field label="To" htmlFor={`${id}-to`}>
-            <Input
+            <DateBox
               id={`${id}-to`}
-              type="date"
-              className="h-8 w-40 bg-background font-mono text-xs"
               value={filters.to?.slice(0, 10) ?? ""}
               min={filters.from?.slice(0, 10) || undefined}
-              onChange={(event) => {
-                const to = event.target.value || null;
-                onChange(to !== null && filters.from !== null && to < filters.from.slice(0, 10) ? { from: to, to } : { to });
-              }}
+              onCommit={(to) => onChange(to !== null && filters.from !== null && to < filters.from.slice(0, 10) ? { from: to, to } : { to }, true)}
             />
           </Field>
         </>
@@ -286,8 +282,57 @@ function WhenFields({ id, filters, onChange }: { id: string; filters: ChangeFilt
   );
 }
 
+/**
+ * A date input that tells the page when typing pauses for DATE_DELAY_MS on a complete date with a four-digit year,
+ * or when the box is left. Chrome reports every step on the way: editing 2026-11-09 to 2026-11-05 passes through
+ * 2026-01-09, and a year goes 0002, 0020, 0202, 2026. A step is not a date to filter by, and the other bound moves
+ * only for a date the person meant.
+ */
+function DateBox({ id, value, min, max, onCommit }: { id: string; value: string; min?: string; max?: string; onCommit: (date: string | null) => void }) {
+  const [text, setText] = useState(value);
+  const [told, setTold] = useState(value);
+  if (value !== told) {
+    setTold(value);
+    setText(value);
+  }
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const commit = useRef(onCommit);
+  useEffect(() => {
+    commit.current = onCommit;
+  });
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const usable = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date) && Number(date.slice(0, 4)) >= 1000;
+  const send = (date: string | null) => {
+    setTold(date ?? "");
+    commit.current(date);
+  };
+  return (
+    <Input
+      id={id}
+      type="date"
+      className="h-8 w-40 bg-background font-mono text-xs"
+      value={text}
+      min={min}
+      max={max}
+      onChange={(event) => {
+        const next = event.target.value;
+        setText(next);
+        clearTimeout(timer.current);
+        if (usable(next)) timer.current = setTimeout(() => send(next), DATE_DELAY_MS);
+      }}
+      onBlur={() => {
+        clearTimeout(timer.current);
+        if (text === told) return;
+        if (text === "") send(null);
+        else if (usable(text)) send(text);
+        else setText(told);
+      }}
+    />
+  );
+}
+
 /** A text input that tells the page what was typed once typing pauses for SEARCH_DELAY_MS. */
-function SearchBox({ id, value, onCommit }: { id: string; value: string; onCommit: (q: string) => void }) {
+function SearchBox({ id, value, focusOnMount, onCommit }: { id: string; value: string; focusOnMount: boolean; onCommit: (q: string) => void }) {
   const [text, setText] = useState(value);
   // The last text the page has, as this box knows it: a different value from outside (Clear, the back button) replaces what is typed.
   const [told, setTold] = useState(value);
@@ -301,7 +346,11 @@ function SearchBox({ id, value, onCommit }: { id: string; value: string; onCommi
   useEffect(() => {
     commit.current = onCommit;
   });
+  // Only a value that this box did not send ends a pause that is running: its own commit, coming back, must not.
+  const sent = useRef(value);
   useEffect(() => {
+    if (value === sent.current) return;
+    sent.current = value;
     clearTimeout(timer.current);
   }, [value]);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -313,6 +362,8 @@ function SearchBox({ id, value, onCommit }: { id: string; value: string; onCommi
         type="search"
         autoComplete="off"
         placeholder="Search summaries"
+        maxLength={200}
+        autoFocus={focusOnMount}
         className="h-8 w-44 bg-background pl-7 text-[13px]"
         value={text}
         onChange={(event) => {
@@ -321,6 +372,7 @@ function SearchBox({ id, value, onCommit }: { id: string; value: string; onCommi
           clearTimeout(timer.current);
           timer.current = setTimeout(() => {
             const q = next.trim();
+            sent.current = q;
             setTold(q);
             commit.current(q);
           }, SEARCH_DELAY_MS);
