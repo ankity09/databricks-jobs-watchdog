@@ -381,7 +381,7 @@ describe("DependencyMapPage", () => {
     expect(shown.top).toBeGreaterThanOrEqual(64 - SUBPIXEL);
   });
 
-  it("keeps a fit clear of the side panel while it is open, and moves the map only to bring a selected box out from under it", async () => {
+  it("keeps a fit clear of the side panel while it is open, and moves the map only to bring a selection and its chain out from under it", async () => {
     const { container } = renderMap();
     await box("watchdog_demo_fails (Failed)");
     resizeMap(container, 1400, 800);
@@ -391,19 +391,31 @@ describe("DependencyMapPage", () => {
     const panelEdge = 1400 - 388;
     expect(before.right).toBeGreaterThan(panelEdge);
 
-    // A box on the left: selecting it opens the panel and leaves the view where it was.
-    fireEvent.click(screen.getByRole("button", { name: "orders_ingest (Unknown, switched off)" }));
-    await screen.findByRole("region", { name: "orders_ingest" });
+    // A box whose chain is all on the left: selecting it opens the panel and leaves the view where it was.
+    fireEvent.click(screen.getByRole("button", { name: "watchdog_demo_fails (Failed)" }));
+    await screen.findByRole("region", { name: "watchdog_demo_fails" });
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(boxesOnScreen(container)).toEqual(before);
 
-    // The last box of the chain sits under the panel: selecting it moves the map left just enough, at the same zoom.
+    // orders_enrich's chain ends under the panel: the map moves left at the same zoom until the chain clears the panel.
+    expect(boxOnScreen(container, "job:daily_revenue_export").right).toBeGreaterThan(panelEdge);
+    fireEvent.click(screen.getByRole("button", { name: "orders_enrich (Unknown, switched off)" }));
+    await screen.findByRole("region", { name: "orders_enrich" });
+    // The shift is the overlap, so the chain's last box ends at the panel's edge, and the selected box stays on screen.
+    await waitFor(() => expect(boxOnScreen(container, "job:daily_revenue_export").right).toBeLessThanOrEqual(panelEdge + SUBPIXEL));
+    expect(boxOnScreen(container, "job:orders_enrich").left).toBeGreaterThanOrEqual(24 - SUBPIXEL);
+    expect(boxesOnScreen(container).zoom).toBe(before.zoom);
+
+    // From a fresh fit, the last box of the chain, selected under the panel, comes out too.
+    fireEvent.click(screen.getByRole("button", { name: "orders_enrich (Unknown, switched off)" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "orders_enrich" })).toBeNull());
+    resizeMap(container, 1400, 790);
+    await waitFor(() => expect(boxesOnScreen(container).left).toBeGreaterThanOrEqual(24 - SUBPIXEL));
+    expect(boxOnScreen(container, "job:daily_revenue_export").right).toBeGreaterThan(panelEdge);
     fireEvent.click(screen.getByRole("button", { name: "daily_revenue_export (Unknown, switched off)" }));
     await screen.findByRole("region", { name: "daily_revenue_export" });
-    // The shift is the overlap, so the box ends at the panel's edge.
     await waitFor(() => expect(boxOnScreen(container, "job:daily_revenue_export").right).toBeLessThanOrEqual(panelEdge + SUBPIXEL));
     expect(boxOnScreen(container, "job:daily_revenue_export").left).toBeGreaterThanOrEqual(24 - SUBPIXEL);
-    expect(boxesOnScreen(container).zoom).toBe(before.zoom);
 
     // The pan moved the left of the map off screen. A fit while the panel is open brings it all back, clear of the panel.
     expect(boxesOnScreen(container).left).toBeLessThan(24);
@@ -492,7 +504,8 @@ describe("DependencyMapPage", () => {
     renderMap();
     const fails = await box("watchdog_demo_fails (Failed)");
     expect(within(fails).getByText("watchdog_demo_fails")).toBeInTheDocument();
-    expect(within(fails).getByText("platform-team · Scheduled")).toBeInTheDocument();
+    // The owner, then the schedule; the whole line is also in the card's tooltip.
+    expect(part(fails, "meta")).toHaveTextContent("platform-team · Scheduled");
     expect(part(fails, "status")).toHaveTextContent("Failed");
     expect(part(fails, "tile")).toHaveAttribute("data-schedule", "scheduled");
     expect(part(fails, "tile")).toHaveAttribute("data-tone", "destructive");
@@ -505,7 +518,7 @@ describe("DependencyMapPage", () => {
     expect(part(succeeds, "critical")).toBeNull();
 
     const ingest = screen.getByRole("button", { name: "orders_ingest (Unknown, switched off)" });
-    expect(within(ingest).getByText("ingestion-team · Continuous")).toBeInTheDocument();
+    expect(part(ingest, "meta")).toHaveTextContent("ingestion-team · Continuous");
     expect(part(ingest, "tile")).toHaveAttribute("data-schedule", "continuous");
     expect(part(ingest, "status")).toHaveTextContent("Unknown");
     expect(part(ingest, "off")).toHaveTextContent("Off");

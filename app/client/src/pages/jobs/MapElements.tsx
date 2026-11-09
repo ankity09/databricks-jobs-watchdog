@@ -193,7 +193,11 @@ export function JobNode({ data }: NodeProps<JobFlowNode>) {
           <span className="flex min-w-0 flex-1 flex-col gap-1">
             <CardName name={box.name} className={box.active ? undefined : "text-foreground/70"} />
             <span className="flex min-w-0 items-center gap-1.5">
-              <span className="min-w-0 flex-1 truncate text-[11px] leading-[18px] text-muted-foreground">{meta}</span>
+              {/* One line: when the schedule does not fit after the owner, it wraps onto a hidden second line instead of being cut. */}
+              <span data-part="meta" className="flex h-[18px] min-w-0 flex-1 flex-wrap overflow-hidden text-[11px] leading-[18px] text-muted-foreground">
+                {facts?.owner ? <span className="max-w-full truncate">{facts.owner}</span> : null}
+                <span className="whitespace-nowrap">{facts?.owner ? `\u00a0·\u00a0${SCHEDULE_LABEL[facts.schedule]}` : meta}</span>
+              </span>
               {box.active ? null : <OffChip />}
               {!box.listed ? null : statusLoading ? <Skeleton className="h-[18px] w-14 rounded-[5px]" /> : <StatusChip status={box.status} />}
             </span>

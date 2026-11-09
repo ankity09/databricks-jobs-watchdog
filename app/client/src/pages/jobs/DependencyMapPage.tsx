@@ -55,10 +55,12 @@ import {
   buildEdges,
   buildGraph,
   downstreamOf,
+  jobNodeId,
   unlinkChange,
 } from "../../lib/graph";
 import type { EntryJobIds } from "../../lib/picker";
 import { statusTone } from "../../lib/status";
+import { cn } from "../../lib/utils";
 import { AddLinkDialog, AddServiceDialog } from "./AddLinkDialog";
 import { ConfigBanner } from "./ConfigBanner";
 import { JobEditorSheet } from "./JobEditorSheet";
@@ -620,10 +622,17 @@ export function DependencyMapPage() {
                   maskColor="color-mix(in srgb, var(--muted) 72%, transparent)"
                   maskStrokeColor="var(--input)"
                   maskStrokeWidth={1}
-                  className="m-3 overflow-hidden rounded-lg border border-border shadow-[0_1px_2px_rgb(27_49_57/0.06)] @max-2xl:hidden [&>svg]:h-[120px] [&>svg]:w-[160px]"
+                  // Hidden while the side panel takes the right side; the panel would cover all but a sliver of it.
+                  className={cn(
+                    "m-3 overflow-hidden rounded-lg border border-border shadow-[0_1px_2px_rgb(27_49_57/0.06)] @max-2xl:hidden [&>svg]:h-[120px] [&>svg]:w-[160px]",
+                    panelOpen && "hidden",
+                  )}
                 />
                 <Refit layoutKey={layoutKey} panelOpen={panelOpen} />
-                <KeepInView nodeId={panelOpen ? selected.id : null} />
+                <KeepInView
+                  chain={panelOpen ? [selected.id, ...(chain?.downstream.jobs ?? []).map(jobNodeId)] : null}
+                  upstream={chain ? [...chain.upstream.nodes] : []}
+                />
                 <Panel position="bottom-left" className="m-3">
                   <MapLegend />
                 </Panel>
@@ -642,7 +651,8 @@ export function DependencyMapPage() {
                 ) : null}
                 {panelOpen && document ? (
                   // Down the right, over the minimap when it needs the height; the frame lets clicks through around the panel.
-                  <Panel position="top-right" className="pointer-events-none bottom-0 m-3 flex items-start">
+                  // Below the toolbar on a narrow canvas, where the two would meet.
+                  <Panel position="top-right" className="pointer-events-none bottom-0 m-3 flex items-start @max-3xl:mt-14">
                     <MapSidePanel
                       box={selected}
                       document={document}
@@ -830,36 +840,55 @@ function Refit({ layoutKey, panelOpen }: RefitProps) {
 }
 
 interface KeepInViewProps {
-  /** The selected box while the side panel is open, else null. */
-  nodeId: string | null;
+  /** The selected box first, then the boxes its failure affects, while the side panel is open; else null. */
+  chain: string[] | null;
+  /** The boxes upstream of it, shown too when the whole chain fits. */
+  upstream: string[];
 }
 
 /**
- * Brings a newly selected box out from under the side panel: the view moves
- * left just enough, at the same zoom. A box already in view does not move it.
+ * Brings a new selection out from under the side panel: the view moves left
+ * at the same zoom until the selected box and what it affects clear the
+ * panel, and the upstream path too when all of it fits, but never so far that
+ * the selected box leaves the screen. A selection already clear of the panel
+ * does not move it.
  */
-function KeepInView({ nodeId }: KeepInViewProps) {
+function KeepInView({ chain, upstream }: KeepInViewProps) {
   const { getInternalNode, getViewport, setViewport } = useReactFlow();
   const width = useStore((state) => state.width);
-  const reveal = useEffectEvent((id: string) => {
-    if (width < PANEL_CLEAR_FROM) return;
-    const node = getInternalNode(id);
-    if (!node) return;
+  // Reads the newest chain and size when it runs, after the panel is drawn.
+  const reveal = useEffectEvent(() => {
+    if (chain === null || width < PANEL_CLEAR_FROM) return;
     const { x, y, zoom } = getViewport();
-    const left = x + node.internals.positionAbsolute.x * zoom;
-    const right = left + (node.measured.width ?? node.width ?? 0) * zoom;
+    /** The boxes' left and right edges on screen. */
+    const span = (list: string[]) => {
+      let left = Infinity;
+      let right = -Infinity;
+      for (const id of list) {
+        const node = getInternalNode(id);
+        if (!node) continue;
+        left = Math.min(left, x + node.internals.positionAbsolute.x * zoom);
+        right = Math.max(right, x + (node.internals.positionAbsolute.x + (node.measured.width ?? node.width ?? 0)) * zoom);
+      }
+      return { left, right };
+    };
     const edge = width - (OVERLAY.inset + OVERLAY.panel + 16);
-    // Never past the left edge of the canvas.
-    const shift = Math.min(right - edge, left - 24);
+    const selected = span(chain.slice(0, 1));
+    const all = span([...chain, ...upstream]);
+    const target = all.right - all.left <= edge - 24 ? all : span(chain);
+    if (!Number.isFinite(selected.left) || target.right <= edge) return;
+    // The whole chain when it fits; otherwise as far as the selected box allows.
+    const shift = Math.min(target.right - edge, (target === all ? all.left : selected.left) - 24);
     // A straight glide: the smooth path would zoom out and back in on the way.
-    if (right > edge && shift > 0) void setViewport({ x: x - shift, y, zoom }, { duration: viewDuration(), interpolate: "linear" });
+    if (shift > 0) void setViewport({ x: x - shift, y, zoom }, { duration: viewDuration(), interpolate: "linear" });
   });
+  // A new selection, or a save that changed its chain; not a re-render with the same one.
+  const key = chain?.join("|") ?? null;
   useEffect(() => {
-    if (nodeId === null) return;
-    // After the panel is drawn.
-    const frame = window.requestAnimationFrame(() => reveal(nodeId));
+    if (key === null) return;
+    const frame = window.requestAnimationFrame(() => reveal());
     return () => window.cancelAnimationFrame(frame);
-  }, [nodeId]);
+  }, [key]);
   return null;
 }
 
