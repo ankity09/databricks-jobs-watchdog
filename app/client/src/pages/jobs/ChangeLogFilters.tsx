@@ -61,9 +61,9 @@ const WHEN_LABEL: Record<WhenPreset, string> = {
 };
 const WHEN_ORDER: WhenPreset[] = ["any", "24h", "7d", "30d", "custom"];
 
-function Field({ label, htmlFor, children }: { label: string; htmlFor?: string; children: ReactNode }) {
+function Field({ label, htmlFor, className, children }: { label: string; htmlFor?: string; className?: string; children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-1">
+    <div className={cn("flex flex-col gap-1", className)}>
       <Label htmlFor={htmlFor} className="text-xs font-medium text-muted-foreground">
         {label}
       </Label>
@@ -117,7 +117,7 @@ export function ChangeLogFilters({ filters, facets, onChange, resetKey = 0 }: Ch
         <JobCombobox value={filters.job} facets={facets} onChange={(job) => onChange({ job })} />
       </Field>
       <WhenFields key={resetKey} id={id} filters={filters} onChange={onChange} />
-      <Field label="Search" htmlFor={`${id}-search`}>
+      <Field label="Search" htmlFor={`${id}-search`} className="min-w-[160px] flex-1">
         <SearchBox key={resetKey} id={`${id}-search`} value={filters.q} focusOnMount={resetKey > 0} onCommit={(q) => onChange({ q }, true)} />
       </Field>
     </div>
@@ -133,7 +133,7 @@ function WhoSelect({ value, facets, onChange }: { value: string | null; facets: 
   const shown = value !== null && !people.some((p) => p.email === value) ? [...people, { email: value, count: 0 }] : people;
   return (
     <Select value={value ?? ANYONE} onValueChange={(next) => onChange(next === ANYONE ? null : next)}>
-      <SelectTrigger size="sm" aria-label="Who" className={cn("h-8 w-48 bg-background text-[13px]", value !== null && "border-foreground/30")}>
+      <SelectTrigger size="sm" aria-label="Who" className={cn("h-8 w-[168px] bg-background text-[13px]", value !== null && "border-foreground/30")}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -176,7 +176,7 @@ function JobCombobox({ value, facets, onChange }: { value: string | null; facets
           role="combobox"
           aria-label="Job"
           aria-expanded={open}
-          className={cn("h-8 w-44 justify-between bg-background px-3 text-[13px] font-normal", value !== null && "border-foreground/30")}
+          className={cn("h-8 w-[168px] justify-between bg-background px-3 text-[13px] font-normal", value !== null && "border-foreground/30")}
         >
           <span className={cn("truncate", value !== null && "font-mono text-xs")}>{value ?? "Any job"}</span>
           <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -301,8 +301,16 @@ function DateBox({ id, value, min, max, onCommit }: { id: string; value: string;
     commit.current = onCommit;
   });
   useEffect(() => () => clearTimeout(timer.current), []);
+  // Only a value that this box did not send ends a pause that is running (Back or Forward changed the dates).
+  const sent = useRef(value);
+  useEffect(() => {
+    if (value === sent.current) return;
+    sent.current = value;
+    clearTimeout(timer.current);
+  }, [value]);
   const usable = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date) && Number(date.slice(0, 4)) >= 1000;
   const send = (date: string | null) => {
+    sent.current = date ?? "";
     setTold(date ?? "");
     commit.current(date);
   };
@@ -364,7 +372,7 @@ function SearchBox({ id, value, focusOnMount, onCommit }: { id: string; value: s
         placeholder="Search summaries"
         maxLength={200}
         autoFocus={focusOnMount}
-        className="h-8 w-44 bg-background pl-7 text-[13px]"
+        className="h-8 w-full bg-background pl-7 text-[13px]"
         value={text}
         onChange={(event) => {
           const next = event.target.value;

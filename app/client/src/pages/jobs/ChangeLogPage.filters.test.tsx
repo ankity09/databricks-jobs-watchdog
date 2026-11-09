@@ -69,7 +69,7 @@ function facets() {
   };
 }
 
-function mockApi(options: { facetsFail?: () => boolean; hold?: (query: URLSearchParams) => Promise<void> | undefined; failNewest?: boolean } = {}) {
+function mockApi(options: { facetsFail?: () => boolean; hold?: (query: URLSearchParams) => Promise<void> | undefined; failNewest?: boolean | (() => boolean) } = {}) {
   const asked: URLSearchParams[] = [];
   vi.stubGlobal(
     "fetch",
@@ -83,7 +83,7 @@ function mockApi(options: { facetsFail?: () => boolean; hold?: (query: URLSearch
         const query = new URLSearchParams(url.slice(url.indexOf("?") + 1));
         asked.push(query);
         await options.hold?.(query);
-        if (options.failNewest && query.get("limit") === "1") return json(500, { error: "server", message: "Nope." });
+        if (query.get("limit") === "1" && (typeof options.failNewest === "function" ? options.failNewest() : options.failNewest)) return json(500, { error: "server", message: "Nope." });
         const limit = Number(query.get("limit") ?? "50");
         const before = query.get("before") === null ? Infinity : Number(query.get("before"));
         const all = matching(query);
@@ -452,6 +452,41 @@ describe("change log filters", () => {
     renderAt("/jobs/changes?kind=create");
     await waitFor(() => expect(count()).toBe("15 of 60 versions match"));
     expect(screen.getByTestId("banner")).toHaveTextContent("undefined");
+  });
+
+  it("keeps the banner's version when a later newest-version lookup fails", async () => {
+    let fail = false;
+    mockApi({ failNewest: () => fail });
+    const user = userEvent.setup();
+    renderAt("/jobs/changes?kind=create");
+    await waitFor(() => expect(screen.getByTestId("banner")).toHaveTextContent("60"));
+    fail = true;
+    bannerProps.length = 0;
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument());
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(screen.getByTestId("banner")).toHaveTextContent("60");
+    expect(bannerProps.includes(undefined)).toBe(false);
+  });
+
+  it("drops a date that is still waiting when Back changes the dates", async () => {
+    mockApi();
+    const user = userEvent.setup();
+    render(
+      <RefreshProvider>
+        <MemoryRouter initialEntries={["/jobs/changes?from=2026-11-01&to=2026-11-09", "/jobs/changes?from=2026-11-01&to=2026-11-08"]} initialIndex={1}>
+          <ChangeLogPage />
+          <Probe />
+          <Navigate />
+        </MemoryRouter>
+      </RefreshProvider>,
+    );
+    fireEvent.change(await screen.findByLabelText("To", { exact: true }), { target: { value: "2026-11-05" } });
+    await user.click(screen.getByRole("button", { name: "Go back" }));
+    await waitFor(() => expect(url()).toBe("/jobs/changes?from=2026-11-01&to=2026-11-09"));
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(url()).toBe("/jobs/changes?from=2026-11-01&to=2026-11-09");
+    expect(screen.getByLabelText("To", { exact: true })).toHaveValue("2026-11-09");
   });
 
   it("marks a pressed chip with a check, a darker border and weight, and an unpressed one with none", async () => {

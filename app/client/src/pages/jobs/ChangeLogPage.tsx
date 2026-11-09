@@ -105,7 +105,8 @@ function useVersions(key: string) {
         hasFilters(filters) ? listVersions(1).then((l) => l.versions[0]?.version ?? null, () => undefined) : Promise.resolve(undefined),
       ]);
       if (live.current !== key) return;
-      setLatest(hasFilters(filters) ? newest : (page.versions[0]?.version ?? null));
+      // A lookup that fails keeps the last good version (the banner stays); undefined only when there never was one.
+      setLatest((last) => (hasFilters(filters) ? (newest === undefined ? last : newest) : (page.versions[0]?.version ?? null)));
       update((current) => withNewest(current, page));
     } catch (error) {
       update((current) => ({ ...current, error: toApiError(error), loading: false }));
