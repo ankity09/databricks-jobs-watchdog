@@ -23,6 +23,21 @@
   --font-mono: "DM Mono", monospace;
 }
 
+/*
+ * The dependency map's slow dash flow along a selected job's downstream links
+ * (motion-safe:animate-map-flow). 20 is a whole number of each line's pattern
+ * (6 4, and 1 4 for services), so the flow loops without a jump.
+ */
+@theme {
+  --animate-map-flow: map-flow 1.6s linear infinite;
+
+  @keyframes map-flow {
+    to {
+      stroke-dashoffset: -20;
+    }
+  }
+}
+
 :root,
 .dark {
   --background: #FFFFFF;

@@ -47,15 +47,33 @@ export interface GraphEdge {
   dependency: DependencyEntry;
 }
 
-export const JOB_SIZE = { width: 204, height: 54 } as const;
-export const SERVICE_SIZE = { width: 148, height: 32 } as const;
+/** The cards the map draws: a job, and a narrower service. */
+export const JOB_SIZE = { width: 248, height: 68 } as const;
+export const SERVICE_SIZE = { width: 184, height: 52 } as const;
+
+/** Which way the links run: left to right (the default), or top to bottom. */
+export type LayoutDirection = "LR" | "TB";
+
+export interface GraphOptions {
+  direction?: LayoutDirection;
+  /** False leaves the services and their links off the map. */
+  services?: boolean;
+}
 
 const LINES: Record<DependencyType, EdgeLine> = { job: "solid", child_job: "dashed", service: "dotted" };
-const NODE_GAP = 22; // between boxes in the same column
-const RANK_GAP = 60; // between columns
-const GRID_GAP_X = 20;
-const GRID_GAP_Y = 18;
-const SECTION_GAP = 64; // between the linked graph and the grid of jobs without links
+/**
+ * dagre's gaps for each direction: between cards in the same rank, and between
+ * ranks, where a link bends and a child-job link has its label. Left to right,
+ * 56 leaves the 30 pixel child tag 13 pixels on each side, clear of the ports
+ * and the arrowhead, and keeps the map wide enough to read at 1440 by 900.
+ */
+const GAPS: Record<LayoutDirection, { nodesep: number; ranksep: number }> = {
+  LR: { nodesep: 16, ranksep: 56 },
+  TB: { nodesep: 32, ranksep: 72 },
+};
+const GRID_GAP_X = 24;
+const GRID_GAP_Y = 20;
+const SECTION_GAP = 64; // between the linked graph and the group of jobs without links, which has its label above its cards
 
 export function jobNodeId(name: string): string {
   return `job:${name}`;
@@ -75,24 +93,24 @@ function isActive(job: JobEntry | undefined, doc: JobListDocument): boolean {
 type Unplaced = Omit<GraphNode, "position" | "linked">;
 
 /**
- * Lays the linked boxes out with dagre, left to right, and puts the jobs with
- * no links in a grid below them, so a long list without links does not become
- * one tall column.
+ * Lays the linked boxes out with dagre, in the direction asked, and puts the
+ * jobs with no links in a grid below them, so a long list without links does
+ * not become one tall column. `linked` holds every box with a link, shown or
+ * not: a job whose only link goes to a hidden service stays with the graph.
  */
-function place(nodes: Unplaced[], edges: GraphEdge[]): GraphNode[] {
-  const linkedIds = new Set(edges.flatMap((e) => [e.source, e.target]));
+function place(nodes: Unplaced[], edges: GraphEdge[], linked: ReadonlySet<string>, direction: LayoutDirection): GraphNode[] {
+  const inGraph = nodes.filter((n) => linked.has(n.id));
   const positions = new Map<string, { x: number; y: number }>();
   let bottom = 0;
 
-  if (linkedIds.size > 0) {
+  if (inGraph.length > 0) {
     const g = new Graph<GraphLabel, NodeLabel, EdgeLabel>();
-    g.setGraph({ rankdir: "LR", nodesep: NODE_GAP, ranksep: RANK_GAP, marginx: 0, marginy: 0 });
+    g.setGraph({ rankdir: direction, ...GAPS[direction], marginx: 0, marginy: 0 });
     g.setDefaultEdgeLabel(() => ({}));
-    for (const n of nodes) if (linkedIds.has(n.id)) g.setNode(n.id, { width: n.width, height: n.height });
+    for (const n of inGraph) g.setNode(n.id, { width: n.width, height: n.height });
     for (const e of edges) g.setEdge(e.source, e.target);
     layout(g);
-    for (const n of nodes) {
-      if (!linkedIds.has(n.id)) continue;
+    for (const n of inGraph) {
       const placed = g.node(n.id);
       const x = Math.round((placed.x ?? 0) - n.width / 2);
       const y = Math.round((placed.y ?? 0) - n.height / 2);
@@ -101,25 +119,56 @@ function place(nodes: Unplaced[], edges: GraphEdge[]): GraphNode[] {
     }
   }
 
-  const unlinked = nodes.filter((n) => !linkedIds.has(n.id));
+  const unlinked = nodes.filter((n) => !linked.has(n.id));
   const columns = Math.min(unlinked.length, Math.max(4, Math.ceil(Math.sqrt(unlinked.length))), 8);
-  const top = linkedIds.size > 0 ? bottom + SECTION_GAP : 0;
+  const top = inGraph.length > 0 ? bottom + SECTION_GAP : 0;
   unlinked.forEach((n, i) => {
     const column = i % columns;
     const row = Math.floor(i / columns);
     positions.set(n.id, { x: column * (JOB_SIZE.width + GRID_GAP_X), y: top + row * (JOB_SIZE.height + GRID_GAP_Y) });
   });
 
-  return nodes.map((n) => ({ ...n, linked: linkedIds.has(n.id), position: positions.get(n.id) ?? { x: 0, y: 0 } }));
+  return nodes.map((n) => ({ ...n, linked: linked.has(n.id), position: positions.get(n.id) ?? { x: 0, y: 0 } }));
+}
+
+/**
+ * Every link of a job list as an edge, from depends_on to job_name, whatever
+ * the map shows. Job links are solid, child_job links dashed (parent to
+ * child), service links dotted (service to job). A repeated link is drawn once.
+ */
+export function buildEdges(doc: JobListDocument): GraphEdge[] {
+  const edges: GraphEdge[] = [];
+  const seen = new Set<string>();
+  for (const dependency of doc.dependencies ?? []) {
+    const key = dependencyKey(dependency);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const type = dependency.dependency_type ?? "job";
+    edges.push({
+      id: key,
+      source: type === "service" ? serviceNodeId(dependency.depends_on) : jobNodeId(dependency.depends_on),
+      target: jobNodeId(dependency.job_name),
+      type,
+      line: LINES[type],
+      dependency,
+    });
+  }
+  return edges;
 }
 
 /**
  * The dependency map of a job list: a box per job (with its live status,
- * UNKNOWN when the scan has none) and per service, and an edge per link, from
- * depends_on to job_name. Job links are solid, child_job links dashed (parent
- * to child), service links dotted (service to job). A repeated link is drawn once.
+ * UNKNOWN when the scan has none) and per service, and an edge per link (see
+ * buildEdges), laid out left to right unless asked otherwise. With `services:
+ * false` the services and their links are left out.
  */
-export function buildGraph(doc: JobListDocument, statuses: ReadonlyMap<string, Status>): { nodes: GraphNode[]; edges: GraphEdge[] } {
+export function buildGraph(
+  doc: JobListDocument,
+  statuses: ReadonlyMap<string, Status>,
+  options: GraphOptions = {},
+): { nodes: GraphNode[]; edges: GraphEdge[] } {
+  const direction = options.direction ?? "LR";
+  const showServices = options.services ?? true;
   const entries = new Map(doc.jobs.map((job) => [job.job_name, job] as const));
   const jobs = new Map<string, Unplaced>();
   const services = new Map<string, Unplaced>();
@@ -143,27 +192,17 @@ export function buildGraph(doc: JobListDocument, statuses: ReadonlyMap<string, S
   };
 
   for (const job of doc.jobs) addJob(job.job_name);
-  const edges: GraphEdge[] = [];
-  const seen = new Set<string>();
-  for (const dependency of doc.dependencies ?? []) {
-    const key = dependencyKey(dependency);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const type = dependency.dependency_type ?? "job";
-    addJob(dependency.job_name);
-    if (type === "service") addService(dependency.depends_on);
-    else addJob(dependency.depends_on);
-    edges.push({
-      id: key,
-      source: type === "service" ? serviceNodeId(dependency.depends_on) : jobNodeId(dependency.depends_on),
-      target: jobNodeId(dependency.job_name),
-      type,
-      line: LINES[type],
-      dependency,
-    });
+  const edges = buildEdges(doc);
+  for (const edge of edges) {
+    addJob(edge.dependency.job_name);
+    if (edge.type === "service") addService(edge.dependency.depends_on);
+    else addJob(edge.dependency.depends_on);
   }
 
-  return { nodes: place([...jobs.values(), ...services.values()], edges), edges };
+  const linked = new Set(edges.flatMap((e) => [e.source, e.target]));
+  const shown = showServices ? edges : edges.filter((e) => e.type !== "service");
+  const nodes = showServices ? [...jobs.values(), ...services.values()] : [...jobs.values()];
+  return { nodes: place(nodes, shown, linked, direction), edges: shown };
 }
 
 /** What to highlight when a box is selected: the jobs a failure there affects, and the links between them. */

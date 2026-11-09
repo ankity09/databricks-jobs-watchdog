@@ -86,12 +86,51 @@ function renderMap(document: JobListDocument = EXAMPLE_DOCUMENT, reply: SaveRepl
     failLoads: (fail: boolean) => {
       loadsFail = fail;
     },
+    /** Someone else saves a new version behind the page: the next load returns it. */
+    saveBehind: (next: JobListDocument) => {
+      state = { ...state, version: (state.version ?? 0) + 1, document: next };
+    },
   };
 }
 
 function box(name: RegExp | string) {
   return screen.findByRole("button", { name });
 }
+
+/** A named part of a card, a link or the panel, by its data-part attribute. */
+function part(element: Element, name: string): HTMLElement | null {
+  return element.querySelector<HTMLElement>(`[data-part="${name}"]`);
+}
+
+/** A link's drawn line, inside the focusable group that carries its name. */
+function line(name: string): SVGPathElement {
+  const path = screen.getByRole("button", { name }).querySelector<SVGPathElement>(".react-flow__edge-path");
+  if (!path) throw new Error(`no line for ${name}`);
+  return path;
+}
+
+/** A box's top-left corner on the canvas, from its wrapper's transform. */
+function cornerOf(container: HTMLElement, id: string): { x: number; y: number } {
+  const wrapper = container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`);
+  if (!wrapper) throw new Error(`no box ${id}`);
+  const [x, y] = numbersIn(wrapper.style.transform);
+  return { x, y };
+}
+
+/** The value next to a label in the side panel's details. */
+function detail(panel: HTMLElement, label: string): string {
+  return within(panel).getByText(label, { selector: "dt" }).nextElementSibling?.textContent ?? "";
+}
+
+/** A section of the side panel, by its heading. */
+function panelSection(panel: HTMLElement, heading: string): HTMLElement {
+  const section = within(panel).getByRole("heading", { name: heading }).closest("section");
+  if (!(section instanceof HTMLElement)) throw new Error(`no section ${heading}`);
+  return section;
+}
+
+/** Room for the rounding of a fit or a pan: React Flow's fit can land a pixel off its padding. */
+const SUBPIXEL = 1.5;
 
 /** Numbers in a CSS transform, such as translate(10px,20px) scale(0.9). */
 function numbersIn(transform: string): number[] {
@@ -112,6 +151,15 @@ function boxesOnScreen(container: HTMLElement) {
     left: x + Math.min(...rects.map((r) => r.left)) * zoom,
     right: x + Math.max(...rects.map((r) => r.right)) * zoom,
   };
+}
+
+/** Where one box is on screen, through the viewport's pan and zoom. */
+function boxOnScreen(container: HTMLElement, id: string) {
+  const [x, , zoom] = numbersIn(container.querySelector<HTMLElement>(".react-flow__viewport")?.style.transform ?? "");
+  const wrapper = container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`);
+  if (!wrapper) throw new Error(`no box ${id}`);
+  const [left] = numbersIn(wrapper.style.transform);
+  return { left: x + left * zoom, right: x + (left + parseFloat(wrapper.style.width)) * zoom };
 }
 
 /** Gives the map's drawing area a size, as the browser would after a layout change, and tells React Flow. */
@@ -191,7 +239,7 @@ describe("DependencyMapPage", () => {
     // React Flow's own focus style loses to the line's color classes, so each link brings its own.
     for (const link of links) {
       expect(link).toHaveClass("group");
-      expect(link.querySelector(".react-flow__edge-path")).toHaveClass("group-focus-visible:stroke-ring", "group-focus-visible:[stroke-width:2.25]");
+      expect(link.querySelector(".react-flow__edge-path")).toHaveClass("group-focus-visible:stroke-ring", "group-focus-visible:[stroke-width:2.5]");
     }
   });
 
@@ -319,22 +367,109 @@ describe("DependencyMapPage", () => {
     await waitFor(() => expect(addLink).toHaveFocus());
   });
 
-  it("fits the map again when its area changes size, clear of the legend above and the controls and minimap below", async () => {
+  it("fits the map again when its area changes size, clear of the toolbar above and the legend and minimap below", async () => {
     const { container } = renderMap();
     await box("watchdog_demo_fails (Failed)");
     resizeMap(container, 1200, 800);
-    await waitFor(() => expect(boxesOnScreen(container).zoom).toBeGreaterThan(0.5));
+    await waitFor(() => expect(boxesOnScreen(container).zoom).toBeGreaterThan(0.4));
     let shown = boxesOnScreen(container);
-    expect(shown.top).toBeGreaterThanOrEqual(84);
-    expect(shown.bottom).toBeLessThanOrEqual(800 - 180);
-    expect(shown.left).toBeGreaterThanOrEqual(24);
-    expect(shown.right).toBeLessThanOrEqual(1200 - 24);
+    expect(shown.top).toBeGreaterThanOrEqual(64 - SUBPIXEL);
+    expect(shown.bottom).toBeLessThanOrEqual(800 - 148 + SUBPIXEL);
+    expect(shown.left).toBeGreaterThanOrEqual(24 - SUBPIXEL);
+    expect(shown.right).toBeLessThanOrEqual(1200 - 24 + SUBPIXEL);
 
     // An alert above the map takes 150 pixels of its height.
     resizeMap(container, 1200, 650);
-    await waitFor(() => expect(boxesOnScreen(container).bottom).toBeLessThanOrEqual(650 - 180));
+    await waitFor(() => expect(boxesOnScreen(container).bottom).toBeLessThanOrEqual(650 - 148 + SUBPIXEL));
     shown = boxesOnScreen(container);
-    expect(shown.top).toBeGreaterThanOrEqual(84);
+    expect(shown.top).toBeGreaterThanOrEqual(64 - SUBPIXEL);
+  });
+
+  it("keeps a fit clear of the side panel while it is open, and moves the map only to bring a selection and its chain out from under it", async () => {
+    const { container } = renderMap();
+    await box("watchdog_demo_fails (Failed)");
+    resizeMap(container, 1400, 800);
+    await waitFor(() => expect(boxesOnScreen(container).zoom).toBeGreaterThan(0.4));
+    const before = boxesOnScreen(container);
+    // The panel is 360 pixels wide, 12 from the edge, and the map keeps 16 more clear of it.
+    const panelEdge = 1400 - 388;
+    expect(before.right).toBeGreaterThan(panelEdge);
+
+    // A box whose chain is all on the left: selecting it opens the panel and leaves the view where it was.
+    fireEvent.click(screen.getByRole("button", { name: "watchdog_demo_fails (Failed)" }));
+    await screen.findByRole("region", { name: "watchdog_demo_fails" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(boxesOnScreen(container)).toEqual(before);
+
+    // orders_enrich's chain ends under the panel: the map moves left at the same zoom until the chain clears the panel.
+    expect(boxOnScreen(container, "job:daily_revenue_export").right).toBeGreaterThan(panelEdge);
+    fireEvent.click(screen.getByRole("button", { name: "orders_enrich (Unknown, switched off)" }));
+    await screen.findByRole("region", { name: "orders_enrich" });
+    // The shift is the overlap, so the chain's last box ends at the panel's edge, and the selected box stays on screen.
+    await waitFor(() => expect(boxOnScreen(container, "job:daily_revenue_export").right).toBeLessThanOrEqual(panelEdge + SUBPIXEL));
+    expect(boxOnScreen(container, "job:orders_enrich").left).toBeGreaterThanOrEqual(24 - SUBPIXEL);
+    expect(boxesOnScreen(container).zoom).toBe(before.zoom);
+
+    // From a fresh fit, the last box of the chain, selected under the panel, comes out too.
+    fireEvent.click(screen.getByRole("button", { name: "orders_enrich (Unknown, switched off)" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "orders_enrich" })).toBeNull());
+    resizeMap(container, 1400, 790);
+    await waitFor(() => expect(boxesOnScreen(container).left).toBeGreaterThanOrEqual(24 - SUBPIXEL));
+    expect(boxOnScreen(container, "job:daily_revenue_export").right).toBeGreaterThan(panelEdge);
+    fireEvent.click(screen.getByRole("button", { name: "daily_revenue_export (Unknown, switched off)" }));
+    await screen.findByRole("region", { name: "daily_revenue_export" });
+    await waitFor(() => expect(boxOnScreen(container, "job:daily_revenue_export").right).toBeLessThanOrEqual(panelEdge + SUBPIXEL));
+    expect(boxOnScreen(container, "job:daily_revenue_export").left).toBeGreaterThanOrEqual(24 - SUBPIXEL);
+
+    // A refit while the panel is open (an alert above the map took some height) keeps the zoom of a fit without the
+    // panel: it never zooms for the panel. It only slides the chain clear of the panel again.
+    expect(boxesOnScreen(container).left).toBeLessThan(24);
+    resizeMap(container, 1400, 760);
+    await waitFor(() => expect(boxOnScreen(container, "job:daily_revenue_export").right).toBeLessThanOrEqual(panelEdge + SUBPIXEL));
+    expect(boxesOnScreen(container).zoom).toBeCloseTo(before.zoom, 6);
+
+    // Closing the panel slides the map back to the fit: all of it on screen, at the same zoom.
+    fireEvent.click(within(screen.getByRole("region", { name: "daily_revenue_export" })).getByRole("button", { name: "Clear the selection" }));
+    await waitFor(() => {
+      const shown = boxesOnScreen(container);
+      expect(shown.left).toBeGreaterThanOrEqual(24 - SUBPIXEL);
+      expect(shown.right).toBeLessThanOrEqual(1400 - 24 + SUBPIXEL);
+    });
+    expect(boxesOnScreen(container).zoom).toBeCloseTo(before.zoom, 6);
+  });
+
+  it("keeps the zoom of a fit without the panel when a save refits the map with the panel open", async () => {
+    const user = userEvent.setup();
+    const { container } = renderMap();
+    await box("orders_ingest (Unknown, switched off)");
+    resizeMap(container, 1400, 800);
+    await waitFor(() => expect(boxesOnScreen(container).zoom).toBeGreaterThan(0.4));
+    const fitted = boxesOnScreen(container).zoom;
+    fireEvent.click(screen.getByRole("button", { name: "orders_ingest (Unknown, switched off)" }));
+    const panel = await screen.findByRole("region", { name: "orders_ingest" });
+    // Remove a link in the panel: the save moves the boxes, so the map refits while the panel is open.
+    await user.click(within(panel).getByRole("button", { name: "Remove the link: orders_enrich depends on orders_ingest (job link)" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "orders_enrich depends on orders_ingest (job link)" })).toBeNull());
+    await waitFor(() => expect(boxesOnScreen(container).zoom).not.toBe(fitted));
+    // The new layout's own fit, as with the panel closed: the space under the panel still counts.
+    const shown = boxesOnScreen(container);
+    expect(shown.right).toBeGreaterThan(1400 - 388);
+    expect(shown.right).toBeLessThanOrEqual(1400 - 24 + SUBPIXEL);
+    expect(screen.getByRole("region", { name: "orders_ingest" })).toBeInTheDocument();
+  });
+
+  it("keeps the selection and the panel when the layout direction changes", async () => {
+    const user = userEvent.setup();
+    const { container } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    resizeMap(container, 1400, 800);
+    fireEvent.click(ingest);
+    await screen.findByRole("region", { name: "orders_ingest" });
+    await user.click(screen.getByRole("radio", { name: "Top to bottom" }));
+    await waitFor(() => expect(cornerOf(container, "job:orders_enrich").y).toBeGreaterThan(cornerOf(container, "job:orders_ingest").y + 68));
+    expect(screen.getByRole("region", { name: "orders_ingest" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "orders_ingest (Unknown, switched off)" })).toHaveAttribute("data-highlight", "selected");
+    expect(line("orders_enrich depends on orders_ingest (job link)")).toHaveAttribute("data-highlight", "downstream");
   });
 
   it("adds a link: pick the upstream box, then the downstream box, then the type", async () => {
@@ -408,6 +543,278 @@ describe("DependencyMapPage", () => {
     expect(within(panel).getByText("A failure here affects 3 jobs.")).toBeInTheDocument();
     await user.click(within(panel).getByRole("button", { name: "Clear the selection" }));
     expect(ingest).toHaveAttribute("data-highlight", "none");
+  });
+
+  it("draws each job as a card: its name, its owner and schedule, a status chip, and markers for critical and switched-off jobs", async () => {
+    renderMap();
+    const fails = await box("watchdog_demo_fails (Failed)");
+    expect(within(fails).getByText("watchdog_demo_fails")).toBeInTheDocument();
+    // The owner, then the schedule; the whole line is also in the card's tooltip.
+    expect(part(fails, "meta")).toHaveTextContent("platform-team · Scheduled");
+    expect(part(fails, "status")).toHaveTextContent("Failed");
+    expect(part(fails, "tile")).toHaveAttribute("data-schedule", "scheduled");
+    expect(part(fails, "tile")).toHaveAttribute("data-tone", "destructive");
+    expect(part(fails, "critical")).toHaveAccessibleName("Critical");
+    expect(part(fails, "off")).toBeNull();
+
+    const succeeds = screen.getByRole("button", { name: "watchdog_demo_succeeds (Healthy)" });
+    expect(part(succeeds, "status")).toHaveTextContent("Healthy");
+    expect(part(succeeds, "tile")).toHaveAttribute("data-tone", "success");
+    expect(part(succeeds, "critical")).toBeNull();
+
+    const ingest = screen.getByRole("button", { name: "orders_ingest (Unknown, switched off)" });
+    expect(part(ingest, "meta")).toHaveTextContent("ingestion-team · Continuous");
+    expect(part(ingest, "tile")).toHaveAttribute("data-schedule", "continuous");
+    expect(part(ingest, "status")).toHaveTextContent("Unknown");
+    expect(part(ingest, "off")).toHaveTextContent("Off");
+    expect(ingest).toHaveAttribute("data-active", "false");
+    expect(part(screen.getByRole("button", { name: "daily_revenue_export (Unknown, switched off)" }), "tile")).toHaveAttribute("data-schedule", "triggered");
+
+    const kafka = screen.getByRole("button", { name: "kafka (service)" });
+    expect(within(kafka).getByText("kafka")).toBeInTheDocument();
+    expect(within(kafka).getByText("Service")).toBeInTheDocument();
+    expect(part(kafka, "status")).toBeNull();
+  });
+
+  it("puts the jobs with no links in a labeled group under the graph", async () => {
+    const { container } = renderMap();
+    await box("watchdog_demo_slow (Unknown)");
+    const group = container.querySelector<HTMLElement>(".react-flow__node-section");
+    if (!group) throw new Error("no group");
+    expect(group).toHaveTextContent("Not linked yet");
+    expect(group).toHaveTextContent("2 jobs");
+    const groupTop = cornerOf(container, "section:unlinked").y;
+    for (const id of ["job:watchdog_demo_slow", "job:watchdog_demo_retries"]) expect(cornerOf(container, id).y).toBeGreaterThan(groupTop);
+    expect(cornerOf(container, "job:orders_enrich").y).toBeLessThan(groupTop);
+  });
+
+  it("draws each link type in its own style: job links solid, child-job links dashed with a label, service links dotted and lighter", async () => {
+    renderMap();
+    await box("orders_enrich depends on orders_ingest (job link)");
+    const job = line("orders_enrich depends on orders_ingest (job link)");
+    const child = line("daily_revenue_export depends on daily_revenue_report (child job link)");
+    const service = line("orders_ingest depends on kafka (service link)");
+    expect(job).toHaveAttribute("data-line", "solid");
+    expect(child).toHaveAttribute("data-line", "dashed");
+    expect(child).toHaveClass("[stroke-dasharray:6_4]");
+    expect(service).toHaveAttribute("data-line", "dotted");
+    expect(service).toHaveClass("[stroke-dasharray:1_4]");
+    // A closed arrowhead at the dependent end; a service link's is as light as its line.
+    expect(job).toHaveAttribute("marker-end", "url(#watchdog-map-arrow)");
+    expect(service).toHaveAttribute("marker-end", "url(#watchdog-map-arrow-light)");
+    const childLink = screen.getByRole("button", { name: "daily_revenue_export depends on daily_revenue_report (child job link)" });
+    expect(within(childLink).getByText("child")).toBeInTheDocument();
+    expect(within(screen.getByRole("button", { name: "orders_enrich depends on orders_ingest (job link)" })).queryByText("child")).toBeNull();
+  });
+
+  it("on select, shows the downstream chain in the accent, the upstream path in dark neutral, and fades the rest", async () => {
+    renderMap();
+    const enrich = await box("orders_enrich (Unknown, switched off)");
+    fireEvent.click(enrich);
+    expect(enrich).toHaveAttribute("data-highlight", "selected");
+
+    const highlightOf = (name: string) => screen.getByRole("button", { name }).getAttribute("data-highlight");
+    for (const name of ["daily_revenue_report (Unknown, switched off)", "daily_revenue_export (Unknown, switched off)"]) {
+      expect(highlightOf(name)).toBe("downstream");
+      expect(part(screen.getByRole("button", { name }), "affected")).toHaveTextContent("Affected");
+    }
+    for (const name of ["orders_ingest (Unknown, switched off)", "kafka (service)", "config_api (service)"]) expect(highlightOf(name)).toBe("upstream");
+    for (const name of ["watchdog_demo_fails (Failed)", "object_storage (service)"]) {
+      expect(highlightOf(name)).toBe("dimmed");
+      // Faded, but its focus ring is not: a faded card with keyboard focus shows at full strength.
+      expect(screen.getByRole("button", { name })).toHaveClass("opacity-35", "focus-visible:opacity-100");
+    }
+    // The child tag and the Affected chip keep the accent as an outline, with text in the foreground color (10 px #FF3621 on white is 3.6:1).
+    const childTag = part(screen.getByRole("button", { name: "daily_revenue_export depends on daily_revenue_report (child job link)" }), "edge-tag");
+    expect(childTag?.querySelector("text")).toHaveClass("fill-foreground");
+    expect(childTag?.querySelector("rect")).toHaveClass("stroke-primary");
+    expect(part(screen.getByRole("button", { name: "daily_revenue_report (Unknown, switched off)" }), "affected")).toHaveClass("text-foreground", "border-primary");
+
+    for (const name of ["daily_revenue_report depends on orders_enrich (job link)", "daily_revenue_export depends on daily_revenue_report (child job link)"]) {
+      expect(line(name)).toHaveAttribute("data-highlight", "downstream");
+      expect(line(name)).toHaveClass("stroke-primary", "motion-safe:animate-map-flow");
+      expect(line(name)).toHaveAttribute("marker-end", "url(#watchdog-map-arrow-accent)");
+    }
+    for (const name of ["orders_enrich depends on orders_ingest (job link)", "orders_ingest depends on kafka (service link)", "orders_enrich depends on config_api (service link)"]) {
+      expect(line(name)).toHaveAttribute("data-highlight", "upstream");
+      expect(line(name)).toHaveAttribute("marker-end", "url(#watchdog-map-arrow-dark)");
+    }
+    for (const name of ["daily_revenue_export depends on object_storage (service link)", "watchdog_demo_succeeds depends on watchdog_demo_fails (job link)"]) {
+      expect(line(name)).toHaveAttribute("data-highlight", "dimmed");
+      expect(line(name)).toHaveClass("opacity-35");
+    }
+  });
+
+  it("keeps the downstream chain still with reduced motion: its flow runs only under motion-safe", async () => {
+    renderMap();
+    fireEvent.click(await box("orders_ingest (Unknown, switched off)"));
+    const flowing = line("orders_enrich depends on orders_ingest (job link)");
+    expect(flowing).toHaveAttribute("data-highlight", "downstream");
+    const classes = Array.from(flowing.classList);
+    // With prefers-reduced-motion the line stays solid and still: no dash pattern or animation outside motion-safe.
+    expect(classes.filter((c) => c.includes("animate-") || c.includes("stroke-dasharray"))).toEqual([
+      "motion-safe:[stroke-dasharray:6_4]",
+      "motion-safe:animate-map-flow",
+    ]);
+  });
+
+  it("shows the selected job's details, its links both ways with Remove, and what it affects, with the steps", async () => {
+    renderMap();
+    fireEvent.click(await box("orders_ingest (Unknown, switched off)"));
+    const panel = screen.getByRole("region", { name: "orders_ingest" });
+    expect(within(panel).getByRole("heading", { level: 2, name: "orders_ingest" })).toBeInTheDocument();
+    expect(part(panel, "status")).toHaveTextContent("Unknown");
+
+    expect(detail(panel, "Owner")).toBe("ingestion-team");
+    expect(detail(panel, "Schedule")).toBe("Continuous");
+    expect(detail(panel, "Severity")).toBe("CRITICAL");
+    expect(detail(panel, "Max gap")).toBe("30 min");
+    expect(detail(panel, "Max runtime")).toBe("None");
+    expect(detail(panel, "Max retries")).toBe("3");
+    expect(detail(panel, "Enabled")).toBe("No");
+
+    const dependsOn = panelSection(panel, "Depends on");
+    expect(dependsOn).toHaveTextContent("kafka");
+    expect(dependsOn).toHaveTextContent("Service");
+    expect(within(dependsOn).getByRole("button", { name: "Remove the link: orders_ingest depends on kafka (service link)" })).toBeInTheDocument();
+    const neededBy = panelSection(panel, "Needed by");
+    expect(neededBy).toHaveTextContent("orders_enrich");
+    expect(within(neededBy).getByRole("button", { name: "Remove the link: orders_enrich depends on orders_ingest (job link)" })).toBeInTheDocument();
+
+    const affects = panelSection(panel, "Affects");
+    expect(within(affects).getByText("A failure here affects 3 jobs.")).toBeInTheDocument();
+    const rows = within(affects).getAllByRole("listitem").map((item) => item.textContent);
+    expect(rows).toEqual(["orders_enrich1 step", "daily_revenue_report2 steps", "daily_revenue_export3 steps"]);
+  });
+
+  it("says when a job depends on nothing, and gives a job that is not in the list a question-mark tile", async () => {
+    renderMap({ jobs: [{ job_name: "orders_report" }], dependencies: [{ job_name: "orders_report", depends_on: "orders_feed" }] });
+    fireEvent.click(await box("orders_report (Unknown)"));
+    expect(within(panelSection(screen.getByRole("region", { name: "orders_report" }), "Depends on")).queryByText("It depends on nothing.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "orders_feed (not in the job list)" }));
+    const missing = screen.getByRole("region", { name: "orders_feed" });
+    expect(within(panelSection(missing, "Depends on")).getByText("It depends on nothing.")).toBeInTheDocument();
+    expect(missing).toHaveTextContent("Not in the job list");
+    expect(part(missing, "tile")?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("shows the schedule icons in the legend", async () => {
+    renderMap();
+    await box("watchdog_demo_fails (Failed)");
+    const schedules = within(screen.getByRole("group", { name: "Legend" })).getByRole("list", { name: "Schedule" });
+    expect(within(schedules).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Scheduled", "Continuous", "Triggered"]);
+    for (const item of within(schedules).getAllByRole("listitem")) expect(item.querySelector("svg")).not.toBeNull();
+  });
+
+  it("closes the job editor and says so when a reload shows the job is gone", async () => {
+    const user = userEvent.setup();
+    const { saveBehind } = renderMap(EXAMPLE_DOCUMENT, () =>
+      json({ error: "conflict", message: "Someone else changed this since you opened it. Reload to see their change.", latestVersion: 4 }, 409),
+    );
+    fireEvent.click(await box("watchdog_demo_slow (Unknown)"));
+    await user.click(within(screen.getByRole("region", { name: "watchdog_demo_slow" })).getByRole("button", { name: "Edit job" }));
+    await screen.findByRole("heading", { name: "Edit watchdog_demo_slow" });
+    await user.type(screen.getByLabelText("Notes"), "Checked by hand.");
+    // Someone deletes the job meanwhile: the save gets a conflict, and its Reload loads the list without it.
+    saveBehind({ ...EXAMPLE_DOCUMENT, jobs: EXAMPLE_DOCUMENT.jobs.filter((job) => job.job_name !== "watchdog_demo_slow") });
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.click(save);
+    await user.click(await screen.findByRole("button", { name: "Reload" }));
+    expect(await screen.findByText("watchdog_demo_slow is no longer in the list. Someone deleted it while you were editing.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Edit watchdog_demo_slow" })).toBeNull());
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText(/is no longer in the list/)).toBeNull();
+  });
+
+  it("opens the side panel under a narrow map, so the selection's chain stays in view", async () => {
+    const { container } = renderMap();
+    await box("orders_enrich (Unknown, switched off)");
+    resizeMap(container, 600, 900);
+    // The refit for the narrow map: the map's width, less 24 pixels on each side.
+    await waitFor(() => {
+      const shown = boxesOnScreen(container);
+      expect(shown.right - shown.left).toBeGreaterThan(600 - 48 - SUBPIXEL);
+      expect(shown.right).toBeLessThanOrEqual(600 - 24 + SUBPIXEL);
+    });
+    const before = boxesOnScreen(container);
+    fireEvent.click(screen.getByRole("button", { name: "orders_enrich (Unknown, switched off)" }));
+    const panel = await screen.findByRole("region", { name: "orders_enrich" });
+    expect(panel.closest(".react-flow")).toBeNull();
+    expect(panel.compareDocumentPosition(container.querySelector(".react-flow") as Node) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(boxesOnScreen(container)).toEqual(before);
+
+    // Back on a wide map, it opens over the map again.
+    resizeMap(container, 1400, 800);
+    await waitFor(() => expect(screen.getByRole("region", { name: "orders_enrich" }).closest(".react-flow")).not.toBeNull());
+  });
+
+  it("links the selected job to its history and to the copilot", async () => {
+    renderMap();
+    fireEvent.click(await box("watchdog_demo_fails (Failed)"));
+    const panel = screen.getByRole("region", { name: "watchdog_demo_fails" });
+    expect(within(panelSection(panel, "Depends on")).getByText("It depends on nothing.")).toBeInTheDocument();
+    expect(within(panel).getByRole("link", { name: "View history" })).toHaveAttribute("href", "/jobs/changes?job=watchdog_demo_fails");
+    expect(within(panel).getByRole("link", { name: "Ask the copilot" })).toHaveAttribute("href", "/copilot?job=watchdog_demo_fails&status=FAILED");
+  });
+
+  it("opens the job editor from the side panel and saves through the job list, then gives focus back to Edit job", async () => {
+    const user = userEvent.setup();
+    const { saves } = renderMap();
+    fireEvent.click(await box("orders_ingest (Unknown, switched off)"));
+    const panel = screen.getByRole("region", { name: "orders_ingest" });
+    const edit = within(panel).getByRole("button", { name: "Edit job" });
+    await user.click(edit);
+    expect(await screen.findByRole("heading", { name: "Edit orders_ingest" })).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Notes"), "Checked by hand.");
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.click(save);
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].baseVersion).toBe(3);
+    expect(saves[0].change).toMatchObject({ kind: "upsert", target: { type: "job", name: "orders_ingest" }, value: { job_name: "orders_ingest", notes: "Checked by hand." } });
+    expect(await screen.findByText(/^Saved version 4: /)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Edit orders_ingest" })).toBeNull());
+    await waitFor(() => expect(within(screen.getByRole("region", { name: "orders_ingest" })).getByRole("button", { name: "Edit job" })).toHaveFocus());
+  });
+
+  it("shows a service's name, the jobs that need it with Remove, and its history, with nothing to edit", async () => {
+    renderMap();
+    fireEvent.click(await box("kafka (service)"));
+    const panel = screen.getByRole("region", { name: "kafka" });
+    const neededBy = panelSection(panel, "Needed by");
+    expect(neededBy).toHaveTextContent("orders_ingest");
+    expect(within(neededBy).getByRole("button", { name: "Remove the link: orders_ingest depends on kafka (service link)" })).toBeInTheDocument();
+    expect(within(panel).getByRole("link", { name: "View history" })).toHaveAttribute("href", "/jobs/changes?job=kafka");
+    expect(within(panel).queryByRole("button", { name: "Edit job" })).toBeNull();
+    expect(within(panel).queryByRole("link", { name: "Ask the copilot" })).toBeNull();
+  });
+
+  it("lays the map out top to bottom from the toolbar", async () => {
+    const user = userEvent.setup();
+    const { container } = renderMap();
+    await box("orders_enrich (Unknown, switched off)");
+    expect(cornerOf(container, "job:orders_enrich").x).toBeGreaterThan(cornerOf(container, "job:orders_ingest").x + 248);
+    await user.click(screen.getByRole("radio", { name: "Top to bottom" }));
+    await waitFor(() => expect(cornerOf(container, "job:orders_enrich").y).toBeGreaterThan(cornerOf(container, "job:orders_ingest").y + 68));
+    expect(screen.getByRole("radio", { name: "Top to bottom" })).toBeChecked();
+  });
+
+  it("hides the services and their links from the toolbar, and shows them again", async () => {
+    const user = userEvent.setup();
+    const { container } = renderMap();
+    await box("kafka (service)");
+    const services = screen.getByRole("switch", { name: "Show services" });
+    await user.click(services);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "kafka (service)" })).toBeNull());
+    expect(screen.queryByRole("button", { name: "orders_ingest depends on kafka (service link)" })).toBeNull();
+    await waitFor(() => expect(container.querySelectorAll(".react-flow__edge")).toHaveLength(4));
+    // The side panel still lists the job's service link: the switch changes the view, not the list.
+    fireEvent.click(screen.getByRole("button", { name: "orders_ingest (Unknown, switched off)" }));
+    expect(panelSection(screen.getByRole("region", { name: "orders_ingest" }), "Depends on")).toHaveTextContent("kafka");
+    await user.click(services);
+    expect(await box("kafka (service)")).toBeInTheDocument();
   });
 
   it("shows a conflict from saving as an alert with Reload", async () => {
