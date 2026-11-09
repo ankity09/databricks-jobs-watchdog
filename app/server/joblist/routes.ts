@@ -187,6 +187,17 @@ export function createJobListRouter(store: JobListStore, options: JobListRouterO
     res.status(400).json({ error: "bad_request", message: z.prettifyError(error) });
   };
 
+  /** A bad filter answers in a sentence, not zod's layout: each problem says which parameter it is about. */
+  const plainBad = (res: express.Response, error: z.ZodError): void => {
+    const message = error.issues
+      .map((issue) => {
+        const name = issue.path.join(".");
+        return name === "" || issue.message.startsWith(name) ? issue.message : `${name}: ${issue.message}`;
+      })
+      .join(" ");
+    res.status(400).json({ error: "bad_request", message });
+  };
+
   router.get("/", handle(async (_req, res) => {
     const row = await store.latest();
     const state: JobListState = row
@@ -197,7 +208,7 @@ export function createJobListRouter(store: JobListStore, options: JobListRouterO
 
   router.get("/versions", handle(async (req, res) => {
     const query = ListQuery.safeParse(req.query);
-    if (!query.success) return bad(res, query.error);
+    if (!query.success) return plainBad(res, query.error);
     const { limit, before, filter } = query.data;
     const [rows, total] = await Promise.all([store.list(limit, before, filter), store.count(filter)]);
     const list: VersionList = { versions: rows.map(summaryOf), total };

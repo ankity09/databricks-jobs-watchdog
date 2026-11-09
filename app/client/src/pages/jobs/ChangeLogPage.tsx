@@ -168,7 +168,8 @@ export function ChangeLogPage() {
   const change = (patch: Partial<ChangeFilters>) => {
     // Typing in Search replaces the history entry, so the back button does not step through every pause.
     const onlyText = Object.keys(patch).length === 1 && "q" in patch;
-    setParams(writeFilters({ ...filters, ...patch }), { replace: onlyText });
+    // Built on the newest params, so two changes in quick succession both stay.
+    setParams((current) => writeFilters({ ...parseFilters(current), ...patch }), { replace: onlyText });
   };
   // Clear filters also drops a search that is still waiting to be sent: the filter bar starts its Search box again.
   const [cleared, setCleared] = useState(0);

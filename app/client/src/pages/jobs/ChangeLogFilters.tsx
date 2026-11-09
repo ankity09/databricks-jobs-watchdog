@@ -83,7 +83,7 @@ function OptionsProblem({ retry }: { retry: () => void }) {
 export function ChangeLogFilters({ filters, facets, onChange, resetKey = 0 }: ChangeLogFiltersProps) {
   const id = useId();
   return (
-    <div className="flex flex-wrap items-end gap-x-4 gap-y-3" role="search" aria-label="Filter the change log">
+    <div className="flex flex-wrap items-end gap-x-3 gap-y-3" role="search" aria-label="Filter the change log">
       <Field label="Who">
         <WhoSelect value={filters.person} facets={facets} onChange={(person) => onChange({ person })} />
       </Field>
@@ -101,7 +101,7 @@ export function ChangeLogFilters({ filters, facets, onChange, resetKey = 0 }: Ch
             <ToggleGroupItem
               key={kind}
               value={kind}
-              className={cn("h-8 rounded-md! border px-2.5 text-[13px] font-normal", KIND_CHIP_ON[kind])}
+              className={cn("h-8 rounded-md! border px-1.5 text-[13px] font-normal", KIND_CHIP_ON[kind])}
             >
               {KIND_LABEL[kind]}
             </ToggleGroupItem>
@@ -111,7 +111,7 @@ export function ChangeLogFilters({ filters, facets, onChange, resetKey = 0 }: Ch
       <Field label="Job">
         <JobCombobox value={filters.job} facets={facets} onChange={(job) => onChange({ job })} />
       </Field>
-      <WhenFields id={id} filters={filters} onChange={onChange} />
+      <WhenFields key={resetKey} id={id} filters={filters} onChange={onChange} />
       <Field label="Search" htmlFor={`${id}-search`}>
         <SearchBox key={resetKey} id={`${id}-search`} value={filters.q} onCommit={(q) => onChange({ q })} />
       </Field>
@@ -128,7 +128,7 @@ function WhoSelect({ value, facets, onChange }: { value: string | null; facets: 
   const shown = value !== null && !people.some((p) => p.email === value) ? [...people, { email: value, count: 0 }] : people;
   return (
     <Select value={value ?? ANYONE} onValueChange={(next) => onChange(next === ANYONE ? null : next)}>
-      <SelectTrigger size="sm" aria-label="Who" className={cn("h-8 w-56 bg-background text-[13px]", value !== null && "border-foreground/30")}>
+      <SelectTrigger size="sm" aria-label="Who" className={cn("h-8 w-48 bg-background text-[13px]", value !== null && "border-foreground/30")}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -171,7 +171,7 @@ function JobCombobox({ value, facets, onChange }: { value: string | null; facets
           role="combobox"
           aria-label="Job"
           aria-expanded={open}
-          className={cn("h-8 w-56 justify-between bg-background px-3 text-[13px] font-normal", value !== null && "border-foreground/30")}
+          className={cn("h-8 w-44 justify-between bg-background px-3 text-[13px] font-normal", value !== null && "border-foreground/30")}
         >
           <span className={cn("truncate", value !== null && "font-mono text-xs")}>{value ?? "Any job"}</span>
           <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -224,7 +224,8 @@ function WhenFields({ id, filters, onChange }: { id: string; filters: ChangeFilt
   // "Custom" with no dates yet is only on the page: the URL holds dates, never the preset's name.
   const [customOpen, setCustomOpen] = useState(false);
   const preset = presetOf(filters, new Date());
-  const shown: WhenPreset = customOpen && preset === "any" ? "custom" : preset;
+  // Once Custom is picked it stays while the dates are typed, even when they happen to match a preset.
+  const shown: WhenPreset = customOpen ? "custom" : preset;
   return (
     <>
       <Field label="When">
@@ -238,7 +239,7 @@ function WhenFields({ id, filters, onChange }: { id: string; filters: ChangeFilt
             else onChange({ from: presetFrom(when, new Date()), to: null });
           }}
         >
-          <SelectTrigger size="sm" aria-label="When" className={cn("h-8 w-40 bg-background text-[13px]", shown !== "any" && "border-foreground/30")}>
+          <SelectTrigger size="sm" aria-label="When" className={cn("h-8 w-36 bg-background text-[13px]", shown !== "any" && "border-foreground/30")}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -259,7 +260,11 @@ function WhenFields({ id, filters, onChange }: { id: string; filters: ChangeFilt
               className="h-8 w-40 bg-background font-mono text-xs"
               value={filters.from?.slice(0, 10) ?? ""}
               max={filters.to?.slice(0, 10) || undefined}
-              onChange={(event) => onChange({ from: event.target.value || null })}
+              // A From after To would match nothing: To moves with it.
+              onChange={(event) => {
+                const from = event.target.value || null;
+                onChange(from !== null && filters.to !== null && from > filters.to.slice(0, 10) ? { from, to: from } : { from });
+              }}
             />
           </Field>
           <Field label="To" htmlFor={`${id}-to`}>
@@ -269,7 +274,10 @@ function WhenFields({ id, filters, onChange }: { id: string; filters: ChangeFilt
               className="h-8 w-40 bg-background font-mono text-xs"
               value={filters.to?.slice(0, 10) ?? ""}
               min={filters.from?.slice(0, 10) || undefined}
-              onChange={(event) => onChange({ to: event.target.value || null })}
+              onChange={(event) => {
+                const to = event.target.value || null;
+                onChange(to !== null && filters.from !== null && to < filters.from.slice(0, 10) ? { from: to, to } : { to });
+              }}
             />
           </Field>
         </>
@@ -299,13 +307,13 @@ function SearchBox({ id, value, onCommit }: { id: string; value: string; onCommi
   useEffect(() => () => clearTimeout(timer.current), []);
   return (
     <div className="relative">
-      <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+      <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
       <Input
         id={id}
         type="search"
         autoComplete="off"
         placeholder="Search summaries"
-        className="h-8 w-56 bg-background pl-8 text-[13px]"
+        className="h-8 w-44 bg-background pl-7 text-[13px]"
         value={text}
         onChange={(event) => {
           const next = event.target.value;

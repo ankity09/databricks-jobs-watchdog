@@ -222,6 +222,22 @@ describe("change log filters", () => {
     await waitFor(() => expect(api.last().get("to")).toBe("2026-11-05"));
   });
 
+  it("keeps both dates when they are set one right after the other, and keeps To from falling before From", async () => {
+    mockApi();
+    const user = userEvent.setup();
+    renderAt();
+    await waitFor(() => expect(count()).toBe("60 versions"));
+    await user.click(screen.getByRole("combobox", { name: "When" }));
+    await user.click(await screen.findByRole("option", { name: "Custom" }));
+    fireEvent.change(await screen.findByLabelText("From"), { target: { value: "2026-11-01" } });
+    fireEvent.change(screen.getByLabelText("To"), { target: { value: "2026-11-05" } });
+    await waitFor(() => expect(url()).toBe("/jobs/changes?from=2026-11-01&to=2026-11-05"));
+    fireEvent.change(screen.getByLabelText("From"), { target: { value: "2026-11-09" } });
+    await waitFor(() => expect(url()).toBe("/jobs/changes?from=2026-11-09&to=2026-11-09"));
+    fireEvent.change(screen.getByLabelText("To"), { target: { value: "2026-11-02" } });
+    await waitFor(() => expect(url()).toBe("/jobs/changes?from=2026-11-02&to=2026-11-02"));
+  });
+
   it("opens Custom with empty dates, and Any time clears them", async () => {
     mockApi();
     const user = userEvent.setup();

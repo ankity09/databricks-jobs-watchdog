@@ -129,6 +129,8 @@ describe("job-list routes", () => {
         expect(Object.keys(res.body as object)).toEqual(["error", "message"]);
         expect(body(res).error).toBe("bad_request");
       }
+      const kind = await request(a).get("/api/job-list/versions?kind=create,nope");
+      expect(body(kind).message).toBe('kind has "nope", which is not one of import, create, update, delete, restore.');
       const range = await request(a).get("/api/job-list/versions?from=2026-03-05&to=2026-03-01");
       expect(body(range).message).toMatch(/from.*after.*to/i);
       expect((await filtered(a, `?q=${"x".repeat(200)}`)).status).toBe(200);
