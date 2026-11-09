@@ -326,6 +326,11 @@ def test_incident_validation_compares_findings_latest_with_open_incidents():
     for column in ("source", "workspace_id", "job_id", "job_name", "check_id"):
         assert f"i.{column} <=> l.{column}" in code, column
     assert "l.status IN ('FAILED', 'WARNING')" in code
-    # an OPEN incident whose newest scan row is UNKNOWN is current: UNKNOWN does not end it
-    assert "l.status = 'UNKNOWN'" in code
+    # an OPEN incident is flagged only when its key is absent from the newest scan, HEALTHY there,
+    # or a problem there that is not its newest problem row; any other status (UNKNOWN, or a
+    # custom check's own status) neither opens nor ends an incident, so it stays OPEN
+    open_part = code.split("UNION ALL", 1)[1]
+    assert ("WHERE l.scan_id IS NULL OR l.status = 'HEALTHY' OR (l.status IN ('FAILED', 'WARNING') "
+            "AND l.scan_id <> i.last_seen_scan_id)") in open_part
+    assert "UNKNOWN" not in open_part.split("WHERE", 1)[1]
 

@@ -71,12 +71,27 @@ class Rows:
         return self.rows
 
 
+class FakeCatalog:
+    def __init__(self, spark):
+        self.spark = spark
+
+    def tableExists(self, name):
+        return name in self.spark.tables or name in self.spark.unreadable
+
+
 class FakeSpark:
-    def __init__(self, tables, view_versions=None):
+    """tables: {name: columns}. not_views: names that exist but are tables. unreadable: names that
+    exist but cannot be read. SHOW statements are answered; every other statement is recorded."""
+
+    def __init__(self, tables, view_versions=None, not_views=(), unreadable=()):
         self.tables, self.calls = tables, []
         self.view_versions = view_versions or {}
+        self.not_views, self.unreadable = set(not_views), set(unreadable)
+        self.catalog = FakeCatalog(self)
 
     def table(self, name):
+        if name in self.unreadable:
+            raise Exception(f"[INSUFFICIENT_PERMISSIONS] {name}")
         return Frame(self.tables[name])
 
     def sql(self, text, args=None):
@@ -88,6 +103,14 @@ class FakeSpark:
             if version is None:
                 return Rows([{"value": f"Table {name} does not have property: watchdog.view_version"}])
             return Rows([{"value": version}])
+        if text.startswith("SHOW VIEWS"):
+            # SHOW VIEWS IN `main`.`watchdog` LIKE 'incidents': a row only when that name is a view
+            schema = text.split()[3].replace("`", "")
+            name = text.split("LIKE")[1].strip().strip("'")
+            full = f"{schema}.{name}"
+            if self.catalog.tableExists(full) and full not in self.not_views:
+                return Rows([{"namespace": schema, "viewName": name, "isTemporary": False, "isMaterialized": False}])
+            return Rows([])
         self.calls.append((text, args))
 
 
@@ -160,8 +183,47 @@ def test_a_view_with_an_older_definition_is_replaced_even_when_columns_match():
     tables, versions = current_views()
     spark = FakeSpark(tables, dict(versions, **{"main.watchdog.findings_latest": "1"}))
     assert create_views(spark, "main", "watchdog") == [("findings_latest", "replaced"), ("incidents", "current")]
+    # a findings_latest with no watchdog.view_version is not one notebook 01 made (every release
+    # since the view exists sets it), so it is left alone; see the tests below
     no_version = FakeSpark(tables, {"main.watchdog.incidents": versions["main.watchdog.incidents"]})
-    assert create_views(no_version, "main", "watchdog") == [("findings_latest", "replaced"), ("incidents", "current")]
+    with pytest.raises(RuntimeError, match="findings_latest is not a Watchdog view"):
+        create_views(no_version, "main", "watchdog")
+    assert no_version.calls == []
+
+
+def test_notebook_01_never_replaces_a_table_of_yours_named_like_a_watchdog_view():
+    tables, versions = current_views(incidents=["ticket_id", "summary"])
+    spark = FakeSpark(tables, versions, not_views={"main.watchdog.incidents"})
+    with pytest.raises(RuntimeError) as raised:
+        create_views(spark, "main", "watchdog")
+    assert str(raised.value) == (
+        "main.watchdog.incidents is not a Watchdog view: it is a table, or a view without the table property "
+        "watchdog.view_version. Notebook 01 does not replace it. Rename or move it, then run notebook 01 again.")
+    assert spark.calls == []
+
+
+def test_notebook_01_never_replaces_a_view_of_yours_without_the_watchdog_property():
+    tables, versions = current_views(incidents=["ticket_id", "summary"])
+    spark = FakeSpark(tables, {name: v for name, v in versions.items() if not name.endswith(".incidents")})
+    with pytest.raises(RuntimeError, match=r"main\.watchdog\.incidents is not a Watchdog view"):
+        create_views(spark, "main", "watchdog")
+    assert spark.calls == []
+
+
+def test_findings_latest_gets_the_same_check_before_it_is_replaced():
+    tables, versions = current_views(findings_latest=list(FINDINGS_COLUMNS[:19]))
+    spark = FakeSpark(tables, versions, not_views={"main.watchdog.findings_latest"})
+    with pytest.raises(RuntimeError, match=r"main\.watchdog\.findings_latest is not a Watchdog view"):
+        create_views(spark, "main", "watchdog")
+    assert spark.calls == []
+
+
+def test_a_watchdog_view_that_cannot_be_read_is_checked_and_then_replaced():
+    tables, versions = current_views()
+    del tables["main.watchdog.incidents"]
+    spark = FakeSpark(tables, versions, unreadable={"main.watchdog.incidents"})
+    assert create_views(spark, "main", "watchdog") == [("findings_latest", "current"), ("incidents", "replaced")]
+    assert "CREATE OR REPLACE VIEW `main`.`watchdog`.incidents" in spark.calls[0][0]
 
 
 def test_the_incidents_view_has_its_own_columns_not_the_findings_columns():

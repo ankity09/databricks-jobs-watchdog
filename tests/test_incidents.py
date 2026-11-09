@@ -85,6 +85,23 @@ def test_only_a_healthy_row_ends_an_incident():
     assert "UNKNOWN" not in code
 
 
+def test_no_window_frame_runs_from_the_current_row_to_the_end():
+    # Spark recomputes a CURRENT ROW AND UNBOUNDED FOLLOWING frame for every row, so it is
+    # quadratic per key; the next HEALTHY row is a running min over the rows in reverse order
+    code = _code(load_sql(VIEW))
+    assert "UNBOUNDED FOLLOWING" not in code
+    # the newest scan is a plain aggregate over the source's scans, with no frame at all
+    assert ("max_by(scan_id, named_struct('scan_time', scan_time, 'scan_id', scan_id)) OVER (PARTITION BY source)"
+            in code)
+    exp, tree = _tree()
+    marked = next(cte.this for cte in tree.find_all(exp.CTE) if cte.alias == "marked")
+    next_healthy = next(select for select in marked.expressions if select.alias == "next_healthy")
+    window = next_healthy.find(exp.Window)
+    assert [(o.this.name, bool(o.args.get("desc"))) for o in window.args["order"].expressions] == [("scan_order", True)]
+    spec = window.args["spec"]
+    assert (spec.args["start"], spec.args["end"]) == ("UNBOUNDED", "CURRENT ROW")
+
+
 def test_states_and_the_retention_note():
     text = load_sql(VIEW)
     code = _code(text)
@@ -118,15 +135,22 @@ class FakeSpark:
         return Frame(self.rows)
 
 
-def test_summary_text_says_what_the_scan_wrote_and_how_its_problems_moved():
+def test_summary_text_says_what_the_scan_holds_and_how_its_problems_moved():
+    # "has", not "wrote": re-running the same scan prints the same count and adds nothing
     assert summary_text("20261109T040000Z", 12, 2, 3, 1) == (
-        "Wrote 12 rows for scan 20261109T040000Z, one per check. Running the same scan again adds nothing.\n"
+        "Scan 20261109T040000Z has 12 rows, one per check. Running the same scan again adds nothing.\n"
         "Problems: 2 new, 3 still open, 1 resolved. The incidents view lists each problem once until it clears."
     )
 
 
 def test_summary_text_counts_one_row_without_a_plural():
-    assert summary_text("20261109T040000Z", 1, 0, 0, 0).startswith("Wrote 1 row for scan 20261109T040000Z, one")
+    assert summary_text("20261109T040000Z", 1, 0, 0, 0).startswith("Scan 20261109T040000Z has 1 row, one")
+
+
+def test_a_scan_with_no_rows_prints_only_the_first_line():
+    # with no rows the scan is not in findings, so the view says nothing about it
+    assert summary_text("20261109T040000Z", 0, 0, 5, 0) == (
+        "Scan 20261109T040000Z has 0 rows, one per check. Running the same scan again adds nothing.")
 
 
 def test_scan_summary_reports_its_own_source():
@@ -141,9 +165,10 @@ def test_scan_summary_reports_its_own_source():
     assert args == {"catalog": "main", "schema": "watchdog", "scan_id": "20261109T040000Z"}
 
 
-def test_scan_summary_says_zero_when_the_source_wrote_nothing():
+def test_scan_summary_prints_only_the_first_line_when_the_source_wrote_nothing():
     spark = FakeSpark([Row(source="JOBS_API", rows_written=12, new_problems=2, still_open=3, resolved=1)])
-    assert scan_summary(spark, "main", "watchdog", "SYSTEM_TABLES", "s1") == summary_text("s1", 0, 0, 0, 0)
+    assert scan_summary(spark, "main", "watchdog", "SYSTEM_TABLES", "s1") == (
+        "Scan s1 has 0 rows, one per check. Running the same scan again adds nothing.")
 
 
 def test_scan_summary_checks_the_names_before_any_sql():
@@ -162,3 +187,6 @@ def test_summary_query_counts_rows_from_findings_and_problems_from_the_view():
     assert "count_if(opened_scan_id = :scan_id) AS new_problems" in code
     assert "count_if(state = 'OPEN' AND opened_scan_id <> :scan_id) AS still_open" in code
     assert "count_if(resolved_scan_id = :scan_id) AS resolved" in code
+    # only sources with rows in this scan get a row, so a source that wrote nothing gets no counts
+    assert "FROM written w LEFT JOIN moved m ON m.source = w.source" in code
+    assert "FULL OUTER JOIN" not in code

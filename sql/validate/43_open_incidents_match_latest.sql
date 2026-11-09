@@ -2,9 +2,11 @@
 -- source. Expect no rows:
 -- - every FAILED or WARNING row in findings_latest has an OPEN incident with
 --   the same key (source, workspace, job ID, job name and check);
--- - every OPEN incident's newest problem row is in its source's newest scan,
---   unless that scan says UNKNOWN for its key (a check that cannot tell does
---   not end an incident, so it stays OPEN).
+-- - every OPEN incident's newest problem row is in its source's newest scan.
+--   An incident is flagged only when that scan has no row for its key, a
+--   HEALTHY row, or a problem row that is not its newest problem row. A row
+--   with any other status (l.status NOT IN ('HEALTHY', 'FAILED', 'WARNING'),
+--   such as UNKNOWN) neither opens nor ends an incident, so it stays OPEN.
 -- <=> is equality that treats two NULLs as equal: some keys have no
 -- workspace or job ID.
 -- Parameters: :catalog, :schema
@@ -55,5 +57,6 @@ LEFT JOIN latest l
   AND i.job_name <=> l.job_name
   AND i.check_id <=> l.check_id
 WHERE l.scan_id IS NULL
-  OR NOT (l.status = 'UNKNOWN' OR (l.status IN ('FAILED', 'WARNING') AND l.scan_id = i.last_seen_scan_id))
+  OR l.status = 'HEALTHY'
+  OR (l.status IN ('FAILED', 'WARNING') AND l.scan_id <> i.last_seen_scan_id)
 ORDER BY source, job_name, check_id

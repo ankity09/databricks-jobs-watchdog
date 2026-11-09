@@ -29,6 +29,7 @@
 --   I  a re-run of old scan j1 adds a FAILED  refund_api live_run_status        j: - H H, then F in j1 at 03:30
 --   P  CUSTOM, no workspace or job ID         kafka service_connectivity        c: F F H
 --   Q  CUSTOM, still open                     schema_registry service_conn.     c: H W W
+--   R  a custom status keeps it open          metrics_api service_conn.         c: F SKIPPED SKIPPED
 --
 -- All names, IDs and hosts are made up.
 SELECT
@@ -144,6 +145,10 @@ FROM VALUES
   ('2026-11-01 01:10:00', '20261101T011000Z', 'CUSTOM', NULL, NULL, 'kafka', 'service_connectivity', 'FAILED', 'WARNING', 'platform-team', 'P c2 unreachable', array('orders_ingest')),
   ('2026-11-01 01:10:00', '20261101T011000Z', 'CUSTOM', NULL, NULL, 'schema_registry', 'service_connectivity', 'WARNING', 'WARNING', 'platform-team', 'Q c2 slow handshake', NULL),
   ('2026-11-01 02:10:00', '20261101T021000Z', 'CUSTOM', NULL, NULL, 'kafka', 'service_connectivity', 'HEALTHY', NULL, 'platform-team', 'P c3 reachable', NULL),
-  ('2026-11-01 02:10:00', '20261101T021000Z', 'CUSTOM', NULL, NULL, 'schema_registry', 'service_connectivity', 'WARNING', 'WARNING', 'platform-team', 'Q c3 slow handshake', NULL)
+  ('2026-11-01 02:10:00', '20261101T021000Z', 'CUSTOM', NULL, NULL, 'schema_registry', 'service_connectivity', 'WARNING', 'WARNING', 'platform-team', 'Q c3 slow handshake', NULL),
+  -- a custom check may write a status of its own: like UNKNOWN, it neither opens nor ends an incident
+  ('2026-11-01 00:10:00', '20261101T001000Z', 'CUSTOM', NULL, NULL, 'metrics_api', 'service_connectivity', 'FAILED', 'WARNING', 'platform-team', 'R c1 unreachable', NULL),
+  ('2026-11-01 01:10:00', '20261101T011000Z', 'CUSTOM', NULL, NULL, 'metrics_api', 'service_connectivity', 'SKIPPED', NULL, 'platform-team', 'R c2 probe skipped', NULL),
+  ('2026-11-01 02:10:00', '20261101T021000Z', 'CUSTOM', NULL, NULL, 'metrics_api', 'service_connectivity', 'SKIPPED', NULL, 'platform-team', 'R c3 probe skipped', NULL)
 AS cases(observed_at, scan_id, source, workspace_id, job_id, job_name, check_id, status, severity, owner, error_summary,
          affected_jobs)

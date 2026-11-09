@@ -7,7 +7,7 @@ a run of FAILED or WARNING rows for one check of one job, from the scan that
 found it until a HEALTHY row clears it.
 
 scan_summary builds the lines notebooks 05 and 06 print after they write:
-how many rows the scan wrote, and how many problems are new, still open and
+how many rows the scan holds, and how many problems are new, still open and
 resolved, from sql/scan/31_scan_summary.sql.
 """
 
@@ -49,13 +49,18 @@ SUMMARY_SQL = "sql/scan/31_scan_summary.sql"
 
 
 def summary_text(scan_id, rows_written, new, still_open, resolved):
-    """The two lines a scan prints: what it wrote, and how its problems moved."""
+    """The lines a scan prints: the rows it holds, then how its problems moved.
+
+    It says "has", not "wrote", because running the same scan again prints the
+    same count and adds nothing. A scan with no rows is not in findings, so the
+    incidents view has nothing to say about it: only the first line is printed.
+    """
     rows = "row" if rows_written == 1 else "rows"
-    return (
-        f"Wrote {rows_written} {rows} for scan {scan_id}, one per check. Running the same scan again adds nothing.\n"
-        f"Problems: {new} new, {still_open} still open, {resolved} resolved. "
-        "The incidents view lists each problem once until it clears."
-    )
+    first = f"Scan {scan_id} has {rows_written} {rows}, one per check. Running the same scan again adds nothing."
+    if not rows_written:
+        return first
+    return (f"{first}\nProblems: {new} new, {still_open} still open, {resolved} resolved. "
+            "The incidents view lists each problem once until it clears.")
 
 
 def scan_summary(spark, catalog, schema, source, scan_id):
@@ -63,7 +68,7 @@ def scan_summary(spark, catalog, schema, source, scan_id):
 
     new: incidents that opened in this scan. still open: OPEN incidents that
     opened in an earlier scan. resolved: incidents a HEALTHY row in this scan
-    cleared. A source that wrote nothing in this scan gets zeros.
+    cleared. A source with no rows in this scan prints only the first line.
     """
     validate_identifier(catalog, "catalog")
     validate_identifier(schema, "schema")

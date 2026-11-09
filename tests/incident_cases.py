@@ -1,16 +1,19 @@
 """The incidents the view must return for tests/fixtures/incident_cases.sql, and a live check.
 
 pytest checks that these expectations fit the fixture (tests/test_incident_cases.py).
-Run this file to check the view itself on a SQL warehouse, in a scratch schema
-that it creates and then drops:
+Run this file to check the view itself on a SQL warehouse, in a new scratch
+schema that it creates and then drops:
 
     python3 tests/incident_cases.py --profile <profile> --warehouse-id <id> \\
-        --catalog <catalog> --schema <scratch schema>
+        --catalog <catalog> --schema <new scratch schema>
 
+It refuses to run when the schema already exists, and creates it without IF
+NOT EXISTS, so the only schema it ever drops is one it created in this run.
 It creates findings and both views there, inserts the fixture rows in two
 phases (before and after 02:30), checks every incident after each phase,
 checks the scan summary counts and the notebook 07 check (sql/validate/43),
-and prints a table of expected against actual. --keep leaves the schema.
+and prints a table of expected against actual. At the end, or when a step
+fails, it drops the schema; --keep leaves it for you to look at and drop.
 It needs the Databricks CLI, signed in to that profile.
 """
 
@@ -44,7 +47,8 @@ SCAN_TIMES = {
 }
 WS = "1111111111111111"
 KEY = ("source", "workspace_id", "job_id", "job_name", "check_id")
-CASES = ("A", "B", "C", "C2", "C3", "D", "E1", "E2", "F", "G", "H", "K", "M", "O", "L", "J1", "J2", "I", "P", "Q")
+CASES = ("A", "B", "C", "C2", "C3", "D", "E1", "E2", "F", "G", "H", "K", "M", "O", "L", "J1", "J2", "I", "P", "Q",
+         "R")
 
 
 def incident(case, source, job_name, job_id, check_id, state, opened, last, scans, worst, current,
@@ -98,6 +102,8 @@ FINAL = [
              affected_jobs=["orders_ingest"]),
     incident("Q", CUSTOM, "schema_registry", None, "service_connectivity", "OPEN", C2, C3, 2, "WARNING", "WARNING",
              workspace_id=None),
+    incident("R", CUSTOM, "metrics_api", None, "service_connectivity", "OPEN", C1, C1, 1, "FAILED", "SKIPPED",
+             workspace_id=None, error_summary="R c1 unreachable"),
 ]
 
 # After phase 1 only (s4 and the re-run of j1 not written yet), for the cases that change.
@@ -114,7 +120,7 @@ SAME_INCIDENT_ACROSS_PHASES = ("G", "H")
 SUMMARIES = [
     dict(source=ST, scan_id=S4, rows_written=14, new_problems=1, still_open=9, resolved=1),
     dict(source=API, scan_id=J3, rows_written=4, new_problems=1, still_open=2, resolved=0),
-    dict(source=CUSTOM, scan_id=C3, rows_written=2, new_problems=0, still_open=1, resolved=1),
+    dict(source=CUSTOM, scan_id=C3, rows_written=3, new_problems=0, still_open=2, resolved=1),
 ]
 NEWEST_SCANS = {ST: S4, API: J3, CUSTOM: C3}  # what findings_latest must show
 
@@ -225,23 +231,42 @@ def _table(expected, actual):
     return "\n".join(lines)
 
 
-def main(argv=None):
+def main(argv=None, connect=Warehouse):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--profile", required=True)
     parser.add_argument("--warehouse-id", required=True)
     parser.add_argument("--catalog", required=True)
-    parser.add_argument("--schema", required=True, help="a scratch schema; it is created, then dropped")
+    parser.add_argument("--schema", required=True, help="a new scratch schema; it is created, then dropped")
     parser.add_argument("--keep", action="store_true", help="leave the scratch schema in place")
     args = parser.parse_args(argv)
     validate_identifier(args.catalog, "catalog")
     validate_identifier(args.schema, "schema")
-    sql = Warehouse(args.profile, args.warehouse_id)
+    sql = connect(args.profile, args.warehouse_id)
+    prefix = f"`{args.catalog}`.`{args.schema}`"
+    found = sql.run(f"SELECT count(*) AS found FROM `{args.catalog}`.information_schema.schemata "
+                    "WHERE schema_name = lower(:schema)", schema=args.schema)
+    if int(found[0]["found"]):
+        print(f"{args.catalog}.{args.schema} already exists. This runner only uses a schema it creates, because it "
+              "drops that schema at the end. Pick a new name.", file=sys.stderr)
+        return 2
+    sql.run(f"CREATE SCHEMA {prefix}")
+    try:
+        failures = _check(sql, args)
+    finally:
+        if not args.keep:
+            sql.run(f"DROP SCHEMA {prefix} CASCADE")
+            print(f"\nDropped {args.catalog}.{args.schema}")
+    print(f"\n{len(failures)} differences")
+    for failure in failures:
+        print("  ", failure)
+    return 1 if failures else 0
+
+
+def _check(sql, args):
+    """Build the scratch schema's tables and views, insert the cases, and return the differences."""
     names = dict(catalog=args.catalog, schema=args.schema)
     prefix = f"`{args.catalog}`.`{args.schema}`"
-
-    sql.run(load_sql("sql/setup/01_create_schema.sql"), **names)
     sql.run(load_sql("sql/setup/04_create_findings.sql"), **names)
-    sql.run(f"DELETE FROM {prefix}.findings")
     for view in ("sql/views/01_findings_latest.sql", "sql/views/02_incidents.sql"):
         sql.run(render_view(view, args.catalog, args.schema))
     columns = ", ".join(FINDINGS_COLUMNS)
@@ -305,14 +330,7 @@ def main(argv=None):
           f"{[(row['job_name'], row['problem']) for row in caught]}")
     if sorted(row["job_name"] for row in caught) != ["ledger_close", "orders_enrich"]:
         failures.append(("final", "validate 43 on a broken view", "orders_enrich, ledger_close", None, caught))
-
-    if not args.keep:
-        sql.run(f"DROP SCHEMA IF EXISTS {prefix} CASCADE")
-        print(f"\nDropped {args.catalog}.{args.schema}")
-    print(f"\n{len(failures)} differences")
-    for failure in failures:
-        print("  ", failure)
-    return 1 if failures else 0
+    return failures
 
 
 if __name__ == "__main__":

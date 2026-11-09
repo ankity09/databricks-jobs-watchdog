@@ -1,6 +1,7 @@
--- What one scan wrote, and how its problems moved, for each source. Notebooks
--- 05 and 06 print their own source's row after they write
--- (jobs_watchdog/incidents.py scan_summary).
+-- What one scan holds, and how its problems moved, for each source with rows
+-- in that scan. Notebooks 05 and 06 print their own source's row after they
+-- write (jobs_watchdog/incidents.py scan_summary); a source with no row here
+-- wrote nothing in this scan.
 -- rows_written: the rows the scan holds in findings, one per job and check.
 -- Running the same scan again adds none.
 -- new_problems: incidents that opened in this scan.
@@ -23,11 +24,11 @@ moved AS (
   GROUP BY source
 )
 SELECT
-  coalesce(w.source, m.source) AS source,
-  coalesce(w.rows_written, 0) AS rows_written,
+  w.source,
+  w.rows_written,
   coalesce(m.new_problems, 0) AS new_problems,
   coalesce(m.still_open, 0) AS still_open,
   coalesce(m.resolved, 0) AS resolved
 FROM written w
-FULL OUTER JOIN moved m ON m.source = w.source
-ORDER BY source
+LEFT JOIN moved m ON m.source = w.source
+ORDER BY w.source

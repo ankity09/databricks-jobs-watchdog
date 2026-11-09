@@ -7,8 +7,8 @@
 -- The rules:
 -- - The key is one check of one job from one source: source, workspace_id,
 --   job_id, job_name and check_id. job_id is part of it because a name pattern
---   can match several jobs. workspace_id and job_id are empty on some rows
---   (not_found, duplicate_name and CUSTOM rows). The view only groups and
+--   can match several jobs. job_id is empty on duplicate_name rows, and both
+--   are empty on not_found and CUSTOM rows. The view only groups and
 --   partitions by the key, never joins on it, and both treat two empty values
 --   as equal, so those rows group correctly.
 -- - A source's scans are ordered by when each first wrote (its earliest
@@ -27,9 +27,11 @@
 --                  resolved_scan_id are that first HEALTHY row's scan;
 --     NOT_CHECKED  no HEALTHY row came after it, and the key is not in its
 --                  source's newest scan: the job was removed from the list,
---                  switched off, or not reached. If the key comes back as a
---                  problem with no HEALTHY row in between, it is the same
---                  incident again, OPEN.
+--                  switched off, or not reached, or the check writes rows only
+--                  while it finds a problem (duplicate_name writes no HEALTHY
+--                  row, so a fixed duplicate ends up here, not RESOLVED). If
+--                  the key comes back as a problem with no HEALTHY row in
+--                  between, it is the same incident again, OPEN.
 -- - scans_seen counts the incident's problem rows. worst_status is FAILED if
 --   any of them is FAILED. current_status is the key's newest status in any
 --   row. The other columns come from the incident's newest problem row.
@@ -59,10 +61,9 @@ ordered_scans AS (
     scan_id,
     scan_time,
     row_number() OVER (PARTITION BY source ORDER BY scan_time, scan_id) AS scan_order,
-    last_value(scan_id) OVER (
-      PARTITION BY source ORDER BY scan_time, scan_id
-      ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-    ) AS newest_scan_id
+    -- the last scan in that order
+    max_by(scan_id, named_struct('scan_time', scan_time, 'scan_id', scan_id)) OVER (PARTITION BY source)
+      AS newest_scan_id
   FROM scans
 ),
 history AS (
@@ -99,11 +100,14 @@ marked AS (
       PARTITION BY source, workspace_id, job_id, job_name, check_id
       ORDER BY scan_order ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
     ) AS healthy_before,
-    -- the first HEALTHY row for this key after this row: it resolves the incident
+    -- the first HEALTHY row for this key at or after this row: it resolves the
+    -- incident. Read in reverse scan order, that is a running min, which Spark
+    -- computes in one pass (a frame from the current row to the end of the
+    -- partition is computed again for every row).
     min(CASE WHEN status = 'HEALTHY' THEN named_struct('scan_order', scan_order, 'scan_id', scan_id,
                                                        'scan_time', scan_time) END) OVER (
       PARTITION BY source, workspace_id, job_id, job_name, check_id
-      ORDER BY scan_order ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+      ORDER BY scan_order DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
     ) AS next_healthy,
     -- the key's newest row in any status
     max_by(named_struct('scan_id', scan_id, 'status', status), scan_order) OVER (

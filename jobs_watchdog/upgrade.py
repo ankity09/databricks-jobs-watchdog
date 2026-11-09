@@ -8,7 +8,10 @@ replaced only when its columns no longer match the ones it should have or its
 definition version (watchdog.view_version) changed, because replacing a view
 needs ownership and moves it to whoever runs this. findings_latest has every
 column of the findings table; incidents has the columns in
-jobs_watchdog.incidents.INCIDENT_COLUMNS.
+jobs_watchdog.incidents.INCIDENT_COLUMNS. Before it replaces an object with one
+of those names, it checks that the object is a view with the
+watchdog.view_version property, so a table or view of yours with that name is
+never replaced.
 """
 
 import re
@@ -162,8 +165,19 @@ def render_view(relpath, catalog, schema):
     return load_sql(relpath).replace("{schema}", f"`{catalog}`.`{schema}`")
 
 
+def _is_watchdog_view(spark, catalog, schema, name):
+    """True when the object is a view (not a table) with the watchdog.view_version property."""
+    rows = spark.sql(f"SHOW VIEWS IN `{catalog}`.`{schema}` LIKE '{name}'").collect()
+    is_view = any(str(row["viewName"]).lower() == name and not row["isTemporary"] for row in rows)
+    return is_view and _deployed_version(spark, catalog, schema, name) is not None
+
+
 def create_views(spark, catalog, schema):
-    """Make every view in sql/views current; returns (name, "created" | "replaced" | "current") pairs."""
+    """Make every view in sql/views current; returns (name, "created" | "replaced" | "current") pairs.
+
+    An existing object is replaced only when it is a Watchdog view; anything
+    else with that name stops this with a RuntimeError that names it.
+    """
     validate_identifier(catalog, "catalog")
     validate_identifier(schema, "schema")
     base = _columns(spark, f"{catalog}.{schema}.{VIEW_BASE}")
@@ -173,6 +187,13 @@ def create_views(spark, catalog, schema):
         if current:
             results.append((name, "current"))
             continue
+        full = f"{catalog}.{schema}.{name}"
+        # None means unreadable or missing; an object that exists but cannot be read is checked too
+        exists = current is not None or spark.catalog.tableExists(full)
+        if exists and not _is_watchdog_view(spark, catalog, schema, name):
+            raise RuntimeError(f"{full} is not a Watchdog view: it is a table, or a view without the table property "
+                               "watchdog.view_version. Notebook 01 does not replace it. Rename or move it, then run "
+                               "notebook 01 again.")
         spark.sql(render_view(relpath, catalog, schema))
-        results.append((name, "created" if current is None else "replaced"))
+        results.append((name, "replaced" if exists else "created"))
     return results
