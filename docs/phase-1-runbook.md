@@ -90,7 +90,7 @@ Then put the scope and key names in `accelerator.local.yaml` (`auth.secret_scope
 
 Clone this repo into a Git folder in the Watchdog workspace. [git-folder-setup.md](git-folder-setup.md) has the steps, and how to pull updates.
 
-After every pull, restart Python on any notebook you have open, so it loads the new code. Then run notebook 01, which upgrades the existing tables and makes the view current. If you deployed the jobs with the bundle, deploy it again too, so the jobs run the new code; each scheduled run then runs notebook 01 as well. Run `watchdog_phase_1` once before you turn the schedule on, to check access and validate the setup.
+After every pull, restart Python on any notebook you have open, so it loads the new code. Then run notebook 01, which upgrades the existing tables and makes the views current. If you deployed the jobs with the bundle, deploy it again too, so the jobs run the new code; each scheduled run then runs notebook 01 as well. Run `watchdog_phase_1` once before you turn the schedule on, to check access and validate the setup.
 
 ### Upgrade after a pull
 
@@ -99,7 +99,7 @@ After every pull, restart Python on any notebook you have open, so it loads the 
 1. In the Git folder, click Pull. If Pull reports a conflict in a notebook you have run, keep the incoming version (see [First run, step by step](#first-run-step-by-step)).
 2. If you deployed the jobs with the bundle, deploy it again from your updated clone (the `eval` line, then `databricks bundle deploy`). The jobs run their own copy of the code, and an older copy cannot load the job list once notebook 01 has added a column: notebook 02 stops with `DELTA_INSERT_COLUMN_ARITY_MISMATCH`.
 3. Restart Python on any open notebook (detach and reattach).
-4. Run notebook 01. It prints the columns it added to each table, and `view findings_latest:` followed by created, replaced or current. Your existing rows stay.
+4. Run notebook 01. It prints the columns it added to each table, and `view findings_latest:` and `view incidents:`, each followed by created, replaced or current. Your existing rows stay.
 5. If the release adds options you want, add them to your job list file, then run notebook 02. Notebook 02 stops on any setting it does not know and names it, so a misspelled key is caught here.
 6. Run notebooks 05 and 06, and check notebook 07 still prints only PASS lines.
 
@@ -250,11 +250,11 @@ A name pattern finds every copy of a job, in every workspace, without a list of 
 The order a new operator follows, and what to check at each step:
 
 1. **Pull, then restart Python.** If Pull reports a conflict in a notebook you have run, keep the incoming version: Databricks saves the serverless environment into a notebook when it runs it, and that is the only local change.
-2. **Notebook 01.** Fill in `catalog` and `schema`, then run it. A Pull resets the input boxes to their defaults (the `schema` box then says `watchdog`), so check them first, or keep your values in `accelerator.local.yaml`. Expect six `exists: True` lines.
+2. **Notebook 01.** Fill in `catalog` and `schema`, then run it. A Pull resets the input boxes to their defaults (the `schema` box then says `watchdog`), so check them first, or keep your values in `accelerator.local.yaml`. Expect seven `exists: True` lines.
 3. **Notebook 00.** Every line says PASS, and section 3 lists the workspaces this Watchdog covers. Note the `Workspace ID` line for your job list. A workspace's name is not proof of its region: `SELECT current_metastore()` returns the metastore's cloud and region, for example `aws:us-east-2:...`.
 4. **The job list.** Create `monitored_jobs.yml` outside the Git folder (Create, then File) and start with one job you know runs. In the workspace browser, the file's menu has Copy full path, for the `monitored_jobs_path` box.
 5. **Notebook 02.** The match table shows the job's real name and job ID, with `checked_here` true. An empty row means the pattern found nothing.
-6. **Notebooks 05 and 06, then 07.** Notebook 07 prints five PASS lines. Then add the rest of your jobs and run 02, 05 and 06 again.
+6. **Notebooks 05 and 06, then 07.** Each scan prints how many rows the scan holds and how many problems are new, still open and resolved. Notebook 07 prints six PASS lines. Then add the rest of your jobs and run 02, 05 and 06 again.
 
 ### Run Phase 1 by hand
 
@@ -263,11 +263,11 @@ Open each notebook in `notebooks/`, attach it to serverless compute, run its fir
 | Notebook | What it does | Look for |
 |---|---|---|
 | `00_check_access` | checks system table access, the region's workspaces and the Jobs API | every line PASS, and the workspace names you expect in section 3 |
-| `01_create_tables` | creates or upgrades the schema, the five tables and the view `findings_latest` | six `exists: True` lines, a `view findings_latest:` line that says created, replaced or current, and the columns it added, if any |
+| `01_create_tables` | creates or upgrades the schema, the five tables and the views `findings_latest` and `incidents` | seven `exists: True` lines, a `view findings_latest:` and a `view incidents:` line that say created, replaced or current, and the columns it added, if any |
 | `02_load_config` | loads your YAML file into the config tables, shows what each job matches | every job matches a real job where you expect it, with `checked_here` true where it should be checked |
-| `05_scan_system_tables` | writes the system table findings | one row per check for each matched job |
-| `06_scan_jobs_api` | writes the Jobs API findings | rows for each matched job |
-| `07_validate_phase_1` | checks the result | five PASS lines |
+| `05_scan_system_tables` | writes the system table findings | one row per check for each matched job, and two lines: the rows the scan holds, and the problems that are new, still open and resolved |
+| `06_scan_jobs_api` | writes the Jobs API findings | rows for each matched job, and the same two lines for the Jobs API |
+| `07_validate_phase_1` | checks the result | six PASS lines |
 | `08_create_dashboard` (optional) | creates or updates the "Watchdog findings" dashboard and publishes it | a `Dashboard ready` line with its link |
 | `09_custom_check_example` (optional) | probes the services in its list and writes `CUSTOM` rows | one row per service, or a skip line for each placeholder host |
 | `10_delete_old_findings` (optional) | deletes scans older than `retention_days`, keeping each source's newest; the `watchdog_cleanup` job runs it daily | a `Deleted N rows` line, then the scans left per source |
@@ -310,12 +310,12 @@ The sample jobs tag themselves with `code_version: <branch>@<commit>`, using `bu
 
 `watchdog_scan` is the scheduled scan. Every 20 minutes, in UTC, it runs four tasks in order:
 
-1. `create_tables` (notebook 01) creates what is missing, adds new columns after an upgrade, and makes the view `findings_latest` current. Tables and views that are already current are left alone.
+1. `create_tables` (notebook 01) creates what is missing, adds new columns after an upgrade, and makes the views `findings_latest` and `incidents` current. Tables and views that are already current are left alone.
 2. `load_config` (notebook 02) reloads your monitored-jobs file into the config tables.
 3. `scan_system_tables` (notebook 05) writes the system table findings.
 4. `scan_jobs_api` (notebook 06) writes the Jobs API findings.
 
-Both scans run even if an earlier task failed, and each one checks the tables and the view before it writes. A bad config file therefore leaves the scans running on the config loaded last time, and the run shows as failed. Each run is one scan: its run ID is the `scan_id` for both scans. The job allows one run at a time, so runs never overlap.
+Both scans run even if an earlier task failed, and each one checks the tables and the views before it writes. A bad config file therefore leaves the scans running on the config loaded last time, and the run shows as failed. Each run is one scan: its run ID is the `scan_id` for both scans. The job allows one run at a time, so runs never overlap.
 
 Because every run brings the tables up to date, a deploy that adds columns needs no manual step. For that step, the identity that runs the job needs `CREATE TABLE` and `MODIFY` on the Watchdog schema, or ownership of it. Run `watchdog_phase_1` once before you turn the schedule on, to check access and validate the setup.
 
@@ -356,11 +356,11 @@ The dashboard has three pages:
 
 The environment and job filters narrow Now and Versions and runs. History shows every environment. Now and Versions and runs read `findings_latest`. History reads `findings`, because it needs every scan.
 
-The dashboard is published without embedded credentials, so each viewer's queries run with their own permissions: a viewer needs `USE CATALOG`, `USE SCHEMA` and `SELECT` on `findings` and `findings_latest`, and permission to use the SQL warehouse. It shows error text, so share it with the people who may read `findings`. If the folder already holds two dashboards with this name, notebook 08 stops and names them: trash all but one, then run it again. The teardown script does not remove the dashboard, so delete it in the workspace when you no longer need it.
+The dashboard is published without embedded credentials, so each viewer's queries run with their own permissions: a viewer needs `USE CATALOG`, `USE SCHEMA` and `SELECT` on `findings` and `findings_latest`, and permission to use the SQL warehouse. Grant `SELECT` on `incidents` to the same people, so they can read the incidents too; a grant on the schema covers both views. It shows error text, so share it with the people who may read `findings`. If the folder already holds two dashboards with this name, notebook 08 stops and names them: trash all but one, then run it again. The teardown script does not remove the dashboard, so delete it in the workspace when you no longer need it.
 
 ### Write your own checks (notebook 09)
 
-Notebook 09 is a template. It probes each service in its `SERVICES` list with a TCP connection and then a TLS handshake, and it writes one row per service with `source` = `CUSTOM` and `check_id` = `service_connectivity`. Each entry sets the service's `severity` and `owner`. The service name is the row's `job_name`, and its `error_summary` starts with `host:port`. When a probe fails, `affected_jobs` lists the monitored jobs that depend on that service, from the `service` rows of your config. The notebook stops if two entries share a name, so give each service its own. If a client certificate secret cannot be read, that service gets a FAILED row with the error instead of stopping the notebook, and the temporary certificate files are deleted after use. Entries whose host ends in `.example.com` are skipped, so the example writes nothing until you replace them. Notebook 09 is not part of the Phase 1 job. It checks the tables and the view before it writes.
+Notebook 09 is a template. It probes each service in its `SERVICES` list with a TCP connection and then a TLS handshake, and it writes one row per service with `source` = `CUSTOM` and `check_id` = `service_connectivity`. Each entry sets the service's `severity` and `owner`. The service name is the row's `job_name`, and its `error_summary` starts with `host:port`. When a probe fails, `affected_jobs` lists the monitored jobs that depend on that service, from the `service` rows of your config. The notebook stops if two entries share a name, so give each service its own. If a client certificate secret cannot be read, that service gets a FAILED row with the error instead of stopping the notebook, and the temporary certificate files are deleted after use. Entries whose host ends in `.example.com` are skipped, so the example writes nothing until you replace them. Notebook 09 is not part of the Phase 1 job. It checks the tables and the views before it writes.
 
 Serverless compute cannot reach private endpoints. Run the notebook on a job cluster whose network can reach the services. The scan job has a commented task, `custom_checks`, that does this. To use it, uncomment that task and its `job_clusters` block in `resources/watchdog_scan.job.yml`, and set `policy_id` to a cluster policy whose network can reach the services. Set the runtime and node type too.
 
@@ -369,9 +369,10 @@ To add your own checks, build rows with the keys `job_name`, `check_id`, `status
 ## What success looks like
 
 - Notebook 00 prints only PASS lines (and WARN lines in service principal mode, for workspaces the service principal cannot reach).
-- Notebook 07 prints five PASS lines: the five tables and the view exist, config has enabled jobs, both sources wrote findings, every enabled job has findings, no duplicate keys. A job counts as enabled when it is switched on in at least one environment.
+- Notebook 07 prints six PASS lines: the five tables and the two views exist, config has enabled jobs, both sources wrote findings, every enabled job has findings, no duplicate keys, and open incidents match the newest scans. A job counts as enabled when it is switched on in at least one environment.
 - `findings` has rows with `source = SYSTEM_TABLES` and `source = JOBS_API` for the same `scan_id` (job runs) or for each source's newest scan (by hand).
 - `findings_latest` returns the newest scan of each source, judged by when each scan first wrote.
+- `incidents` lists each problem once. After a second scan with nothing changed, the scans print `0 new` and the same problems as still open, and those incidents show `scans_seen` 2.
 - With the demo target: `watchdog_demo_succeeds` is HEALTHY, and `watchdog_demo_fails` is FAILED with `load` in `failed_task_keys` and the error text in `error_summary`. The example config is set so that `watchdog_demo_slow` warns for `long_runtime` and `watchdog_demo_retries` warns for `retry_loop`. The FAILED row for `watchdog_demo_fails` lists `watchdog_demo_succeeds` in `affected_jobs`. The system table rows for the demo jobs can say `not_found` or UNKNOWN for about an hour, until the system tables catch up. Run the job again later to see them.
 - If you built the dashboard, each of its three pages shows rows.
 
@@ -397,7 +398,34 @@ WHERE job_name = 'orders_ingest' AND observed_at >= current_timestamp() - INTERV
 ORDER BY observed_at DESC
 ```
 
-The history is what lets the alerts in Phase 3 fire once when a job breaks and once when it recovers, instead of on every scan.
+The history is what lets the alerts in later phases fire once when a job breaks and once when it recovers, instead of on every scan. The `incidents` view reads it that way.
+
+## Read the incidents
+
+Each scan writes a row for every check, so a job that fails for three scans has three FAILED rows in `findings`. The view `incidents` lists that problem once, with when it opened, how many scans found it, and whether it has cleared. [data-model.md](data-model.md#the-incidents-view) explains every column and state.
+
+The open problems, oldest first:
+
+```sql
+SELECT opened_at, scans_seen, environment, workspace_name, job_name, check_id, worst_status, current_status,
+       owner, error_summary, run_page_url
+FROM <catalog>.<schema>.incidents
+WHERE state = 'OPEN'
+ORDER BY opened_at
+```
+
+What opened in the latest scan:
+
+```sql
+SELECT source, environment, workspace_name, job_name, check_id, worst_status, owner, error_summary, run_page_url
+FROM <catalog>.<schema>.incidents
+WHERE is_new
+ORDER BY source, job_name, check_id
+```
+
+- `RESOLVED` incidents stay listed, with `resolved_at`, until the cleanup deletes their rows.
+- `NOT_CHECKED` incidents are problems the newest scan has no row for, for example a job you removed from the list or switched off. They stay listed until a HEALTHY row comes or the cleanup deletes their rows. A fixed `duplicate_name` warning shows as `NOT_CHECKED`, not `RESOLVED`, because that check writes no HEALTHY row.
+- The cleanup deletes scans older than `scan.retention_days`, so an older incident starts at the oldest row kept: read its `opened_at` as "open since at least".
 
 ## Troubleshooting
 
@@ -426,12 +454,14 @@ The history is what lets the alerts in Phase 3 fire once when a job breaks and o
 | `Cannot find the repo root above ...` | the notebook is not in the repo's `notebooks` folder | open the notebooks from the Git folder (or the deployed bundle) |
 | `... is missing or unreadable (...). Run notebook 01 first.` | the Watchdog tables or the schema are not there yet | run notebook 01 |
 | `... is missing columns ...: run notebook 01 once to add them` | you pulled a newer version, and the tables are from an older one | run notebook 01 (or `watchdog_phase_1`). It adds the columns and keeps your rows. A scheduled run does the same; if its `create_tables` task fails, check that task's output for a privilege error. |
-| `findings_latest ... is missing or out of date: run notebook 01 once.` | the view is missing, or its columns differ from `findings` | run notebook 01. If it stops on the view, another identity owns the view: its owner runs notebook 01, or the owner drops the view and notebook 01 creates it again. |
+| `findings_latest ... is missing or out of date: run notebook 01 once.` (or `incidents ...`) | the view is missing, or its columns or its definition version are not the current ones; after a pull, `incidents` is missing until notebook 01 runs | run notebook 01. If it stops on the view, another identity owns the view: its owner runs notebook 01, or the owner drops the view and notebook 01 creates it again. |
 | `FAIL  tables exist: missing ...` in notebook 07 | notebook 01 has not run with this catalog and schema | run notebook 01 |
 | `FAIL  config has enabled jobs: 0 enabled` | the config is empty, or every job is switched off in every environment | edit the YAML file, then run notebook 02 |
 | `FAIL  both sources wrote findings: no rows from ...` | that scan did not run, or ran with a different `scan_id` | run notebook 05 or 06; clear the `scan_id` widget in notebook 07 |
 | `FAIL  every enabled job has findings: <job> (<source>)` | a scan wrote nothing for that job | re-run that scan and read its output |
 | `FAIL  no duplicate keys` | a key was inserted twice | should not happen; open an issue with the output of query 41 |
+| `<catalog>.<schema>.incidents is not a Watchdog view: ...` (or `findings_latest`) | a table or view of yours in the Watchdog schema has that name | rename it or move it to another schema, then run notebook 01 again; notebook 01 never replaces it |
+| `FAIL  open incidents match the newest scans: ...` | the `incidents` view disagrees with `findings_latest` for the jobs and checks named | run notebook 01, which makes the view current, then notebook 07 again; if it still fails, open an issue with the output of query 43 |
 | `not_found`: "... listed job IDs were not found in this region ..." (SYSTEM_TABLES) | a pinned job was deleted and created again with a new ID, or its ID was copied wrong, or it runs in another region | look up the job's current ID in the Jobs UI and update `job_ids`, or match it by name |
 | `duplicate_name` WARNING | two jobs in one workspace have exactly the same name, and the name pattern matches both | rename or delete the extra job, or pin the right one with `job_ids` |
 | `not_found` from SYSTEM_TABLES only | the job is new (system tables are about an hour behind), the regex is wrong, or the job is in another region | wait an hour; check the regex with notebook 02; check the workspace list in notebook 00 for the region |
@@ -475,12 +505,12 @@ The Jobs API scan calls each workspace's public API from serverless compute in t
 ```bash
 ./teardown.sh -t dev --profile <profile>                 # the Watchdog jobs and the bundle's files
 ./teardown.sh -t demo --profile <profile>                # also the four demo jobs
-./teardown.sh -t dev --drop-schema --profile <profile>   # also the schema, its tables and the view
+./teardown.sh -t dev --drop-schema --profile <profile>   # also the schema, its tables and the views
 ```
 
 `--drop-schema` asks you to type the schema name first. Without it, the schema and its history stay.
 
-It drops the five Watchdog tables and the `findings_latest` view. If the schema holds any other table or view, the script stops before changing anything. If the script refuses, check that the schema holds only Watchdog objects, then drop it by hand in the SQL editor. This deletes the findings history:
+It drops the five Watchdog tables and the two views, `findings_latest` and `incidents`. If the schema holds any other table or view, the script stops before changing anything. If the script refuses, check that the schema holds only Watchdog objects, then drop it by hand in the SQL editor. This deletes the findings history:
 
 ```sql
 DROP SCHEMA <catalog>.<schema> CASCADE

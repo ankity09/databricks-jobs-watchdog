@@ -1,6 +1,6 @@
 # Data model
 
-The Watchdog keeps five Delta tables and one view in one schema, `<catalog>.<schema>` (the schema defaults to `watchdog`). Notebook 01 creates them from the files in `sql/setup` and `sql/views`. Every column has a comment, so `DESCRIBE TABLE <catalog>.<schema>.findings` shows the same descriptions as this page.
+The Watchdog keeps five Delta tables and two views in one schema, `<catalog>.<schema>` (the schema defaults to `watchdog`). Notebook 01 creates them from the files in `sql/setup` and `sql/views`. Every column has a comment, so `DESCRIBE TABLE <catalog>.<schema>.findings` shows the same descriptions as this page.
 
 | Object | What it holds | How it changes |
 |---|---|---|
@@ -10,6 +10,7 @@ The Watchdog keeps five Delta tables and one view in one schema, `<catalog>.<sch
 | `monitored_job_environments` | the settings a job changes in one environment, such as a lower severity | replaced each time notebook 02 loads your YAML file |
 | `findings` | what every scan found, from every source | rows are added, never updated or deleted |
 | `findings_latest` (view) | the newest scan from each source | computed from `findings` each time it is read |
+| `incidents` (view) | each problem once, from the scan that found it until it clears | computed from `findings` each time it is read |
 
 The scans read the config tables, not the YAML file. The scheduled job loads the file again on every run, so an edit counts from the next run. When you run a scan by hand, run notebook 02 first.
 
@@ -288,7 +289,42 @@ The comparison uses `<=>`, which treats two NULLs as equal, so `not_found` rows 
 
 Each source has its own newest scan. If a run's Jobs API scan fails before it writes rows, the view keeps the Jobs API rows from the last scan that wrote them, while the system table rows come from the newest run. Check `observed_at` before you trust an old row.
 
-Change-only alerts (Phase 3) compare each finding with the previous one for the same job and check, so they need the history in `findings`.
+Change-only alerts (Phase 3) compare each finding with the previous one for the same job and check, so they need the history in `findings`. The `incidents` view below does that comparison already.
+
+## The incidents view
+
+`findings` repeats a problem in every scan, because each scan writes a row for every check, HEALTHY or not. `incidents` is a view that lists each problem once. An incident is one problem with one check of one job, from the scan that found it until a HEALTHY row clears it. `sql/views/02_incidents.sql` holds the rules as comments.
+
+- **The key.** An incident belongs to one check of one job from one source: `source`, `workspace_id`, `job_id`, `job_name` and `check_id`. A name pattern can match two jobs, and each gets its own incidents. Rows with no job ID, such as `duplicate_name` rows, or with no workspace or job ID, such as `CUSTOM` rows, group the same way.
+- **Scan order.** Each source's scans are ordered by when they first wrote rows, as in `findings_latest`, so re-running an old `scan_id` never makes it the newest.
+- **What opens and ends one.** A problem is a FAILED or WARNING row. FAILED and WARNING rows for one key, in scan order, with no HEALTHY row between them, are one incident. A HEALTHY row ends it. An UNKNOWN row neither opens nor ends one, because a check that cannot tell is not news, and neither does any other status a custom check writes. A scan with no row for the key does not end it either.
+
+| `state` | Meaning |
+|---|---|
+| `OPEN` | No HEALTHY row came after it, and its source's newest scan has a row for it. When that row is UNKNOWN, the incident stays open and `current_status` says UNKNOWN. |
+| `RESOLVED` | A HEALTHY row came after it. `resolved_at` and `resolved_scan_id` are the scan of that first HEALTHY row. |
+| `NOT_CHECKED` | No HEALTHY row came after it, but its source's newest scan has no row for it: the job was removed from the list, switched off or not reached, or the check writes rows only while it finds a problem. If it comes back as a problem before any HEALTHY row, it is the same incident again, `OPEN`. A fixed `duplicate_name` warning shows as `NOT_CHECKED`, not `RESOLVED`, because that check writes no HEALTHY row. |
+
+| Column | Type | Meaning |
+|---|---|---|
+| `incident_id` | STRING | A SHA-256 hash of the key and `opened_scan_id`, so an incident keeps its ID from scan to scan, until retention deletes the scan it opened in (see Retention below). |
+| `state` | STRING | `OPEN`, `RESOLVED` or `NOT_CHECKED`, as above. |
+| `source`, `check_id`, `workspace_id`, `job_id`, `job_name` | STRING | The key. |
+| `workspace_name`, `environment`, `owner`, `schedule_type`, `parent_job`, `severity`, `failure_category` | STRING | From the incident's newest problem row. |
+| `opened_at`, `opened_scan_id` | TIMESTAMP, STRING | The first scan that found the problem. |
+| `last_seen_at`, `last_seen_scan_id` | TIMESTAMP, STRING | The newest scan that found it. |
+| `scans_seen` | BIGINT | How many scans found it: the FAILED and WARNING rows in the incident. |
+| `worst_status` | STRING | FAILED if any of those rows is FAILED, otherwise WARNING. |
+| `current_status` | STRING | The key's newest status in any scan: HEALTHY, WARNING, FAILED or UNKNOWN. |
+| `resolved_at`, `resolved_scan_id` | TIMESTAMP, STRING | The scan whose HEALTHY row resolved it. Empty unless the state is `RESOLVED`. |
+| `error_summary`, `run_page_url`, `affected_jobs` | STRING, STRING, ARRAY&lt;STRING&gt; | From the incident's newest problem row. |
+| `is_new` | BOOLEAN | True when it opened in its source's newest scan. |
+
+The times are scan times: when each scan first wrote rows.
+
+**Retention.** The daily `watchdog_cleanup` job deletes scans older than `scan.retention_days`. An incident that started before that starts at the oldest row kept, so read its `opened_at` as "open since at least". When the scan it opened in is deleted, `opened_scan_id` moves to the next kept scan and `incident_id` changes with it.
+
+The view reads `findings` each time, so it covers the rows you already had before it existed. Notebooks 05 and 06 print its counts after each scan, and notebook 07 checks it against `findings_latest`. The runbook's [Read the incidents](phase-1-runbook.md#read-the-incidents) has example queries.
 
 ## Upgrades
 
@@ -296,13 +332,15 @@ Notebook 01 creates whatever is missing, and it is safe to run again. The schedu
 
 1. Runs the `CREATE TABLE IF NOT EXISTS` files in `sql/setup`, which creates any table that is new in this release. Existing tables keep their rows.
 2. Adds any column the current DDL declares but the table lacks, at the end of the table and as a nullable column. Rows stay.
-3. Makes the view `findings_latest` current. It creates the view when it is missing, and replaces it only when the view's columns no longer match `findings`, or when its definition version (the table property `watchdog.view_version`) differs from the one in `sql/views/01_findings_latest.sql`. A release that changes the view's SQL raises that version, so the change reaches existing views. A view that is current is left alone, so its owner and grants stay. Notebook 01 prints `view findings_latest: created`, `replaced` or `current`.
+3. Makes the views `findings_latest` and `incidents` current. It creates a view when it is missing, and replaces it only when its columns change (`findings_latest` has every column of `findings`; `incidents` has the columns above), or when its definition version (the table property `watchdog.view_version`) differs from the one in its file in `sql/views`. A release that changes a view's SQL raises that version, so the change reaches existing views. A view that is current is left alone, so its owner and grants stay. Notebook 01 prints `view findings_latest:` and `view incidents:`, each followed by `created`, `replaced` or `current`.
 
 [CHANGELOG.md](../CHANGELOG.md) lists the tables and columns each release adds.
 
-Replacing a view needs ownership. If another identity owns a view that needs replacing, notebook 01 stops with an error. Its owner can run notebook 01 once, or drop the view so that notebook 01 creates it again.
+Replacing a view needs ownership. If another identity owns a view that needs replacing, notebook 01 stops with an error. Its owner can run notebook 01 once, or drop the view so that notebook 01 creates it again. Notebook 01 replaces only its own views: an object named `findings_latest` or `incidents` that is not a view with the `watchdog.view_version` property, such as a table of yours, stops it with a message that names the object.
 
-Notebooks 02, 05, 06 and 09 check the tables and the view first. A missing table or column, or an out-of-date view, stops them with a message that says to run notebook 01. Each scheduled run runs notebook 01 before its config load and its scans, so a deploy that adds columns is picked up by the next run.
+On compute where replacing a view does not keep its grants, a replaced view loses the grants made on the view itself. After notebook 01 prints `view findings_latest: replaced`, grant `SELECT` on `findings_latest` again, and grant `SELECT` on `incidents` to the same readers. Grants on the schema are not affected, and they cover both views.
+
+Notebooks 02, 05, 06, 09 and 10 check the tables and the views first. A missing table or column, or a missing or out-of-date view, stops them with a message that says to run notebook 01. Each scheduled run runs notebook 01 before its config load and its scans, so a deploy that adds columns is picked up by the next run.
 
 ## Checks
 
@@ -409,7 +447,7 @@ ORDER BY observed_at DESC, check_id
 
 ## Governance
 
-`findings` and `findings_latest` hold error text copied from job runs. Error text can include file paths, table names, parameter values or pieces of data. `monitored_workspaces` holds workspace names and labels, and `monitored_job_environments` holds owners per environment. Treat these like any other operational table:
+`findings`, `findings_latest` and `incidents` hold error text copied from job runs. Error text can include file paths, table names, parameter values or pieces of data. `monitored_workspaces` holds workspace names and labels, and `monitored_job_environments` holds owners per environment. Treat these like any other operational table:
 
 - grant `SELECT` on them, or on the schema, only to the people and identities that need them;
 - the identity that runs the scheduled job needs `CREATE TABLE` and `MODIFY` on the schema, because each scheduled run runs notebook 01; it owns the tables when it creates them;

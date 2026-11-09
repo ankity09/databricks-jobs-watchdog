@@ -18,7 +18,7 @@ Read these files before doing anything else:
 Ask for each value **one at a time**. Offer the default where there is one, and say why the value matters.
 
 1. **catalog** (required): the catalog that will hold the Watchdog schema. The operator needs `USE CATALOG` and `CREATE SCHEMA` on it, or, when the schema already exists, `USE CATALOG` on the catalog plus `USE SCHEMA`, `CREATE TABLE`, `SELECT` and `MODIFY` on the schema.
-2. **schema** (default `watchdog`): the schema for the five Watchdog tables and the `findings_latest` view.
+2. **schema** (default `watchdog`): the schema for the five Watchdog tables and the `findings_latest` and `incidents` views.
 3. **region** (required): the cloud region of this workspace's metastore, for example `us-east-2`. `SELECT current_metastore()` usually shows it in the form `<cloud>:<region>:<id>`. It is recorded on every finding. A Watchdog sees only the workspaces in its own region, so run one per region.
 4. **auth mode** (default `current_workspace`):
    - `current_workspace`: the Jobs API scan checks only this workspace, as the identity running the notebooks or the job.
@@ -65,7 +65,7 @@ Show the operator:
 
 1. the completed `accelerator.local.yaml`;
 2. the capability matrix from step 2;
-3. what step 5 will create: the schema `<catalog>.<schema>` with five tables and the view `findings_latest`. With the bundle path, the `watchdog_phase_1` job, and the `watchdog_scan` and `watchdog_cleanup` jobs, which are created paused. With the demo target, four sample jobs as well. The dashboard is created only if the operator runs notebook 08.
+3. what step 5 will create: the schema `<catalog>.<schema>` with five tables and the views `findings_latest` and `incidents`. With the bundle path, the `watchdog_phase_1` job, and the `watchdog_scan` and `watchdog_cleanup` jobs, which are created paused. With the demo target, four sample jobs as well. The dashboard is created only if the operator runs notebook 08.
 
 **Wait for the operator to approve.** Nothing has been created yet. If they change a value, update `accelerator.local.yaml` and show it again.
 
@@ -100,13 +100,14 @@ Known degradations:
 
 ## Step 6. Verify
 
-Run `notebooks/07_validate_phase_1` with the same `catalog` and `schema`, and the `scan_id` from step 5 (or empty, to check each source's newest scan). Print its PASS and FAIL lines. All five should pass:
+Run `notebooks/07_validate_phase_1` with the same `catalog` and `schema`, and the `scan_id` from step 5 (or empty, to check each source's newest scan). Print its PASS and FAIL lines. All six should pass:
 
-1. the five tables and the `findings_latest` view exist (`monitored_jobs`, `job_dependencies`, `monitored_workspaces`, `monitored_job_environments`, `findings`, `findings_latest`);
+1. the five tables and the two views exist (`monitored_jobs`, `job_dependencies`, `monitored_workspaces`, `monitored_job_environments`, `findings`, `findings_latest`, `incidents`);
 2. the config has enabled jobs (switched on in at least one environment);
 3. both sources wrote findings;
 4. every enabled job has findings from each source;
-5. no findings key appears twice.
+5. no findings key appears twice;
+6. open incidents match the newest scans.
 
 Then show a sample of the results:
 
@@ -117,7 +118,7 @@ WHERE scan_id = '<scan_id>'
 ORDER BY status, job_name, check_id
 ```
 
-For the current status of every check, query `<catalog>.<schema>.findings_latest` with the same columns and no `scan_id` filter.
+For the current status of every check, query `<catalog>.<schema>.findings_latest` with the same columns and no `scan_id` filter. For each open problem, listed once with when it started, query `<catalog>.<schema>.incidents` with `WHERE state = 'OPEN'`.
 
 System tables run about an hour behind. A job created in the last hour shows `not_found` from the system tables while the Jobs API already reports it. Run notebook 05 again later to see it.
 
@@ -130,4 +131,4 @@ Point the operator at `teardown.sh`:
 ./teardown.sh -t demo --drop-schema --profile <profile>    # also the sample jobs and the Watchdog schema
 ```
 
-The schema is dropped only with `--drop-schema`, after the operator types its name. It drops the five tables and the `findings_latest` view. If the schema holds any other table, the script stops before changing anything. The script does not delete the dashboard from notebook 08: the operator moves it to the trash in the workspace. A service principal, secret scope and grants created for the Watchdog are not removed either; list them for the operator to remove by hand. If the script refuses, the [runbook's cleanup section](docs/phase-1-runbook.md#cleanup) has a manual fallback.
+The schema is dropped only with `--drop-schema`, after the operator types its name. It drops the five tables and the `findings_latest` and `incidents` views. If the schema holds any other table, the script stops before changing anything. The script does not delete the dashboard from notebook 08: the operator moves it to the trash in the workspace. A service principal, secret scope and grants created for the Watchdog are not removed either; list them for the operator to remove by hand. If the script refuses, the [runbook's cleanup section](docs/phase-1-runbook.md#cleanup) has a manual fallback.

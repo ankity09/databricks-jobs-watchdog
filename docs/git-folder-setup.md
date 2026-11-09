@@ -37,7 +37,7 @@ The notebooks find the repo root by looking upward from their own folder, so ope
 1. Open the Git folder and select the branch name (`main`) to open the Git dialog.
 2. Choose **Pull**.
 3. **Restart Python** in any notebook that is open: run `dbutils.library.restartPython()` in a cell, or detach and reattach the notebook. Python keeps `jobs_watchdog` loaded until it restarts, so without this the notebook keeps running the old code.
-4. **Run notebook 01 again** (`01_create_tables`). It adds any new columns to your existing tables, keeps every row, and creates the `findings_latest` view, or replaces it when its columns changed. Each scheduled run runs notebook 01 first, so the next scheduled run does this too. Run it yourself to check the upgrade right away.
+4. **Run notebook 01 again** (`01_create_tables`). It adds any new columns to your existing tables, keeps every row, and creates the `findings_latest` and `incidents` views, or replaces one when its columns or definition changed. Each scheduled run runs notebook 01 first, so the next scheduled run does this too. Run it yourself to check the upgrade right away.
 5. Read what changed in the repo's commit history on GitHub before you run a scan.
 
 ## Troubleshooting
@@ -49,4 +49,4 @@ The notebooks find the repo root by looking upward from their own folder, so ope
 | Old behavior after a pull | Restart Python (step 3 above). |
 | The pull reports a conflict | A tracked file was edited in the Git folder. Copy your edits somewhere safe, discard the local changes in the Git dialog, and pull again. |
 | `... is missing columns ...` or `... is missing or unreadable ... Run notebook 01 first.` | The tables were made by an older version of the repo. Run `01_create_tables`; it keeps your rows. A scheduled run does the same. |
-| `findings_latest ... is missing or out of date` | The view is missing, or its columns differ from `findings`. Run `01_create_tables`. If it fails on the view, the view's owner has to run it. |
+| `findings_latest ... is missing or out of date` (or `incidents ...`) | The view is missing, or it is not the current version. Run `01_create_tables`. If it fails on the view, the view's owner has to run it. |

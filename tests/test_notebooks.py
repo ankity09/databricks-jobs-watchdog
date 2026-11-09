@@ -65,3 +65,24 @@ def test_cleanup_notebook_runs_the_delete_file_after_checking_the_tables():
     assert text.index("require_current_tables(spark") < text.index("run_sql(spark, \"sql/maintenance/50_delete_old_findings.sql\"")
     assert "if s.retention_days == 0:" in text
     assert "Oldest observed_at left" in text
+
+
+@pytest.mark.parametrize("name, source", [("05_scan_system_tables.py", "SYSTEM_TABLES"),
+                                          ("06_scan_jobs_api.py", "JOBS_API")])
+def test_scans_print_what_they_wrote_and_how_their_problems_moved(name, source):
+    text = (NOTEBOOKS / name).read_text()
+    assert "from jobs_watchdog.incidents import scan_summary" in text
+    printed = f'print(scan_summary(spark, s.catalog, s.schema, "{source}", scan_id))'
+    assert text.count(printed) == 1
+    # after the merge, so the summary counts this scan's rows
+    merged = "write_findings(" if source == "JOBS_API" else "run_sql(spark, MERGE_SQL"
+    assert text.index(merged) < text.index(printed)
+    assert "Offered" not in text and "display(run_sql(spark, MERGE_SQL" not in text
+
+
+def test_validation_notebook_checks_open_incidents_against_the_newest_scans():
+    text = (NOTEBOOKS / "07_validate_phase_1.py").read_text()
+    assert ('incident_gaps = [row.asDict() for row in run_sql(spark, "sql/validate/43_open_incidents_match_latest.sql",'
+            ' **params).collect()]') in text
+    assert "results = phase_1_checks(tables, enabled_jobs, by_source, missing, duplicates, incident_gaps)" in text
+
