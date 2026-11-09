@@ -65,8 +65,10 @@ interface PortsProps {
 /** The in and out ports: small circles at the middle of the left and right sides, or of the top and bottom. */
 function Ports({ direction, highlight }: PortsProps) {
   const className = cn(
-    "size-2 min-h-0 min-w-0 rounded-full border-[1.5px] bg-card transition-colors duration-150 motion-reduce:transition-none",
+    "size-2 min-h-0 min-w-0 rounded-full border-[1.5px] bg-card transition-[border-color,opacity] duration-150 motion-reduce:transition-none",
     PORT[portEmphasis(highlight)],
+    // The ports sit outside the card, so they fade with it here.
+    (highlight === "dimmed" || highlight === "unavailable") && "opacity-35",
   );
   return (
     <>

@@ -8,18 +8,22 @@ import type { LayoutDirection } from "../../lib/graph";
 import { MapToolbar } from "./MapToolbar";
 
 const flow = vi.hoisted(() => ({
-  zoomIn: vi.fn(() => Promise.resolve(true)),
-  zoomOut: vi.fn(() => Promise.resolve(true)),
-  fitView: vi.fn(() => Promise.resolve(true)),
+  zoomTo: vi.fn((_zoom: number, _options?: { duration?: number }) => Promise.resolve(true)),
+  fitView: vi.fn((_options?: object) => Promise.resolve(true)),
   state: { transform: [0, 0, 0.83], minZoom: 0.2, maxZoom: 1.75 },
 }));
 
 // The toolbar on its own: React Flow's viewport helpers and store are stand-ins, so each button's call can be checked.
 vi.mock("@xyflow/react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@xyflow/react")>()),
-  useReactFlow: () => ({ zoomIn: flow.zoomIn, zoomOut: flow.zoomOut, fitView: flow.fitView }),
+  useReactFlow: () => ({ zoomTo: flow.zoomTo, fitView: flow.fitView }),
   useStore: (selector: (state: typeof flow.state) => unknown) => selector(flow.state),
 }));
+
+/** The zoom each zoomTo call asked for, to two decimals. */
+function zoomsAsked(): number[] {
+  return flow.zoomTo.mock.calls.map(([zoom]) => Math.round(zoom * 100) / 100);
+}
 
 const FIT: FitViewOptions = { padding: { top: "64px", right: "24px", bottom: "148px", left: "24px" }, maxZoom: 1.1 };
 
@@ -58,17 +62,32 @@ describe("MapToolbar", () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();
+    flow.zoomTo.mockImplementation(() => Promise.resolve(true));
     flow.state.transform = [0, 0, 0.83];
   });
 
-  it("shows the zoom as a percentage, and zooms out and in with a short animation", async () => {
+  it("shows the zoom as a percentage, and zooms out and in by a step with a short animation", async () => {
     const user = userEvent.setup();
     const { toolbar } = renderToolbar();
     expect(within(toolbar).getByText("83%")).toBeInTheDocument();
     await user.click(within(toolbar).getByRole("button", { name: "Zoom out" }));
-    expect(flow.zoomOut).toHaveBeenCalledWith({ duration: 200 });
+    expect(flow.zoomTo).toHaveBeenLastCalledWith(0.83 / 1.2, { duration: 200 });
     await user.click(within(toolbar).getByRole("button", { name: "Zoom in" }));
-    expect(flow.zoomIn).toHaveBeenCalledWith({ duration: 200 });
+    expect(flow.zoomTo).toHaveBeenLastCalledWith(0.83 * 1.2, { duration: 200 });
+  });
+
+  it("takes a step for each click while the last zoom is still moving, and stops at the limits", async () => {
+    const user = userEvent.setup();
+    // The glide never ends in this test: each click starts from where the last one is going.
+    flow.zoomTo.mockImplementation(() => new Promise<boolean>(() => undefined));
+    const { toolbar } = renderToolbar();
+    const zoomOut = within(toolbar).getByRole("button", { name: "Zoom out" });
+    await user.click(zoomOut);
+    await user.click(zoomOut);
+    await user.click(zoomOut);
+    expect(zoomsAsked()).toEqual([0.69, 0.58, 0.48]);
+    for (let i = 0; i < 6; i++) await user.click(zoomOut);
+    expect(zoomsAsked().at(-1)).toBe(0.2);
   });
 
   it("turns zoom out and zoom in off at the zoom limits", () => {
@@ -91,7 +110,7 @@ describe("MapToolbar", () => {
     const { toolbar } = renderToolbar();
     await user.click(within(toolbar).getByRole("button", { name: "Zoom in" }));
     await user.click(within(toolbar).getByRole("button", { name: "Fit the map to the screen" }));
-    expect(flow.zoomIn).toHaveBeenCalledWith({ duration: 0 });
+    expect(flow.zoomTo).toHaveBeenCalledWith(0.83 * 1.2, { duration: 0 });
     expect(flow.fitView).toHaveBeenCalledWith({ ...FIT, duration: 0 });
   });
 

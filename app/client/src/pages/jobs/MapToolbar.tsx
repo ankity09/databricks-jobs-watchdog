@@ -1,7 +1,7 @@
 import { Button, Switch, ToggleGroup, ToggleGroupItem, Tooltip, TooltipContent, TooltipTrigger } from "@databricks/appkit-ui/react";
 import { type FitViewOptions, useReactFlow, useStore } from "@xyflow/react";
 import { Maximize, Minus, MoveDown, MoveRight, Plus } from "lucide-react";
-import type { ReactElement } from "react";
+import { type ReactElement, useRef } from "react";
 import type { LayoutDirection } from "../../lib/graph";
 import { cn } from "../../lib/utils";
 import { viewDuration } from "./mapModel";
@@ -27,6 +27,9 @@ function Divider() {
 
 const ICON_BUTTON = "size-7 rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-40";
 
+/** One zoom step, the same as React Flow's own zoom in and zoom out. */
+const STEP = 1.2;
+
 export interface MapToolbarProps {
   direction: LayoutDirection;
   onDirectionChange: (direction: LayoutDirection) => void;
@@ -44,10 +47,19 @@ export interface MapToolbarProps {
  * inside the map's ReactFlowProvider.
  */
 export function MapToolbar({ direction, onDirectionChange, showServices, onShowServicesChange, fitOptions, className }: MapToolbarProps) {
-  const { zoomIn, zoomOut, fitView } = useReactFlow();
+  const { zoomTo, fitView } = useReactFlow();
   const zoom = useStore((state) => state.transform[2]);
   const minZoom = useStore((state) => state.minZoom);
   const maxZoom = useStore((state) => state.maxZoom);
+  // Where the zoom is gliding to: a click during the glide takes its step from there, so two quick clicks are two steps.
+  const target = useRef<number | null>(null);
+  const zoomBy = (factor: number) => {
+    const next = Math.min(maxZoom, Math.max(minZoom, (target.current ?? zoom) * factor));
+    target.current = next;
+    void zoomTo(next, { duration: viewDuration() }).then(() => {
+      if (target.current === next) target.current = null;
+    });
+  };
   return (
     <div
       role="group"
@@ -58,7 +70,7 @@ export function MapToolbar({ direction, onDirectionChange, showServices, onShowS
       )}
     >
       <ToolTip label="Zoom out">
-        <Button variant="ghost" size="icon-sm" aria-label="Zoom out" className={ICON_BUTTON} disabled={zoom <= minZoom} onClick={() => void zoomOut({ duration: viewDuration() })}>
+        <Button variant="ghost" size="icon-sm" aria-label="Zoom out" className={ICON_BUTTON} disabled={zoom <= minZoom} onClick={() => zoomBy(1 / STEP)}>
           <Minus aria-hidden="true" />
         </Button>
       </ToolTip>
@@ -67,7 +79,7 @@ export function MapToolbar({ direction, onDirectionChange, showServices, onShowS
         {Math.round(zoom * 100)}%
       </span>
       <ToolTip label="Zoom in">
-        <Button variant="ghost" size="icon-sm" aria-label="Zoom in" className={ICON_BUTTON} disabled={zoom >= maxZoom} onClick={() => void zoomIn({ duration: viewDuration() })}>
+        <Button variant="ghost" size="icon-sm" aria-label="Zoom in" className={ICON_BUTTON} disabled={zoom >= maxZoom} onClick={() => zoomBy(STEP)}>
           <Plus aria-hidden="true" />
         </Button>
       </ToolTip>
