@@ -43,6 +43,7 @@ from pyspark.sql import functions as F
 
 from jobs_watchdog.config_tables import read_config, read_workspaces
 from jobs_watchdog.findings import finalize_rows, new_scan_id, write_findings
+from jobs_watchdog.incidents import scan_summary
 from jobs_watchdog.jobs_api import collect_target, make_client, merge_not_found, unreachable_rows
 from jobs_watchdog.sqlfiles import run_sql
 from jobs_watchdog.upgrade import require_current_tables
@@ -93,10 +94,10 @@ rows = merge_not_found(rows, enabled)
 
 account_ids = {row["workspace_id"]: row["account_id"] for row in region_workspaces}
 account_id = account_ids.get(current_workspace_id) or next(iter(account_ids.values()), None)
-written = write_findings(
+write_findings(
     spark, finalize_rows(rows, scan_id, now, s.region, account_id, jobs, dependencies), s.catalog, s.schema
 )
-print(f"Offered {written} rows to findings (rows already there for this scan_id are skipped)")
+print(scan_summary(spark, s.catalog, s.schema, "JOBS_API", scan_id))
 
 # COMMAND ----------
 

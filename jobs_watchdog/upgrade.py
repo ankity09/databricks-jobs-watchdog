@@ -4,9 +4,11 @@ Notebook 01 runs this after the CREATE TABLE IF NOT EXISTS files. A table
 created by an older version keeps its rows; any column the DDL file now
 declares but the table lacks is added at the end. Columns added this way are
 always nullable. A view in sql/views is created when it is missing and
-replaced only when its columns no longer match the findings table or its
+replaced only when its columns no longer match the ones it should have or its
 definition version (watchdog.view_version) changed, because replacing a view
-needs ownership and moves it to whoever runs this.
+needs ownership and moves it to whoever runs this. findings_latest has every
+column of the findings table; incidents has the columns in
+jobs_watchdog.incidents.INCIDENT_COLUMNS.
 """
 
 import re
@@ -14,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from jobs_watchdog.identifiers import validate_identifier
+from jobs_watchdog.incidents import INCIDENT_COLUMNS
 from jobs_watchdog.sqlfiles import load_sql, repo_root
 
 TABLES = (
@@ -26,7 +29,8 @@ TABLES = (
 VIEW_TEMPLATES = tuple(sorted(str(p.relative_to(repo_root())) for p in (repo_root() / "sql" / "views").glob("*.sql")))
 _COLUMN = re.compile(r"^\s+(\w+)\s+([A-Z]+(?:<[A-Z, ]+>)?)(\s+NOT NULL)?(?:\s+COMMENT\s+'([^']*)')?,?\s*$")
 _VIEW_NAME = re.compile(r"CREATE OR REPLACE VIEW \{schema\}\.(\w+)")
-VIEW_BASE = "findings"  # every view selects the columns of this table
+VIEW_BASE = "findings"  # a view not in VIEW_COLUMNS has every column of this table
+VIEW_COLUMNS = {"incidents": INCIDENT_COLUMNS}  # views that select columns of their own
 
 
 def view_names():
@@ -65,7 +69,8 @@ def _view_is_current(spark, catalog, schema, relpath, name, base):
     existing = _columns(spark, f"{catalog}.{schema}.{name}")
     if existing is None:
         return None
-    return existing == base and _deployed_version(spark, catalog, schema, name) == view_version(relpath)
+    expected = list(VIEW_COLUMNS[name]) if name in VIEW_COLUMNS else base
+    return existing == expected and _deployed_version(spark, catalog, schema, name) == view_version(relpath)
 
 
 def _columns(spark, name):

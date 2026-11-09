@@ -38,6 +38,7 @@ from pyspark.sql import functions as F
 
 from jobs_watchdog.dependencies import register_affected_jobs
 from jobs_watchdog.findings import MERGE_SQL, NEW_FINDINGS_VIEW, new_scan_id
+from jobs_watchdog.incidents import scan_summary
 from jobs_watchdog.sqlfiles import run_sql
 from jobs_watchdog.upgrade import require_current_tables
 from jobs_watchdog.workspaces import register_workspace_names
@@ -64,7 +65,8 @@ new_rows = run_sql(
     pipeline_url_parameter=s.pipeline_url_parameter,
 )
 new_rows.createOrReplaceTempView(NEW_FINDINGS_VIEW)
-display(run_sql(spark, MERGE_SQL, catalog=s.catalog, schema=s.schema))
+run_sql(spark, MERGE_SQL, catalog=s.catalog, schema=s.schema)
+print(scan_summary(spark, s.catalog, s.schema, "SYSTEM_TABLES", scan_id))
 
 # COMMAND ----------
 

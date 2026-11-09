@@ -1,6 +1,7 @@
 import pytest
 
 from jobs_watchdog.findings import FINDINGS_COLUMNS, FINDINGS_SCHEMA
+from jobs_watchdog.incidents import INCIDENT_COLUMNS
 from jobs_watchdog.upgrade import (
     TABLES,
     VIEW_TEMPLATES,
@@ -11,6 +12,7 @@ from jobs_watchdog.upgrade import (
     missing_columns,
     render_view,
     upgrade_tables,
+    view_names,
 )
 from jobs_watchdog.sqlfiles import parameters
 from tests.helpers import for_parsing
@@ -123,31 +125,56 @@ def test_render_view_rejects_bad_names():
         render_view(VIEW_TEMPLATES[0], "main;drop", "watchdog")
 
 
+def current_views(**changes):
+    """Tables and view versions for a schema where both views are current, with changes applied."""
+    from jobs_watchdog.upgrade import view_version
+
+    tables = {"main.watchdog.findings": list(FINDINGS_COLUMNS),
+              "main.watchdog.findings_latest": list(FINDINGS_COLUMNS),
+              "main.watchdog.incidents": list(INCIDENT_COLUMNS)}
+    versions = {f"main.watchdog.{name}": view_version(relpath) for relpath, name in zip(VIEW_TEMPLATES, view_names())}
+    for name, columns in changes.items():
+        if columns is None:
+            del tables[f"main.watchdog.{name}"]
+        else:
+            tables[f"main.watchdog.{name}"] = columns
+    return tables, versions
+
+
 def test_missing_views_are_created():
     spark = FakeSpark({"main.watchdog.findings": list(FINDINGS_COLUMNS)})
-    assert create_views(spark, "main", "watchdog") == [("findings_latest", "created")]
+    assert create_views(spark, "main", "watchdog") == [("findings_latest", "created"), ("incidents", "created")]
     assert spark.calls[0][0].lstrip().startswith("--") and "CREATE OR REPLACE VIEW `main`.`watchdog`.findings_latest" in spark.calls[0][0]
-    assert spark.calls[0][1] is None
+    assert "CREATE OR REPLACE VIEW `main`.`watchdog`.incidents" in spark.calls[1][0]
+    assert spark.calls[0][1] is None and spark.calls[1][1] is None
 
 
 def test_current_views_are_left_alone_so_owners_and_grants_stay():
-    from jobs_watchdog.upgrade import view_version
-
-    spark = FakeSpark({"main.watchdog.findings": list(FINDINGS_COLUMNS),
-                       "main.watchdog.findings_latest": [c.upper() for c in FINDINGS_COLUMNS]},
-                      {"main.watchdog.findings_latest": view_version(VIEW_TEMPLATES[0])})
-    assert create_views(spark, "main", "watchdog") == [("findings_latest", "current")]
+    tables, versions = current_views(findings_latest=[c.upper() for c in FINDINGS_COLUMNS])
+    spark = FakeSpark(tables, versions)
+    assert create_views(spark, "main", "watchdog") == [("findings_latest", "current"), ("incidents", "current")]
     assert spark.calls == []
 
 
 def test_a_view_with_an_older_definition_is_replaced_even_when_columns_match():
-    spark = FakeSpark({"main.watchdog.findings": list(FINDINGS_COLUMNS),
-                       "main.watchdog.findings_latest": list(FINDINGS_COLUMNS)},
-                      {"main.watchdog.findings_latest": "1"})
-    assert create_views(spark, "main", "watchdog") == [("findings_latest", "replaced")]
-    no_version = FakeSpark({"main.watchdog.findings": list(FINDINGS_COLUMNS),
-                            "main.watchdog.findings_latest": list(FINDINGS_COLUMNS)})
-    assert create_views(no_version, "main", "watchdog") == [("findings_latest", "replaced")]
+    tables, versions = current_views()
+    spark = FakeSpark(tables, dict(versions, **{"main.watchdog.findings_latest": "1"}))
+    assert create_views(spark, "main", "watchdog") == [("findings_latest", "replaced"), ("incidents", "current")]
+    no_version = FakeSpark(tables, {"main.watchdog.incidents": versions["main.watchdog.incidents"]})
+    assert create_views(no_version, "main", "watchdog") == [("findings_latest", "replaced"), ("incidents", "current")]
+
+
+def test_the_incidents_view_has_its_own_columns_not_the_findings_columns():
+    tables, versions = current_views(incidents=list(FINDINGS_COLUMNS))
+    spark = FakeSpark(tables, versions)
+    assert create_views(spark, "main", "watchdog") == [("findings_latest", "current"), ("incidents", "replaced")]
+    assert "CREATE OR REPLACE VIEW `main`.`watchdog`.incidents" in spark.calls[0][0]
+    # new findings columns do not make the incidents view out of date
+    tables, versions = current_views()
+    spark = FakeSpark(dict(tables, **{"main.watchdog.findings": list(FINDINGS_COLUMNS) + ["later_column"],
+                                      "main.watchdog.findings_latest": list(FINDINGS_COLUMNS) + ["later_column"]}),
+                      versions)
+    assert create_views(spark, "main", "watchdog") == [("findings_latest", "current"), ("incidents", "current")]
 
 
 def test_every_view_template_declares_its_version():
@@ -158,21 +185,23 @@ def test_every_view_template_declares_its_version():
 
 
 def test_views_with_old_columns_are_replaced():
-    spark = FakeSpark({"main.watchdog.findings": list(FINDINGS_COLUMNS),
-                       "main.watchdog.findings_latest": list(FINDINGS_COLUMNS[:19])})
-    assert create_views(spark, "main", "watchdog") == [("findings_latest", "replaced")]
+    tables, versions = current_views(findings_latest=list(FINDINGS_COLUMNS[:19]))
+    spark = FakeSpark(tables, versions)
+    assert create_views(spark, "main", "watchdog") == [("findings_latest", "replaced"), ("incidents", "current")]
     assert len(spark.calls) == 1
+
+
+def complete_schema():
+    """Every table with its current columns, and both views current."""
+    tables, versions = current_views()
+    tables.update({f"main.watchdog.{table}": [c.name for c in ddl_columns(path)] for table, path in TABLES})
+    return tables, versions
 
 
 def test_require_current_tables_passes_when_nothing_is_missing():
     from jobs_watchdog.upgrade import require_current_tables
 
-    complete = {f"main.watchdog.{table}": [c.name for c in ddl_columns(path)] for table, path in TABLES}
-    complete["main.watchdog.findings_latest"] = list(FINDINGS_COLUMNS)
-    from jobs_watchdog.upgrade import view_version
-
-    require_current_tables(FakeSpark(complete, {"main.watchdog.findings_latest": view_version(VIEW_TEMPLATES[0])}),
-                           "main", "watchdog")
+    require_current_tables(FakeSpark(*complete_schema()), "main", "watchdog")
 
 
 def test_require_current_tables_says_to_run_notebook_01():
@@ -198,21 +227,30 @@ def test_require_current_tables_names_a_missing_table():
 def test_require_current_tables_also_checks_the_view():
     from jobs_watchdog.upgrade import require_current_tables
 
-    complete = {f"main.watchdog.{table}": [c.name for c in ddl_columns(path)] for table, path in TABLES}
+    complete, versions = complete_schema()
     stale_view = dict(complete, **{"main.watchdog.findings_latest": list(FINDINGS_COLUMNS[:19])})
     with pytest.raises(RuntimeError, match="findings_latest.*notebook 01"):
-        require_current_tables(FakeSpark(stale_view), "main", "watchdog")
-    from jobs_watchdog.upgrade import view_version
-
-    current = dict(complete, **{"main.watchdog.findings_latest": list(FINDINGS_COLUMNS)})
-    versions = {"main.watchdog.findings_latest": view_version(VIEW_TEMPLATES[0])}
-    require_current_tables(FakeSpark(current, versions), "main", "watchdog")
+        require_current_tables(FakeSpark(stale_view, versions), "main", "watchdog")
+    require_current_tables(FakeSpark(complete, versions), "main", "watchdog")
     with pytest.raises(RuntimeError, match="findings_latest.*notebook 01"):
-        require_current_tables(FakeSpark(current, {"main.watchdog.findings_latest": "1"}), "main", "watchdog")
+        require_current_tables(FakeSpark(complete, dict(versions, **{"main.watchdog.findings_latest": "0"})),
+                               "main", "watchdog")
+
+
+def test_the_scans_refuse_to_run_until_notebook_01_has_created_the_incidents_view():
+    from jobs_watchdog.upgrade import require_current_tables
+
+    complete, versions = complete_schema()
+    without = {name: columns for name, columns in complete.items() if name != "main.watchdog.incidents"}
+    with pytest.raises(RuntimeError, match="incidents is missing or out of date: run notebook 01 once"):
+        require_current_tables(FakeSpark(without, versions), "main", "watchdog")
+    wrong = dict(complete, **{"main.watchdog.incidents": list(FINDINGS_COLUMNS)})
+    with pytest.raises(RuntimeError, match="incidents.*notebook 01"):
+        require_current_tables(FakeSpark(wrong, versions), "main", "watchdog")
 
 
 def test_watchdog_objects_lists_every_table_and_view():
     from jobs_watchdog.upgrade import watchdog_objects
 
     assert watchdog_objects() == ("monitored_jobs", "job_dependencies", "findings", "monitored_workspaces",
-                                  "monitored_job_environments", "findings_latest")
+                                  "monitored_job_environments", "findings_latest", "incidents")

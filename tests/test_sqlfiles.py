@@ -27,9 +27,11 @@ EXPECTED_FILES = [
     "sql/scan/20_resolve_monitored_jobs.sql",
     "sql/scan/21_system_table_findings.sql",
     "sql/scan/30_merge_findings.sql",
+    "sql/scan/31_scan_summary.sql",
     "sql/validate/40_findings_by_source.sql",
     "sql/validate/41_duplicate_keys.sql",
     "sql/validate/42_enabled_jobs_without_findings.sql",
+    "sql/validate/43_open_incidents_match_latest.sql",
     "sql/maintenance/50_delete_old_findings.sql",
 ]
 
@@ -311,3 +313,19 @@ def test_resolve_query_shows_how_each_job_matched():
 def test_config_loads_carry_job_ids():
     assert "job_ids" in load_sql("sql/config/01_load_monitored_jobs.sql")
     assert "job_ids" in load_sql("sql/config/04_load_monitored_job_environments.sql")
+
+
+def test_incident_validation_compares_findings_latest_with_open_incidents():
+    text = load_sql("sql/validate/43_open_incidents_match_latest.sql")
+    code = " ".join(text.split())
+    assert parameters(text) == {"catalog", "schema"}
+    assert "IDENTIFIER(:catalog || '.' || :schema || '.findings_latest')" in text
+    assert "IDENTIFIER(:catalog || '.' || :schema || '.incidents')" in text
+    assert "WHERE state = 'OPEN'" in code
+    # keys can have no workspace or job ID, so every key comparison is NULL-safe
+    for column in ("source", "workspace_id", "job_id", "job_name", "check_id"):
+        assert f"i.{column} <=> l.{column}" in code, column
+    assert "l.status IN ('FAILED', 'WARNING')" in code
+    # an OPEN incident whose newest scan row is UNKNOWN is current: UNKNOWN does not end it
+    assert "l.status = 'UNKNOWN'" in code
+

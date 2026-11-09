@@ -1,14 +1,17 @@
 """The Phase 1 checks that notebook 07 prints as PASS or FAIL lines."""
 
 SOURCES = ("SYSTEM_TABLES", "JOBS_API")
+SHOWN_GAPS = 5
 
 
-def phase_1_checks(tables, enabled_jobs, by_source, missing, duplicates):
+def phase_1_checks(tables, enabled_jobs, by_source, missing, duplicates, incident_gaps):
     """Return (check, passed, detail) tuples.
 
     tables: {table name: exists}. enabled_jobs: monitored jobs switched on in at
     least one environment.
     by_source, missing and duplicates: rows of sql/validate/40, 42 and 41.
+    incident_gaps: rows of sql/validate/43, where the incidents view and
+    findings_latest disagree.
     """
     absent = sorted(name for name, exists in tables.items() if not exists)
     totals = {}
@@ -26,7 +29,16 @@ def phase_1_checks(tables, enabled_jobs, by_source, missing, duplicates):
         ("every enabled job has findings", not missing,
          ", ".join(f"{row['job_name']} ({row['source']})" for row in missing) if missing else "yes"),
         ("no duplicate keys", not duplicates, f"{len(duplicates)} duplicated keys" if duplicates else "none"),
+        ("open incidents match the newest scans", not incident_gaps, _gaps(incident_gaps) if incident_gaps else "yes"),
     ]
+
+
+def _gaps(rows):
+    """The first few rows of sql/validate/43, one per problem."""
+    shown = "; ".join(f"{row['job_name']} {row['check_id']} ({row['source']}): {row['problem']}"
+                      for row in rows[:SHOWN_GAPS])
+    more = len(rows) - SHOWN_GAPS
+    return shown + (f"; and {more} more" if more > 0 else "")
 
 
 def service_principal_verdict(results):
