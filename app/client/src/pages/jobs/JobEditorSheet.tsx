@@ -29,13 +29,15 @@ import {
   Switch,
   Textarea,
 } from "@databricks/appkit-ui/react";
-import { CircleAlert, Info } from "lucide-react";
+import { CircleAlert, History, Info } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router";
 import { deepEqual } from "../../../../shared/joblist/apply";
 import type { JobEntry, JobListDocument, RuleIssue } from "../../../../shared/joblist/types";
 import { useDebouncedCheck } from "../../hooks/useDebouncedCheck";
 import { type ReloadJobList, type SaveOutcome, useOpenedVersion } from "../../hooks/useJobList";
 import { toApiError } from "../../lib/api";
+import { jobHistoryPath } from "../../lib/changeFilters";
 import { draftIssues, jobIssues } from "../../lib/draft";
 import {
   blocksDefault,
@@ -161,6 +163,21 @@ export function JobEditorSheet({
               ? "Change how the Watchdog checks this job. An empty field uses the default."
               : "Add a job for the Watchdog to check. An empty field uses the default. Problems show next to each field as you type."}
           </SheetDescription>
+          {mode === "edit" ? (
+            <Link
+              to={jobHistoryPath(name)}
+              className="inline-flex w-fit items-center gap-1.5 rounded-xs text-[13px] text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={(event) => {
+                // Leaving the page would drop edits that are not saved: the history opens in a new tab instead.
+                if (!dirty.current) return;
+                event.preventDefault();
+                window.open(jobHistoryPath(name), "_blank", "noopener");
+              }}
+            >
+              <History className="size-3.5" aria-hidden="true" />
+              View history
+            </Link>
+          ) : null}
         </SheetHeader>
         {/* SheetContent mounts on open and unmounts after it closes, so each opening starts a fresh form. */}
         <EditorForm

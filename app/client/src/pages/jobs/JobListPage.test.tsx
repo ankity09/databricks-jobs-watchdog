@@ -201,6 +201,15 @@ describe("JobListPage", () => {
     expect(within(row("orders_ingest")).getByText("runtime 120 min")).toBeInTheDocument();
   });
 
+  it("links each job to its history", async () => {
+    setClock("2026-11-05T11:30:00Z");
+    mockApi(SAVED);
+    renderPage();
+    const link = await screen.findByRole("link", { name: "View history of orders_ingest" });
+    expect(link).toHaveAttribute("href", "/jobs/changes?job=orders_ingest");
+    expect(screen.getByRole("link", { name: "View history of orders_enrich" })).toHaveAttribute("href", "/jobs/changes?job=orders_enrich");
+  });
+
   it("filters the jobs by name", async () => {
     setClock("2026-11-05T11:30:00Z");
     mockApi(SAVED);

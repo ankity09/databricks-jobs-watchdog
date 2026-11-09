@@ -73,6 +73,17 @@ export interface VersionSummary {
   version: number; savedAt: string; savedBy: string;
   changeKind: ChangeKind; changeTarget: string | null; summary: string;
 }
+/** The versions that match the filters, newest first, and how many match in all (ignoring `before` and `limit`). */
+export interface VersionList { versions: VersionSummary[]; total: number }
+/** What the change log can be filtered by, counted over every version. */
+export interface VersionFacets {
+  people: { email: string; count: number }[];
+  jobs: { name: string; count: number }[];
+  kinds: { kind: ChangeKind; count: number }[];
+  firstSavedAt: string | null;
+  lastSavedAt: string | null;
+}
+export const CHANGE_KINDS: readonly ChangeKind[] = ["import", "create", "update", "delete", "restore"];
 export interface VersionDetail extends VersionSummary { document: JobListDocument }
 export interface JobListState {
   version: number | null; savedAt: string | null; savedBy: string | null; document: JobListDocument;

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JobEntry, JobListDocument } from "../../../../shared/joblist/types";
 import type { SaveOutcome } from "../../hooks/useJobList";
@@ -39,6 +40,7 @@ function renderSheet(props: Partial<JobEditorSheetProps> = {}) {
   const onOpenChange = vi.fn<(open: boolean) => void>();
   const onReload = vi.fn<() => Promise<ApiError | null>>(() => Promise.resolve(null));
   const sheet = (more: Partial<JobEditorSheetProps>) => (
+    <MemoryRouter>
     <JobEditorSheet
       open
       onOpenChange={onOpenChange}
@@ -51,6 +53,7 @@ function renderSheet(props: Partial<JobEditorSheetProps> = {}) {
       {...props}
       {...more}
     />
+    </MemoryRouter>
   );
   const view = render(sheet({}));
   return { onSave, onOpenChange, onReload, rerender: (more: Partial<JobEditorSheetProps>) => view.rerender(sheet(more)) };
@@ -59,6 +62,26 @@ function renderSheet(props: Partial<JobEditorSheetProps> = {}) {
 const field = (label: string) => screen.getByLabelText(label);
 
 describe("JobEditorSheet", () => {
+  it("links to the job's history in edit mode, and not when adding a job", () => {
+    renderSheet();
+    expect(screen.getByRole("link", { name: "View history" })).toHaveAttribute("href", "/jobs/changes?job=orders_enrich");
+  });
+
+  it("has no history link for a new job", () => {
+    renderSheet({ mode: "create" });
+    expect(screen.queryByRole("link", { name: "View history" })).not.toBeInTheDocument();
+  });
+
+  it("opens the history in a new tab when the form has unsaved changes, so the edits stay", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    renderSheet();
+    await userEvent.type(field("Owner"), "-eu");
+    await userEvent.click(screen.getByRole("link", { name: "View history" }));
+    expect(open).toHaveBeenCalledWith("/jobs/changes?job=orders_enrich", "_blank", "noopener");
+    expect(field("Owner")).toHaveValue("ingestion-team-eu");
+    open.mockRestore();
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });

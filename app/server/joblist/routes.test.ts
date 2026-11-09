@@ -1,6 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
+import type { ChangeKind } from "../../shared/joblist/types";
 import { MemoryVersionRepo } from "./memory-repo";
 import { createJobListRouter, mountJobList } from "./routes";
 import { createJobListStore, type JobListStore } from "./store";
@@ -58,7 +59,7 @@ describe("job-list routes", () => {
     const listed = async (query: string) => {
       const res = await request(a).get(`/api/job-list/versions${query}`);
       expect(res.status).toBe(200);
-      expect(Object.keys(res.body as object)).toEqual(["versions"]);
+      expect(Object.keys(res.body as object)).toEqual(["versions", "total"]);
       return body(res).versions.map((v) => v.version);
     };
     expect(await listed("?limit=2")).toEqual([5, 4]);
@@ -68,6 +69,111 @@ describe("job-list routes", () => {
     expect(await listed("?before=99")).toEqual([5, 4, 3, 2, 1]);
     expect((await request(a).get("/api/job-list/versions?before=0")).status).toBe(400);
     expect((await request(a).get("/api/job-list/versions?before=abc")).status).toBe(400);
+  });
+
+  describe("change log filters", () => {
+    const filtered = async (a: express.Express, query: string) => {
+      const res = await request(a).get(`/api/job-list/versions${query}`);
+      return { status: res.status, versions: body(res).versions.map((v) => v.version), total: (res.body as { total: number }).total, res };
+    };
+    const seed = () => {
+      const a = express();
+      const repo = new MemoryVersionRepo();
+      a.use("/api/job-list", createJobListRouter(createJobListStore(repo)));
+      const rows: [string, string, ChangeKind, string | null, string][] = [
+        ["2026-03-01T10:00:00Z", "a@example.com", "create", "job:orders_ingest", "Added job orders_ingest"],
+        ["2026-03-02T23:59:59Z", "b@example.com", "update", "job:orders", "Changed 100% of orders"],
+        ["2026-03-03T00:00:00Z", "a@example.com", "delete", "job:orders_ingest", "Deleted job orders_ingest"],
+        ["2026-03-04T12:00:00Z", "b@example.com", "restore", null, "Restored version 1"],
+      ];
+      rows.forEach(([savedAt, savedBy, changeKind, changeTarget, summary], i) => {
+        repo.rows.push({ version: i + 1, document: { jobs: [] }, savedBy, savedAt: new Date(savedAt), changeKind, changeTarget, summary });
+      });
+      return a;
+    };
+
+    it("answers a total with and without filters, and pages inside the filtered set", async () => {
+      const a = seed();
+      expect(await filtered(a, "")).toMatchObject({ status: 200, versions: [4, 3, 2, 1], total: 4 });
+      expect(await filtered(a, "?person=a@example.com&limit=1")).toMatchObject({ versions: [3], total: 2 });
+      expect(await filtered(a, "?person=a@example.com&limit=1&before=3")).toMatchObject({ versions: [1], total: 2 });
+      expect(await filtered(a, "?kind=create,update")).toMatchObject({ versions: [2, 1], total: 2 });
+      expect(await filtered(a, "?job=orders")).toMatchObject({ versions: [2], total: 1 });
+      expect(await filtered(a, "?job=orders_ingest")).toMatchObject({ versions: [3, 1], total: 2 });
+      expect(await filtered(a, "?q=100%25")).toMatchObject({ versions: [2], total: 1 });
+      expect(await filtered(a, "?q=nothing")).toMatchObject({ versions: [], total: 0 });
+    });
+
+    it("reads a plain date as whole days in UTC, and a date-time as an instant", async () => {
+      const a = seed();
+      // 2026-03-02 to 2026-03-03 covers 23:59:59 on the 2nd and 00:00 on the 3rd.
+      expect((await filtered(a, "?from=2026-03-02&to=2026-03-03")).versions).toEqual([3, 2]);
+      expect((await filtered(a, "?from=2026-03-03&to=2026-03-03")).versions).toEqual([3]);
+      expect((await filtered(a, "?from=2026-03-02&to=2026-03-02")).versions).toEqual([2]);
+      expect((await filtered(a, "?from=2026-03-03T00:00:00Z")).versions).toEqual([4, 3]);
+      expect((await filtered(a, "?to=2026-03-02T23:59:59Z")).versions).toEqual([2, 1]);
+      expect((await filtered(a, "?to=2026-03-02T23:59:58Z")).versions).toEqual([1]);
+      expect((await filtered(a, "?from=2026-03-03T01:00:00%2B01:00")).versions).toEqual([4, 3]);
+      expect((await filtered(a, "?from=2026-03-02T00:00:00&to=2026-03-02T23:59:59")).versions).toEqual([2]);
+    });
+
+    it("rejects bad parameters with a plain 400", async () => {
+      const a = seed();
+      for (const query of [
+        "?kind=create,nope", "?kind=Create", "?from=yesterday", "?from=2026-13-01", "?from=2026-02-30", "?to=2026-03-01T25:00:00Z",
+        "?from=2026-03-05&to=2026-03-01", "?from=2026-03-05T10:00:00Z&to=2026-03-05T09:00:00Z", `?q=${"x".repeat(201)}`,
+        "?person=a&person=b",
+      ]) {
+        const res = await request(a).get(`/api/job-list/versions${query}`);
+        expect([query, res.status]).toEqual([query, 400]);
+        expect(Object.keys(res.body as object)).toEqual(["error", "message"]);
+        expect(body(res).error).toBe("bad_request");
+      }
+      const kind = await request(a).get("/api/job-list/versions?kind=create,nope");
+      expect(body(kind).message).toBe('kind has "nope", which is not one of import, create, update, delete, restore.');
+      const range = await request(a).get("/api/job-list/versions?from=2026-03-05&to=2026-03-01");
+      expect(body(range).message).toMatch(/from.*after.*to/i);
+      expect((await filtered(a, `?q=${"x".repeat(200)}`)).status).toBe(200);
+    });
+
+    it("rejects a year before 1000 and a NUL character, in a plain sentence", async () => {
+      const a = seed();
+      for (const [query, expected] of [
+        ["?from=0002-11-05", "from must be a date in the year 1000 or later."],
+        ["?to=0020-11-05", "to must be a date in the year 1000 or later."],
+        ["?to=0202-11-05T10:00:00Z", "to must be a date in the year 1000 or later."],
+        ["?q=a%00b", "q must not contain a NUL character."],
+        ["?person=a%00b", "person must not contain a NUL character."],
+        ["?job=a%00b", "job must not contain a NUL character."],
+      ] as const) {
+        const res = await request(a).get(`/api/job-list/versions${query}`);
+        expect([query, res.status, body(res).message]).toEqual([query, 400, expected]);
+      }
+      expect((await request(a).get("/api/job-list/versions?from=1000-01-01")).status).toBe(200);
+    });
+
+    it("treats empty filters as not set", async () => {
+      const a = seed();
+      expect(await filtered(a, "?person=&kind=&job=&from=&to=&q=")).toMatchObject({ status: 200, total: 4 });
+    });
+
+    it("lists the facets over every version", async () => {
+      const a = seed();
+      const res = await request(a).get("/api/job-list/versions/facets");
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        people: [{ email: "a@example.com", count: 2 }, { email: "b@example.com", count: 2 }],
+        jobs: [{ name: "orders", count: 1 }, { name: "orders_ingest", count: 2 }],
+        kinds: [{ kind: "create", count: 1 }, { kind: "update", count: 1 }, { kind: "delete", count: 1 }, { kind: "restore", count: 1 }],
+        firstSavedAt: "2026-03-01T10:00:00.000Z",
+        lastSavedAt: "2026-03-04T12:00:00.000Z",
+      });
+    });
+
+    it("answers empty facets before anything is saved", async () => {
+      const res = await request(app()).get("/api/job-list/versions/facets");
+      expect(res.body).toEqual({ people: [], jobs: [], kinds: [], firstSavedAt: null, lastSavedAt: null });
+    });
   });
 
   it("returns 409 with the latest version on a conflict", async () => {

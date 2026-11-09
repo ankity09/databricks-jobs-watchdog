@@ -8,9 +8,12 @@ import type {
   JobListState,
   SaveResult,
   VersionDetail,
+  VersionFacets,
+  VersionList,
   VersionSummary,
 } from "../../../shared/joblist/types";
 import { apiFetch } from "./api";
+import { NO_FILTERS, type ChangeFilters, writeFilters } from "./changeFilters";
 
 /**
  * One function per job list route the pages call (see the route contract).
@@ -157,11 +160,30 @@ export function getJobList(): Promise<JobListState> {
   return apiFetch("/api/job-list", JobListStateSchema);
 }
 
-/** GET /api/job-list/versions: the newest `limit` versions, newest first; with `before`, the ones older than that version. */
-export async function listVersions(limit = 50, before?: number): Promise<VersionSummary[]> {
-  const query = before === undefined ? `limit=${limit}` : `limit=${limit}&before=${before}`;
-  const result = await apiFetch(`/api/job-list/versions?${query}`, z.object({ versions: z.array(VersionSummarySchema) }));
-  return result.versions;
+const VersionListSchema = z.object({ versions: z.array(VersionSummarySchema), total: z.number() }) satisfies z.ZodType<VersionList>;
+
+const VersionFacetsSchema = z.object({
+  people: z.array(z.object({ email: z.string(), count: z.number() })),
+  jobs: z.array(z.object({ name: z.string(), count: z.number() })),
+  kinds: z.array(z.object({ kind: ChangeKindSchema, count: z.number() })),
+  firstSavedAt: z.string().nullable(),
+  lastSavedAt: z.string().nullable(),
+}) satisfies z.ZodType<VersionFacets>;
+
+/**
+ * GET /api/job-list/versions: the newest `limit` versions that match the filters, newest first; with `before`, the
+ * ones older than that version. `total` is every match, whatever `limit` and `before` are.
+ */
+export function listVersions(limit = 50, before?: number, filters: ChangeFilters = NO_FILTERS): Promise<VersionList> {
+  const query = writeFilters(filters);
+  query.set("limit", String(limit));
+  if (before !== undefined) query.set("before", String(before));
+  return apiFetch(`/api/job-list/versions?${query.toString()}`, VersionListSchema);
+}
+
+/** GET /api/job-list/versions/facets: the people, jobs and kinds found over every version, with counts. */
+export function getVersionFacets(): Promise<VersionFacets> {
+  return apiFetch("/api/job-list/versions/facets", VersionFacetsSchema);
 }
 
 /** GET /api/job-list/versions/:version (404 when there is no such version). */
