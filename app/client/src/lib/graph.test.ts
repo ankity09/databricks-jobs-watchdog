@@ -148,6 +148,12 @@ describe("buildGraph layout options", () => {
     for (const n of nodes) expect([n.width, n.height]).toEqual(n.kind === "job" ? [248, 68] : [SERVICE_SIZE.width, SERVICE_SIZE.height]);
   });
 
+  it("leaves 56 pixels between ranks left to right, room for a link's bend and its child tag", () => {
+    const { nodes, edges } = buildGraph(EXAMPLE_DOCUMENT, STATUSES);
+    const gaps = edges.map((edge) => node(nodes, edge.target).position.x - (node(nodes, edge.source).position.x + node(nodes, edge.source).width));
+    expect(Math.min(...gaps)).toBe(56);
+  });
+
   it("lays the links out top to bottom when asked: every edge points down", () => {
     const { nodes, edges } = buildGraph(EXAMPLE_DOCUMENT, STATUSES, { direction: "TB" });
     for (const edge of edges) {

@@ -6,6 +6,7 @@ import type { EdgeLine, LayoutDirection } from "../../lib/graph";
 import { type Status, statusTone } from "../../lib/status";
 import { cn } from "../../lib/utils";
 import { TONE_CHIP } from "../monitoring/format";
+import { SCHEDULE_TYPES } from "../../lib/job-form";
 import { SCHEDULE_LABEL } from "./mapFacts";
 import {
   ARROW,
@@ -30,10 +31,11 @@ const FRAME: Record<NodeHighlight, string> = {
   selected: "border-primary ring-1 ring-primary shadow-[0_0_0_4px_rgb(255_54_33/0.12)]",
   downstream: "border-primary/50 hover:border-primary/75",
   upstream: "border-foreground/35 hover:border-foreground/50",
-  dimmed: "border-border opacity-35",
+  // Faded, except while it has keyboard focus: the focus ring must not fade with the card.
+  dimmed: "border-border opacity-35 focus-visible:opacity-100",
   source: "border-primary ring-1 ring-primary shadow-[0_0_0_4px_rgb(255_54_33/0.12)]",
   candidate: "border-border hover:border-primary hover:ring-1 hover:ring-primary/40",
-  unavailable: "cursor-not-allowed border-border opacity-35",
+  unavailable: "cursor-not-allowed border-border opacity-35 focus-visible:opacity-100",
 };
 
 /** What every card shares: white, a 1 pixel border, a light shadow that lifts on hover, and the focus outline. */
@@ -208,7 +210,8 @@ export function JobNode({ data }: NodeProps<JobFlowNode>) {
             <span
               data-part="affected"
               aria-hidden="true"
-              className="absolute -top-2.5 right-3 rounded-full bg-primary px-1.5 text-[10px] leading-[18px] font-medium text-primary-foreground shadow-sm"
+              // The accent as the outline, the text in the foreground color: 10 px white on #FF3621 is only 3.6:1.
+              className="absolute -top-2.5 right-3 rounded-full border border-primary bg-card px-1.5 text-[10px] leading-4 font-medium text-foreground shadow-sm"
             >
               Affected
             </span>
@@ -267,12 +270,16 @@ const STROKE: Record<ArrowTone, string> = {
   dark: "stroke-foreground/70 [stroke-width:2]",
 };
 
+/** The child tag's outline and text: the line's color as the outline, and readable text (10 px #FF3621 on white is only 3.6:1). */
 const TAG_TONE: Record<ArrowTone, { box: string; text: string }> = {
   neutral: { box: "stroke-input", text: "fill-muted-foreground" },
   light: { box: "stroke-input", text: "fill-muted-foreground" },
-  accent: { box: "stroke-primary/50", text: "fill-primary" },
+  accent: { box: "stroke-primary", text: "fill-foreground" },
   dark: { box: "stroke-foreground/35", text: "fill-foreground" },
 };
+
+/** The child tag's width: "child" at 10 px with 4 pixels on each side, so it fits the 56 pixel gap between ranks. */
+const TAG_WIDTH = 30;
 
 interface EdgeTagProps {
   x: number;
@@ -290,7 +297,7 @@ function EdgeTag({ x, y, tone, dimmed }: EdgeTagProps) {
       data-part="edge-tag"
       className={cn("pointer-events-none transition-opacity duration-150 motion-reduce:transition-none", dimmed && "opacity-35", "group-focus-visible:opacity-100")}
     >
-      <rect x={-17} y={-8} width={34} height={16} rx={8} className={cn("fill-card [stroke-width:1]", TAG_TONE[tone].box)} />
+      <rect x={-TAG_WIDTH / 2} y={-8} width={TAG_WIDTH} height={16} rx={8} className={cn("fill-card [stroke-width:1]", TAG_TONE[tone].box)} />
       <text textAnchor="middle" dominantBaseline="central" className={cn("text-[10px] font-medium", TAG_TONE[tone].text)}>
         child
       </text>
@@ -374,7 +381,7 @@ function LineSample({ line }: LineSampleProps) {
   );
 }
 
-/** What the chips, the marker and the line styles mean. */
+/** What the chips, the marker, the schedule icons and the line styles mean. */
 export function MapLegend() {
   return (
     <div role="group" aria-label="Legend" className="flex flex-col gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-[11px] leading-4 text-muted-foreground shadow-[0_1px_2px_rgb(27_49_57/0.06)]">
@@ -391,6 +398,17 @@ export function MapLegend() {
           <CriticalMarker className="ring-0" />
           Critical
         </li>
+      </ul>
+      <ul aria-label="Schedule" className="flex flex-wrap items-center gap-x-3.5 gap-y-1">
+        {SCHEDULE_TYPES.map((schedule) => {
+          const Icon = SCHEDULE_ICON[schedule];
+          return (
+            <li key={schedule} className="flex items-center gap-1.5">
+              <Icon className="size-3.5 text-muted-foreground" strokeWidth={1.75} aria-hidden="true" />
+              {SCHEDULE_LABEL[schedule]}
+            </li>
+          );
+        })}
       </ul>
       <ul aria-label="Link types" className="flex flex-wrap items-center gap-x-3.5 gap-y-1">
         <li className="flex items-center gap-1.5">

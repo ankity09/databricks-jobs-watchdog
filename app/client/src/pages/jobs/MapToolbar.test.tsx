@@ -3,8 +3,9 @@ import { TooltipProvider } from "@databricks/appkit-ui/react";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { FitViewOptions } from "@xyflow/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { LayoutDirection } from "../../lib/graph";
+import { mockReactFlow } from "../../test/reactflow-mocks";
 import { MapToolbar } from "./MapToolbar";
 
 const flow = vi.hoisted(() => ({
@@ -59,8 +60,11 @@ function reduceMotion() {
 }
 
 describe("MapToolbar", () => {
+  // The tooltips that open on keyboard focus measure themselves with ResizeObserver, which jsdom lacks.
+  beforeAll(() => mockReactFlow());
   afterEach(() => {
     vi.clearAllMocks();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     flow.zoomTo.mockImplementation(() => Promise.resolve(true));
     flow.state.transform = [0, 0, 0.83];
@@ -90,11 +94,33 @@ describe("MapToolbar", () => {
     expect(zoomsAsked().at(-1)).toBe(0.2);
   });
 
-  it("turns zoom out and zoom in off at the zoom limits", () => {
+  it("forgets where the last zoom was going once its glide is over, as when a fit, a wheel or a drag cut it short", async () => {
+    const user = userEvent.setup();
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    // The glide is cut short and never reports its end.
+    flow.zoomTo.mockImplementation(() => new Promise<boolean>(() => undefined));
+    const { toolbar } = renderToolbar();
+    const zoomOut = within(toolbar).getByRole("button", { name: "Zoom out" });
+    await user.click(zoomOut);
+    now += 1000;
+    await user.click(zoomOut);
+    // Both steps start from the zoom on screen, 83%: the first target is stale by then.
+    expect(zoomsAsked()).toEqual([0.69, 0.69]);
+  });
+
+  it("marks zoom out and zoom in as unavailable at the zoom limits, and keeps them focusable", async () => {
+    const user = userEvent.setup();
     flow.state.transform = [0, 0, 0.2];
     const { toolbar } = renderToolbar();
-    expect(within(toolbar).getByRole("button", { name: "Zoom out" })).toBeDisabled();
-    expect(within(toolbar).getByRole("button", { name: "Zoom in" })).toBeEnabled();
+    const zoomOut = within(toolbar).getByRole("button", { name: "Zoom out" });
+    expect(zoomOut).toHaveAttribute("aria-disabled", "true");
+    expect(zoomOut).not.toBeDisabled();
+    zoomOut.focus();
+    await user.keyboard("{Enter}");
+    expect(flow.zoomTo).not.toHaveBeenCalled();
+    expect(zoomOut).toHaveFocus();
+    expect(within(toolbar).getByRole("button", { name: "Zoom in" })).not.toHaveAttribute("aria-disabled", "true");
   });
 
   it("fits the map clear of the overlays", async () => {

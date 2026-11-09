@@ -25,10 +25,14 @@ function Divider() {
   return <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-border" />;
 }
 
-const ICON_BUTTON = "size-7 rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-40";
+const ICON_BUTTON =
+  "size-7 rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground " +
+  "aria-disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground";
 
 /** One zoom step, the same as React Flow's own zoom in and zoom out. */
 const STEP = 1.2;
+/** How long past its glide a zoom target stays good: a fit, a wheel, a drag or a slide can cut the glide short. */
+const TARGET_SLACK_MS = 80;
 
 export interface MapToolbarProps {
   direction: LayoutDirection;
@@ -37,6 +41,8 @@ export interface MapToolbarProps {
   onShowServicesChange: (show: boolean) => void;
   /** The fit the Fit button makes: clear of the overlays (fitOptions). */
   fitOptions: FitViewOptions;
+  /** Called when the Fit button's fit has finished, so the map can slide a selection clear of the side panel. */
+  onFitted?: () => void;
   className?: string;
 }
 
@@ -46,18 +52,26 @@ export interface MapToolbarProps {
  * reads and moves the view through React Flow's store, so it sits anywhere
  * inside the map's ReactFlowProvider.
  */
-export function MapToolbar({ direction, onDirectionChange, showServices, onShowServicesChange, fitOptions, className }: MapToolbarProps) {
+export function MapToolbar({ direction, onDirectionChange, showServices, onShowServicesChange, fitOptions, onFitted, className }: MapToolbarProps) {
   const { zoomTo, fitView } = useReactFlow();
   const zoom = useStore((state) => state.transform[2]);
   const minZoom = useStore((state) => state.minZoom);
   const maxZoom = useStore((state) => state.maxZoom);
-  // Where the zoom is gliding to: a click during the glide takes its step from there, so two quick clicks are two steps.
-  const target = useRef<number | null>(null);
+  const atMin = zoom <= minZoom;
+  const atMax = zoom >= maxZoom;
+  // Where the zoom is gliding to, until when: a click during the glide takes its step from there, so two quick
+  // clicks are two steps. After that the target is stale, and the step starts from the zoom on screen.
+  const target = useRef<{ zoom: number; until: number } | null>(null);
   const zoomBy = (factor: number) => {
-    const next = Math.min(maxZoom, Math.max(minZoom, (target.current ?? zoom) * factor));
-    target.current = next;
-    void zoomTo(next, { duration: viewDuration() }).then(() => {
-      if (target.current === next) target.current = null;
+    // At a limit the button says so (aria-disabled) and keeps focus; a press does nothing.
+    if (factor < 1 ? atMin : atMax) return;
+    const duration = viewDuration();
+    const pending = target.current !== null && Date.now() < target.current.until ? target.current.zoom : null;
+    const next = Math.min(maxZoom, Math.max(minZoom, (pending ?? zoom) * factor));
+    const step = { zoom: next, until: Date.now() + duration + TARGET_SLACK_MS };
+    target.current = step;
+    void zoomTo(next, { duration }).then(() => {
+      if (target.current === step) target.current = null;
     });
   };
   return (
@@ -70,7 +84,7 @@ export function MapToolbar({ direction, onDirectionChange, showServices, onShowS
       )}
     >
       <ToolTip label="Zoom out">
-        <Button variant="ghost" size="icon-sm" aria-label="Zoom out" className={ICON_BUTTON} disabled={zoom <= minZoom} onClick={() => zoomBy(1 / STEP)}>
+        <Button variant="ghost" size="icon-sm" aria-label="Zoom out" aria-disabled={atMin || undefined} className={ICON_BUTTON} onClick={() => zoomBy(1 / STEP)}>
           <Minus aria-hidden="true" />
         </Button>
       </ToolTip>
@@ -79,7 +93,7 @@ export function MapToolbar({ direction, onDirectionChange, showServices, onShowS
         {Math.round(zoom * 100)}%
       </span>
       <ToolTip label="Zoom in">
-        <Button variant="ghost" size="icon-sm" aria-label="Zoom in" className={ICON_BUTTON} disabled={zoom >= maxZoom} onClick={() => zoomBy(STEP)}>
+        <Button variant="ghost" size="icon-sm" aria-label="Zoom in" aria-disabled={atMax || undefined} className={ICON_BUTTON} onClick={() => zoomBy(STEP)}>
           <Plus aria-hidden="true" />
         </Button>
       </ToolTip>
@@ -90,7 +104,7 @@ export function MapToolbar({ direction, onDirectionChange, showServices, onShowS
           size="icon-sm"
           aria-label="Fit the map to the screen"
           className={ICON_BUTTON}
-          onClick={() => void fitView({ ...fitOptions, duration: viewDuration() })}
+          onClick={() => void fitView({ ...fitOptions, duration: viewDuration() }).then(() => onFitted?.())}
         >
           <Maximize aria-hidden="true" />
         </Button>

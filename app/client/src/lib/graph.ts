@@ -63,15 +63,17 @@ export interface GraphOptions {
 const LINES: Record<DependencyType, EdgeLine> = { job: "solid", child_job: "dashed", service: "dotted" };
 /**
  * dagre's gaps for each direction: between cards in the same rank, and between
- * ranks, where a link bends and a child-job link has its label.
+ * ranks, where a link bends and a child-job link has its label. Left to right,
+ * 56 leaves the 30 pixel child tag 13 pixels on each side, clear of the ports
+ * and the arrowhead, and keeps the map wide enough to read at 1440 by 900.
  */
 const GAPS: Record<LayoutDirection, { nodesep: number; ranksep: number }> = {
-  LR: { nodesep: 24, ranksep: 80 },
+  LR: { nodesep: 16, ranksep: 56 },
   TB: { nodesep: 32, ranksep: 72 },
 };
 const GRID_GAP_X = 24;
 const GRID_GAP_Y = 20;
-const SECTION_GAP = 96; // between the linked graph and the group of jobs without links, which has its label above its cards
+const SECTION_GAP = 64; // between the linked graph and the group of jobs without links, which has its label above its cards
 
 export function jobNodeId(name: string): string {
   return `job:${name}`;

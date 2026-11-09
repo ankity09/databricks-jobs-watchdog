@@ -115,22 +115,35 @@ export function linkMeaning(link: GraphEdge): string {
  * edges. The toolbar is at the top left, the legend at the bottom left, the
  * minimap at the bottom right, and the side panel down the right.
  */
-export const OVERLAY = { inset: 12, toolbar: 36, legend: 66, minimap: 120, panel: 360 } as const;
+export const OVERLAY = { inset: 12, toolbar: 36, legend: 90, minimap: 120, panel: 360 } as const;
 /** The canvas width from which the minimap shows (Tailwind's @2xl, 42rem). */
 export const MINIMAP_FROM = 672;
-/** The canvas width from which a fit keeps clear of the side panel; on a narrower canvas the panel covers it. */
-export const PANEL_CLEAR_FROM = 768;
+/** The canvas width from which the side panel opens over the map; on a narrower canvas it opens under it. */
+export const PANEL_OVER_FROM = 768;
+/**
+ * React Flow's canvas width is 0 until it measures the canvas (1 under the
+ * test stand-ins). A width below this is not a measurement yet.
+ */
+export const MEASURED_FROM = 200;
+/** The space a slide keeps between a card and the panel or the canvas's left edge. */
+export const EDGE_GAP = { left: 24, panel: 16 } as const;
 const GAP = 16;
 
 /**
- * How the view fits the cards: clear of the toolbar at the top, of the legend
- * and the minimap at the bottom, and of the side panel while it is open.
+ * How the view fits the cards: clear of the toolbar at the top, and of the
+ * legend and the minimap at the bottom. A fit never makes room for the side
+ * panel: it would zoom the whole map into the space beside the panel and
+ * leave it there when the panel closes. A slide clears the panel instead.
  */
-export function fitOptions(width: number, panelOpen: boolean): FitViewOptions {
+export function fitOptions(width: number): FitViewOptions {
   const top = OVERLAY.inset + OVERLAY.toolbar + GAP;
   const bottom = OVERLAY.inset + (width >= MINIMAP_FROM ? OVERLAY.minimap : OVERLAY.legend) + GAP;
-  const right = panelOpen && width >= PANEL_CLEAR_FROM ? OVERLAY.inset + OVERLAY.panel + GAP : 24;
-  return { padding: { top: `${top}px`, right: `${right}px`, bottom: `${bottom}px`, left: "24px" }, maxZoom: 1.1 };
+  return { padding: { top: `${top}px`, right: "24px", bottom: `${bottom}px`, left: "24px" }, maxZoom: 1.1 };
+}
+
+/** True when the side panel opens under the map instead of over it. */
+export function panelGoesUnder(width: number): boolean {
+  return width >= MEASURED_FROM && width < PANEL_OVER_FROM;
 }
 
 /** True when the person asked for less motion. */

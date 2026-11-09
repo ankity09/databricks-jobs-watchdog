@@ -25,10 +25,11 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
+  type Viewport,
   useReactFlow,
   useStore,
 } from "@xyflow/react";
-import { CircleAlert, Link2, Network, RotateCw, Server } from "lucide-react";
+import { CircleAlert, Link2, Network, RotateCw, Server, X } from "lucide-react";
 import {
   type KeyboardEvent,
   type ReactNode,
@@ -71,14 +72,16 @@ import {
   type EdgeHighlight,
   type LinkFlowEdge,
   type MapFlowNode,
+  EDGE_GAP,
   MINIMAP_FROM,
   type NodeHighlight,
   OVERLAY,
-  PANEL_CLEAR_FROM,
+  PANEL_OVER_FROM,
   TONE_FILL,
   fitOptions,
   linkLabel,
   linkMeaning,
+  panelGoesUnder,
   viewDuration,
 } from "./mapModel";
 import { MapSidePanel } from "./MapSidePanel";
@@ -94,7 +97,7 @@ const EMPTY_COPY = "No links yet. Add a link, or import a job list that has depe
 /** The ports' size: the static handles below match the rendered ones. */
 const PORT = 8;
 /** The first fit, before the canvas's width is known: clear of the minimap too, which a wide canvas shows. */
-const FIRST_FIT = fitOptions(MINIMAP_FROM, false);
+const FIRST_FIT = fitOptions(MINIMAP_FROM);
 
 /** React Flow's keyboard hints, without the delete key, which the map does not use. */
 const ARIA_LABELS = {
@@ -305,6 +308,10 @@ export function DependencyMapPage() {
   const [serviceOpen, setServiceOpen] = useState(false);
   const [menuEdge, setMenuEdge] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  // A job someone else deleted while its editor was open, for the line that says so.
+  const [goneJob, setGoneJob] = useState<string | null>(null);
+  // Counts the toolbar's finished fits, after which the map slides a selection clear of the panel again.
+  const [fits, setFits] = useState(0);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
@@ -333,6 +340,11 @@ export function DependencyMapPage() {
   const statusLoading = live.loading && live.byJob.size === 0;
   const panelOpen = selected !== null && link.step === "off";
   const editingJob = editing !== null ? document?.jobs.find((job) => job.job_name === editing) : undefined;
+  // A reload showed the job is gone: the editor closes for good and the page says so, as on the Job list.
+  if (editing !== null && document !== null && editingJob === undefined) {
+    setGoneJob(editing);
+    setEditing(null);
+  }
   // When the editor closes: Edit job, else the job's card (the panel closed meanwhile), else the map.
   const editorReturnFocus = useMemo<ReturnFocus>(() => [editRef, editedCardRef, mapRef], []);
 
@@ -517,6 +529,33 @@ export function DependencyMapPage() {
     </>
   );
 
+  // The selected box's panel, given its size where it opens: over the map's right side, or under a narrow map.
+  const sidePanel =
+    panelOpen && document
+      ? (className: string | undefined) => (
+          <MapSidePanel
+            box={selected}
+            document={document}
+            links={allEdges.filter((e) => e.source === selected.id || e.target === selected.id)}
+            steps={steps ?? new Map()}
+            statusLoading={statusLoading}
+            saving={saving}
+            panelRef={panelRef}
+            editRef={editRef}
+            className={className}
+            onRemove={(edgeId) => removeLink(edgeId, "panel")}
+            onEdit={() => {
+              editedCardRef.current = boxButton(mapRef.current, selected.id);
+              setEditing(selected.name);
+            }}
+            onClose={() => {
+              setSelectedId(null);
+              setRefocus({ kind: "box", id: selected.id });
+            }}
+          />
+        )
+      : null;
+
   let body: ReactNode;
   if (state === null && error === null) {
     body = <CanvasSkeleton />;
@@ -560,123 +599,88 @@ export function DependencyMapPage() {
           </p>
         ) : null}
         <ReactFlowProvider>
-          {/* tabIndex -1: focus lands on the map itself when nothing on it can take it. */}
-          <div
-            ref={mapRef}
-            tabIndex={-1}
-            className="@container relative min-h-[520px] flex-1 overflow-hidden rounded-lg border border-border bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            onKeyDown={onKeyDown}
-          >
-            <MapMarkers />
-            {/* Before the canvas, so Tab reaches the toolbar before the links and the cards. */}
-            <Toolbar
-              className="absolute top-3 left-3 z-10"
-              direction={direction}
-              onDirectionChange={setDirection}
-              showServices={showServices}
-              onShowServicesChange={setShowServices}
-              panelOpen={panelOpen}
-            />
-            <div className="absolute inset-0">
-              <ReactFlow<MapFlowNode, LinkFlowEdge>
-                nodes={flowNodes}
-                edges={flowEdges}
-                nodeTypes={NODE_TYPES}
-                edgeTypes={EDGE_TYPES}
-                // Also what gives the cards pointer events: React Flow turns them off on a node that is neither selectable nor clickable.
-                onNodeClick={(_event, node) => {
-                  if (node.type === "section") clearOnCanvas();
-                  else activate(node.data.box);
-                }}
-                onEdgeClick={(_event, edge) => {
-                  if (link.step === "off") openEdge(edge.id);
-                }}
-                onEdgesChange={onEdgesChange}
-                onPaneClick={clearOnCanvas}
-                nodesDraggable={false}
-                nodesConnectable={false}
-                nodesFocusable={false}
-                edgesFocusable
-                deleteKeyCode={null}
-                selectionKeyCode={null}
-                multiSelectionKeyCode={null}
-                fitView
-                fitViewOptions={FIRST_FIT}
-                // Low enough for a fit to show a 200-job map whole; zoom in, pan or use the minimap from there.
-                minZoom={0.1}
-                maxZoom={1.75}
-                colorMode="light"
-                // React Flow asks that only Pro subscribers hide its attribution; it sits between the legend and the minimap.
-                attributionPosition="bottom-center"
-                ariaLabelConfig={ARIA_LABELS}
-                aria-label="Dependency map"
-              >
-                <Background variant={BackgroundVariant.Dots} gap={16} size={1.1} color="var(--input)" bgColor="var(--muted)" />
-                <MiniMap<MapFlowNode>
-                  pannable
-                  zoomable
-                  position="bottom-right"
-                  nodeClassName={minimapClass}
-                  nodeBorderRadius={6}
-                  bgColor="var(--card)"
-                  maskColor="color-mix(in srgb, var(--muted) 72%, transparent)"
-                  maskStrokeColor="var(--input)"
-                  maskStrokeWidth={1}
-                  // Hidden while the side panel takes the right side; the panel would cover all but a sliver of it.
-                  className={cn(
-                    "m-3 overflow-hidden rounded-lg border border-border shadow-[0_1px_2px_rgb(27_49_57/0.06)] @max-2xl:hidden [&>svg]:h-[120px] [&>svg]:w-[160px]",
-                    panelOpen && "hidden",
-                  )}
-                />
-                <Refit layoutKey={layoutKey} panelOpen={panelOpen} />
-                <KeepInView
-                  chain={panelOpen ? [selected.id, ...(chain?.downstream.jobs ?? []).map(jobNodeId)] : null}
-                  upstream={chain ? [...chain.upstream.nodes] : []}
-                />
-                <Panel position="bottom-left" className="m-3">
-                  <MapLegend />
-                </Panel>
-                {/* Adding a link clears the selection, so the banner takes the panel's corner, below the toolbar on a narrow canvas. */}
-                {link.step !== "off" ? (
-                  <Panel position="top-right" className="m-3 @max-3xl:mt-14">
-                    <LinkBanner
-                      mode={link}
-                      containerRef={bannerRef}
-                      onCancel={() => {
-                        setLink({ step: "off" });
-                        addLinkRef.current?.focus();
-                      }}
-                    />
+          {/* Escape works the same on the map and in a side panel opened under it. */}
+          <div className="flex min-h-[520px] flex-1 flex-col gap-3" onKeyDown={onKeyDown}>
+            {/* tabIndex -1: focus lands on the map itself when nothing on it can take it. */}
+            <div
+              ref={mapRef}
+              tabIndex={-1}
+              className="@container relative min-h-[520px] flex-1 overflow-hidden rounded-lg border border-border bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <MapMarkers />
+              {/* Before the canvas, so Tab reaches the toolbar before the links and the cards. */}
+              <Toolbar
+                className="absolute top-3 left-3 z-10"
+                direction={direction}
+                onDirectionChange={setDirection}
+                showServices={showServices}
+                onShowServicesChange={setShowServices}
+                onFitted={() => setFits((n) => n + 1)}
+              />
+              <div className="absolute inset-0">
+                <ReactFlow<MapFlowNode, LinkFlowEdge>
+                  nodes={flowNodes}
+                  edges={flowEdges}
+                  nodeTypes={NODE_TYPES}
+                  edgeTypes={EDGE_TYPES}
+                  // Also what gives the cards pointer events: React Flow turns them off on a node that is neither selectable nor clickable.
+                  onNodeClick={(_event, node) => {
+                    if (node.type === "section") clearOnCanvas();
+                    else activate(node.data.box);
+                  }}
+                  onEdgeClick={(_event, edge) => {
+                    if (link.step === "off") openEdge(edge.id);
+                  }}
+                  onEdgesChange={onEdgesChange}
+                  onPaneClick={clearOnCanvas}
+                  nodesDraggable={false}
+                  nodesConnectable={false}
+                  nodesFocusable={false}
+                  edgesFocusable
+                  deleteKeyCode={null}
+                  selectionKeyCode={null}
+                  multiSelectionKeyCode={null}
+                  fitView
+                  fitViewOptions={FIRST_FIT}
+                  // Low enough for a fit to show a 200-job map whole; zoom in, pan or use the minimap from there.
+                  minZoom={0.1}
+                  maxZoom={1.75}
+                  colorMode="light"
+                  // React Flow asks that only Pro subscribers hide its attribution; it sits between the legend and the minimap.
+                  attributionPosition="bottom-center"
+                  ariaLabelConfig={ARIA_LABELS}
+                  aria-label="Dependency map"
+                >
+                  <Background variant={BackgroundVariant.Dots} gap={16} size={1.1} color="var(--input)" bgColor="var(--muted)" />
+                  <MapMinimap panelOpen={panelOpen} />
+                  <ViewKeeper
+                    layoutKey={layoutKey}
+                    chain={panelOpen ? [selected.id, ...(chain?.downstream.jobs ?? []).map(jobNodeId)] : null}
+                    upstream={chain ? [...chain.upstream.nodes] : []}
+                    fits={fits}
+                  />
+                  <Panel position="bottom-left" className="m-3">
+                    <MapLegend />
                   </Panel>
-                ) : null}
-                {panelOpen && document ? (
-                  // Down the right, over the minimap when it needs the height; the frame lets clicks through around the panel.
-                  // Below the toolbar on a narrow canvas, where the two would meet.
-                  <Panel position="top-right" className="pointer-events-none bottom-0 m-3 flex items-start @max-3xl:mt-14">
-                    <MapSidePanel
-                      box={selected}
-                      document={document}
-                      links={allEdges.filter((e) => e.source === selected.id || e.target === selected.id)}
-                      steps={steps ?? new Map()}
-                      statusLoading={statusLoading}
-                      saving={saving}
-                      panelRef={panelRef}
-                      editRef={editRef}
-                      onRemove={(edgeId) => removeLink(edgeId, "panel")}
-                      onEdit={() => {
-                        editedCardRef.current = boxButton(mapRef.current, selected.id);
-                        setEditing(selected.name);
-                      }}
-                      onClose={() => {
-                        setSelectedId(null);
-                        setRefocus({ kind: "box", id: selected.id });
-                      }}
-                    />
-                  </Panel>
-                ) : null}
-              </ReactFlow>
+                  {/* Adding a link clears the selection, so the banner takes the panel's corner, below the toolbar on a narrow canvas. */}
+                  {link.step !== "off" ? (
+                    <Panel position="top-right" className="m-3 @max-3xl:mt-14">
+                      <LinkBanner
+                        mode={link}
+                        containerRef={bannerRef}
+                        onCancel={() => {
+                          setLink({ step: "off" });
+                          addLinkRef.current?.focus();
+                        }}
+                      />
+                    </Panel>
+                  ) : null}
+                  <PanelSlot placement="over" panel={sidePanel} />
+                </ReactFlow>
+              </div>
+              <LinkMenu link={menuLink} anchor={anchor} saving={saving} onRemove={(edgeId) => removeLink(edgeId, "menu")} onClose={closeMenu} />
             </div>
-            <LinkMenu link={menuLink} anchor={anchor} saving={saving} onRemove={(edgeId) => removeLink(edgeId, "menu")} onClose={closeMenu} />
+            <PanelSlot placement="under" panel={sidePanel} />
           </div>
         </ReactFlowProvider>
       </>
@@ -696,6 +700,15 @@ export function DependencyMapPage() {
         <p role="status" className="-mt-2 font-mono text-xs text-muted-foreground">
           {notice}
         </p>
+      ) : null}
+      {goneJob ? (
+        <div role="status" className="flex items-center gap-2 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-foreground">
+          <CircleAlert className="size-4 shrink-0 text-warning" aria-hidden="true" />
+          <p className="min-w-0 flex-1 leading-5">{goneJob} is no longer in the list. Someone deleted it while you were editing.</p>
+          <Button variant="ghost" size="icon-sm" className="size-7" aria-label="Dismiss" onClick={() => setGoneJob(null)}>
+            <X aria-hidden="true" />
+          </Button>
+        </div>
       ) : null}
       {state !== null && error !== null && !loading ? (
         // The map on screen loaded, but a later load did not: the same line as on the job list.
@@ -797,36 +810,154 @@ function CanvasSkeleton() {
   );
 }
 
-interface ToolbarProps extends Omit<MapToolbarProps, "fitOptions"> {
-  panelOpen: boolean;
-}
-
 /** The toolbar with the fit for the canvas's width, which only the map's store knows. */
-function Toolbar({ panelOpen, ...props }: ToolbarProps) {
+function Toolbar(props: Omit<MapToolbarProps, "fitOptions">) {
   const width = useStore((state) => state.width);
-  return <MapToolbar {...props} fitOptions={fitOptions(width, panelOpen)} />;
+  return <MapToolbar {...props} fitOptions={fitOptions(width)} />;
 }
 
-interface RefitProps {
-  layoutKey: string;
+interface MapMinimapProps {
   panelOpen: boolean;
+}
+
+/** The minimap, hidden while the side panel is open over the map's right side, which would cover all but a sliver of it. */
+function MapMinimap({ panelOpen }: MapMinimapProps) {
+  const width = useStore((state) => state.width);
+  return (
+    <MiniMap<MapFlowNode>
+      pannable
+      zoomable
+      position="bottom-right"
+      nodeClassName={minimapClass}
+      nodeBorderRadius={6}
+      bgColor="var(--card)"
+      maskColor="color-mix(in srgb, var(--muted) 72%, transparent)"
+      maskStrokeColor="var(--input)"
+      maskStrokeWidth={1}
+      className={cn(
+        "m-3 overflow-hidden rounded-lg border border-border shadow-[0_1px_2px_rgb(27_49_57/0.06)] @max-2xl:hidden [&>svg]:h-[120px] [&>svg]:w-[160px]",
+        panelOpen && !panelGoesUnder(width) && "hidden",
+      )}
+    />
+  );
+}
+
+interface PanelSlotProps {
+  placement: "over" | "under";
+  /** The side panel, given its size here; null when no box is selected. */
+  panel: ((className: string | undefined) => ReactNode) | null;
 }
 
 /**
- * Fits the view again when the boxes change place (a save, the direction or
- * the services switch moved them) and when the map's area changes size (an
- * alert or a note above it came or went, or the window changed), clear of the
- * overlays and of the side panel while it is open. Opening the panel does not
- * refit: the view stays where the person put it. The first fit is the fitView
- * prop's, which runs before the size is known.
+ * Where the side panel opens: over the map's right side, or under a map too
+ * narrow for both, where the panel would hide the selection's chain. One of
+ * the two slots shows it.
  */
-function Refit({ layoutKey, panelOpen }: RefitProps) {
-  const { fitView } = useReactFlow();
+function PanelSlot({ placement, panel }: PanelSlotProps) {
+  const width = useStore((state) => state.width);
+  if (panel === null || (placement === "under") !== panelGoesUnder(width)) return null;
+  if (placement === "under") return panel("w-full");
+  return (
+    // Down the right, over the minimap's corner when it needs the height; the frame lets clicks through around the panel.
+    <Panel position="top-right" className="pointer-events-none bottom-0 m-3 flex items-start">
+      {panel(undefined)}
+    </Panel>
+  );
+}
+
+/** A slide the map made to bring a selection out from under the side panel. */
+interface Slide {
+  from: Viewport;
+  to: Viewport;
+  /** Until when its glide may still run: a slide that starts before then goes on from the same place. */
+  until: number;
+}
+
+/** The same view, to half a pixel. */
+function sameView(a: Viewport, b: Viewport): boolean {
+  return Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5 && Math.abs(a.zoom - b.zoom) < 1e-6;
+}
+
+interface ViewKeeperProps {
+  layoutKey: string;
+  /** The selected box first, then the boxes its failure affects, while the side panel is open; else null. */
+  chain: string[] | null;
+  /** The boxes upstream of it, brought into view too when the whole chain fits. */
+  upstream: string[];
+  /** Counts the toolbar's finished fits. */
+  fits: number;
+}
+
+/**
+ * Keeps the view sensible as the map changes:
+ * - fits it again when the boxes change place (a save, the direction or the
+ *   services switch) or the map's area changes size (an alert or a note above
+ *   it, or the window), as if the side panel were closed: a fit never zooms
+ *   for the panel;
+ * - while the panel is open over the map, slides the map left at the same zoom
+ *   so the selected box and what its failure affects clear the panel (its
+ *   upstream path too, when all of it fits), never so far that the selected
+ *   box leaves the screen: after a new selection, a refit or the toolbar's Fit;
+ * - when the panel closes, slides back to where the slides began, unless the
+ *   person moved the view since.
+ * The first fit is the fitView prop's, which runs before the size is known.
+ */
+function ViewKeeper({ layoutKey, chain, upstream, fits }: ViewKeeperProps) {
+  const { fitView, getInternalNode, getViewport, setViewport } = useReactFlow();
   // The size of the drawing area, which React Flow measures on every resize.
   const width = useStore((state) => state.width);
   const height = useStore((state) => state.height);
   const first = useRef(true);
-  const refit = useEffectEvent(() => void fitView(fitOptions(width, panelOpen)));
+  const slide = useRef<Slide | null>(null);
+
+  // These read the newest chain and size when they run.
+  const reveal = useEffectEvent(() => {
+    if (chain === null || width < PANEL_OVER_FROM) return;
+    const view = getViewport();
+    /** The boxes' left and right edges on screen. */
+    const span = (list: string[]) => {
+      let left = Infinity;
+      let right = -Infinity;
+      for (const id of list) {
+        const node = getInternalNode(id);
+        if (!node) continue;
+        left = Math.min(left, view.x + node.internals.positionAbsolute.x * view.zoom);
+        right = Math.max(right, view.x + (node.internals.positionAbsolute.x + (node.measured.width ?? node.width ?? 0)) * view.zoom);
+      }
+      return { left, right };
+    };
+    const edge = width - (OVERLAY.inset + OVERLAY.panel + EDGE_GAP.panel);
+    const selected = span(chain.slice(0, 1));
+    const all = span([...chain, ...upstream]);
+    const target = all.right - all.left <= edge - EDGE_GAP.left ? all : span(chain);
+    if (!Number.isFinite(selected.left) || target.right <= edge) return;
+    // The whole chain when it fits; otherwise as far as the selected box allows.
+    const shift = Math.min(target.right - edge, (target === all ? all.left : selected.left) - EDGE_GAP.left);
+    if (!(shift > 0)) return;
+    const duration = viewDuration();
+    const to = { x: view.x - shift, y: view.y, zoom: view.zoom };
+    const last = slide.current;
+    // Slides add up while the person leaves the view alone, so closing the panel goes back to where the first began.
+    const from = last !== null && (sameView(view, last.to) || Date.now() < last.until) ? last.from : view;
+    slide.current = { from, to, until: Date.now() + duration + 80 };
+    // A straight glide: the smooth path would zoom out and back in on the way.
+    void setViewport(to, { duration, interpolate: "linear" });
+  });
+  const slideBack = useEffectEvent(() => {
+    const last = slide.current;
+    slide.current = null;
+    if (last !== null && sameView(getViewport(), last.to)) void setViewport(last.from, { duration: viewDuration(), interpolate: "linear" });
+  });
+  const refit = useEffectEvent(() => {
+    slide.current = null;
+    // Instant, so the slide after it starts from the new fit.
+    void fitView(fitOptions(width)).then(() => reveal());
+  });
+  const afterFit = useEffectEvent(() => {
+    slide.current = null;
+    reveal();
+  });
+
   useEffect(() => {
     if (first.current) {
       first.current = false;
@@ -836,59 +967,20 @@ function Refit({ layoutKey, panelOpen }: RefitProps) {
     const frame = window.requestAnimationFrame(() => refit());
     return () => window.cancelAnimationFrame(frame);
   }, [layoutKey, width, height]);
-  return null;
-}
 
-interface KeepInViewProps {
-  /** The selected box first, then the boxes its failure affects, while the side panel is open; else null. */
-  chain: string[] | null;
-  /** The boxes upstream of it, shown too when the whole chain fits. */
-  upstream: string[];
-}
-
-/**
- * Brings a new selection out from under the side panel: the view moves left
- * at the same zoom until the selected box and what it affects clear the
- * panel, and the upstream path too when all of it fits, but never so far that
- * the selected box leaves the screen. A selection already clear of the panel
- * does not move it.
- */
-function KeepInView({ chain, upstream }: KeepInViewProps) {
-  const { getInternalNode, getViewport, setViewport } = useReactFlow();
-  const width = useStore((state) => state.width);
-  // Reads the newest chain and size when it runs, after the panel is drawn.
-  const reveal = useEffectEvent(() => {
-    if (chain === null || width < PANEL_CLEAR_FROM) return;
-    const { x, y, zoom } = getViewport();
-    /** The boxes' left and right edges on screen. */
-    const span = (list: string[]) => {
-      let left = Infinity;
-      let right = -Infinity;
-      for (const id of list) {
-        const node = getInternalNode(id);
-        if (!node) continue;
-        left = Math.min(left, x + node.internals.positionAbsolute.x * zoom);
-        right = Math.max(right, x + (node.internals.positionAbsolute.x + (node.measured.width ?? node.width ?? 0)) * zoom);
-      }
-      return { left, right };
-    };
-    const edge = width - (OVERLAY.inset + OVERLAY.panel + 16);
-    const selected = span(chain.slice(0, 1));
-    const all = span([...chain, ...upstream]);
-    const target = all.right - all.left <= edge - 24 ? all : span(chain);
-    if (!Number.isFinite(selected.left) || target.right <= edge) return;
-    // The whole chain when it fits; otherwise as far as the selected box allows.
-    const shift = Math.min(target.right - edge, (target === all ? all.left : selected.left) - 24);
-    // A straight glide: the smooth path would zoom out and back in on the way.
-    if (shift > 0) void setViewport({ x: x - shift, y, zoom }, { duration: viewDuration(), interpolate: "linear" });
-  });
-  // A new selection, or a save that changed its chain; not a re-render with the same one.
+  // A new selection, a save that changed its chain, or the panel closing; not a re-render with the same chain.
   const key = chain?.join("|") ?? null;
   useEffect(() => {
-    if (key === null) return;
-    const frame = window.requestAnimationFrame(() => reveal());
+    // After the panel is drawn, or gone.
+    const frame = window.requestAnimationFrame(() => (key === null ? slideBack() : reveal()));
     return () => window.cancelAnimationFrame(frame);
   }, [key]);
+
+  useEffect(() => {
+    if (fits === 0) return;
+    const frame = window.requestAnimationFrame(() => afterFit());
+    return () => window.cancelAnimationFrame(frame);
+  }, [fits]);
   return null;
 }
 

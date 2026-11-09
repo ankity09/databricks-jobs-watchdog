@@ -1,5 +1,5 @@
 import { Button } from "@databricks/appkit-ui/react";
-import { History, MessageSquareText, Server, SquarePen, X } from "lucide-react";
+import { CircleHelp, History, MessageSquareText, Server, SquarePen, X } from "lucide-react";
 import type { ReactNode, RefObject } from "react";
 import { Link } from "react-router";
 import { impactOf } from "../../../../shared/joblist/impact";
@@ -112,6 +112,8 @@ export interface MapSidePanelProps {
   onRemove: (edgeId: string) => void;
   onEdit: () => void;
   onClose: () => void;
+  /** Its size where it opens: a 360 pixel column over the map, or the map's width under it. */
+  className?: string;
 }
 
 /**
@@ -120,7 +122,7 @@ export interface MapSidePanelProps {
  * there affects (with the steps from it), and links to its history, the
  * copilot and the job editor.
  */
-export function MapSidePanel({ box, document, links, steps, statusLoading, saving, panelRef, editRef, onRemove, onEdit, onClose }: MapSidePanelProps) {
+export function MapSidePanel({ box, document, links, steps, statusLoading, saving, panelRef, editRef, onRemove, onEdit, onClose, className }: MapSidePanelProps) {
   const isJob = box.kind === "job";
   const entry = isJob ? document.jobs.find((job) => job.job_name === box.name) : undefined;
   const details = entry ? jobDetails(entry, inheritedSettings(document)) : null;
@@ -129,7 +131,8 @@ export function MapSidePanel({ box, document, links, steps, statusLoading, savin
   const neededBy = links.filter((edge) => edge.source === box.id);
   const affected = [...steps.entries()].sort(([a, sa], [b, sb]) => sa - sb || (a < b ? -1 : a > b ? 1 : 0));
   const tone = entry ? statusTone(box.status) : "muted";
-  const Icon = isJob ? (entry ? SCHEDULE_ICON[entry.schedule_type ?? inheritedSettings(document).schedule_type] : null) : Server;
+  // A job that is not in the list has no schedule: the question mark, as on its card.
+  const Icon = isJob ? (entry ? SCHEDULE_ICON[entry.schedule_type ?? inheritedSettings(document).schedule_type] : CircleHelp) : Server;
 
   let kind = "Service";
   if (isJob) kind = entry ? (parent ? `Child job of ${parent}` : "Job") : "Not in the job list";
@@ -139,11 +142,21 @@ export function MapSidePanel({ box, document, links, steps, statusLoading, savin
       ref={panelRef}
       tabIndex={-1}
       aria-label={box.name}
-      className="pointer-events-auto flex max-h-full w-[min(360px,calc(100cqw-24px))] flex-col overflow-hidden rounded-lg border border-border bg-card text-sm shadow-[0_4px_24px_rgb(27_49_57/0.12)] outline-none"
+      className={cn(
+        "pointer-events-auto flex flex-col overflow-hidden rounded-lg border border-border bg-card text-sm shadow-[0_4px_24px_rgb(27_49_57/0.12)] outline-none",
+        className ?? "max-h-full w-[min(360px,calc(100cqw-24px))]",
+      )}
     >
       <header className="flex items-start gap-3 border-b border-border px-4 py-3">
-        <span className={cn("relative mt-0.5 grid size-9 shrink-0 place-items-center ring-1 ring-inset", isJob ? "rounded-md" : "rounded-full", isJob ? TONE_TILE[tone] : "bg-secondary text-muted-foreground ring-transparent")}>
-          {Icon ? <Icon className="size-[18px]" strokeWidth={1.75} aria-hidden="true" /> : null}
+        <span
+          data-part="tile"
+          className={cn(
+            "relative mt-0.5 grid size-9 shrink-0 place-items-center ring-1 ring-inset",
+            isJob ? "rounded-md" : "rounded-full",
+            isJob ? TONE_TILE[tone] : "bg-secondary text-muted-foreground ring-transparent",
+          )}
+        >
+          <Icon className="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
           {details?.severity.text === "CRITICAL" ? <CriticalMarker className="absolute -top-1.5 -right-1.5" /> : null}
         </span>
         <div className="min-w-0 flex-1">
@@ -176,7 +189,8 @@ export function MapSidePanel({ box, document, links, steps, statusLoading, savin
         ) : null}
         {isJob ? (
           <PanelSection title="Depends on">
-            <LinkRows links={dependsOn} end="upstream" saving={saving} empty="Nothing on the map." onRemove={onRemove} />
+            {/* The links come from the list, not the map, so a link to a hidden service still shows here. */}
+            <LinkRows links={dependsOn} end="upstream" saving={saving} empty="It depends on nothing." onRemove={onRemove} />
           </PanelSection>
         ) : null}
         <PanelSection title="Needed by">
