@@ -118,7 +118,7 @@ WHERE scan_id = '<scan_id>'
 ORDER BY status, job_name, check_id
 ```
 
-For the current status of every check, query `<catalog>.<schema>.findings_latest` with the same columns and no `scan_id` filter. For each open problem once, with when it started, query `<catalog>.<schema>.incidents WHERE state = 'OPEN'`.
+For the current status of every check, query `<catalog>.<schema>.findings_latest` with the same columns and no `scan_id` filter. For each open problem, listed once with when it started, query `<catalog>.<schema>.incidents` with `WHERE state = 'OPEN'`.
 
 System tables run about an hour behind. A job created in the last hour shows `not_found` from the system tables while the Jobs API already reports it. Run notebook 05 again later to see it.
 

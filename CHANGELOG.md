@@ -10,7 +10,7 @@ Every scan writes a row for every check into `findings`, HEALTHY or not. That is
 
 New in this release is the view **`incidents`**. It lists each problem once, from the scan that found it until it clears:
 
-- A problem is a FAILED or WARNING row. An incident is one check of one job from one source (`source`, `workspace_id`, `job_id`, `job_name`, `check_id`) for as long as no HEALTHY row comes for it. FAILED and WARNING rows in a row are one incident.
+- A problem is a FAILED or WARNING row. An incident is one check of one job from one source (`source`, `workspace_id`, `job_id`, `job_name`, `check_id`) for as long as no HEALTHY row comes for it. FAILED and WARNING rows with no HEALTHY row between them are one incident.
 - `state` says where it is:
   - `OPEN`: no HEALTHY row came after it, and the source's newest scan has a row for it;
   - `RESOLVED`: a HEALTHY row came after it. `resolved_at` and `resolved_scan_id` name that scan;
@@ -41,7 +41,7 @@ Problems: 2 new, 3 still open, 1 resolved. The incidents view lists each problem
 
 1. In the Git folder, click Pull. If Pull reports a conflict in a notebook you have run, keep the incoming version: Databricks saves the serverless environment into a notebook when it runs it, and that is the only local change.
 2. Restart Python on any open notebook (detach and reattach).
-3. Run notebook 01 once. It prints `view incidents: created`. Your rows stay. From Phase 1.2 it also adds the Phase 1.3 columns and prints `view findings_latest: replaced`; read the Phase 1.3 notes below for what they add.
+3. Run notebook 01 once. It prints `view incidents: created`. Your rows stay. Until you run it, the scans refuse to run: notebooks 05 and 06 stop with a message that says to run notebook 01. From Phase 1.2 it also adds the Phase 1.3 columns and prints `view findings_latest: replaced`; read the Phase 1.3 notes below for what they add.
 4. If you deployed the jobs with the bundle, deploy it again, so the jobs run the new code. From Phase 1.2, this also creates `watchdog_cleanup`, paused unless `scan.schedule_status` is UNPAUSED.
 5. Run notebooks 05 and 06, and check that notebook 07 prints six PASS lines.
 
