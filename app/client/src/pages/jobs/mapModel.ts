@@ -1,43 +1,60 @@
-import type { Edge, Node } from "@xyflow/react";
-import type { DependencyType } from "../../../../shared/joblist/types";
-import type { EdgeLine, GraphEdge, GraphNode } from "../../lib/graph";
+import type { Edge, FitViewOptions, Node } from "@xyflow/react";
+import { CalendarClock, Infinity as InfinityIcon, type LucideIcon, Zap } from "lucide-react";
+import type { DependencyType, ScheduleType } from "../../../../shared/joblist/types";
+import type { EdgeLine, GraphEdge, GraphNode, LayoutDirection } from "../../lib/graph";
 import type { Status, StatusTone } from "../../lib/status";
+import type { CardFacts } from "./mapFacts";
 
-/** How a box looks right now: selected, affected by the selection, dimmed, or its state while picking a link. */
-export type NodeHighlight = "none" | "selected" | "downstream" | "dimmed" | "source" | "candidate" | "unavailable";
-export type EdgeHighlight = "none" | "downstream" | "dimmed";
+/**
+ * How a box looks right now: selected; downstream of the selection (affected
+ * by a failure there); upstream of it (what it depends on); dimmed; or its
+ * state while picking a link.
+ */
+export type NodeHighlight = "none" | "selected" | "downstream" | "upstream" | "dimmed" | "source" | "candidate" | "unavailable";
+export type EdgeHighlight = "none" | "downstream" | "upstream" | "dimmed";
 
 // React Flow wants type aliases, not interfaces, for node and edge data.
-export type MapNodeData = { box: GraphNode; highlight: NodeHighlight; statusLoading: boolean };
+export type MapNodeData = {
+  box: GraphNode;
+  highlight: NodeHighlight;
+  statusLoading: boolean;
+  direction: LayoutDirection;
+  /** What a listed job's card says under its name; null for a service or a job that is not in the list. */
+  facts: CardFacts | null;
+};
 export type JobFlowNode = Node<MapNodeData, "job">;
 export type ServiceFlowNode = Node<MapNodeData, "service">;
-export type SectionFlowNode = Node<{ text: string }, "section">;
+export type SectionFlowNode = Node<{ title: string; count: number }, "section">;
 export type MapFlowNode = JobFlowNode | ServiceFlowNode | SectionFlowNode;
 export type LinkEdgeData = { link: GraphEdge; highlight: EdgeHighlight };
 export type LinkFlowEdge = Edge<LinkEdgeData, "link">;
 
-export const ARROW_MARKER = "watchdog-map-arrow";
-export const ARROW_MARKER_ACCENT = "watchdog-map-arrow-accent";
+/** The arrowheads: one per line color, since a marker cannot follow its line's CSS. */
+export const ARROW = {
+  neutral: "watchdog-map-arrow",
+  light: "watchdog-map-arrow-light",
+  accent: "watchdog-map-arrow-accent",
+  dark: "watchdog-map-arrow-dark",
+} as const;
+export type ArrowTone = keyof typeof ARROW;
 
 export const STATUS_LABEL: Record<Status, string> = { FAILED: "Failed", WARNING: "Warning", UNKNOWN: "Unknown", HEALTHY: "Healthy" };
 
 /** The legend's order: healthy first, as the eye reads left to right. */
 export const LEGEND_STATUSES: Status[] = ["HEALTHY", "WARNING", "FAILED", "UNKNOWN"];
 
-export const TONE_EDGE: Record<StatusTone, string> = {
-  destructive: "border-l-destructive",
-  warning: "border-l-warning",
-  muted: "border-l-muted-foreground/40",
-  success: "border-l-success",
+/** The lucide icon on a job's tile, by schedule type. */
+export const SCHEDULE_ICON: Record<ScheduleType, LucideIcon> = { scheduled: CalendarClock, continuous: InfinityIcon, triggered: Zap };
+
+/** A card's icon tile, tinted by the job's status. */
+export const TONE_TILE: Record<StatusTone, string> = {
+  destructive: "bg-destructive/10 text-destructive ring-destructive/15",
+  warning: "bg-warning/10 text-warning ring-warning/15",
+  muted: "bg-muted-foreground/10 text-muted-foreground ring-muted-foreground/10",
+  success: "bg-success/10 text-success ring-success/15",
 };
 
-export const TONE_DOT: Record<StatusTone, string> = {
-  destructive: "bg-destructive",
-  warning: "bg-warning",
-  muted: "bg-muted-foreground/45",
-  success: "bg-success",
-};
-
+/** The minimap's boxes. */
 export const TONE_FILL: Record<StatusTone, string> = {
   destructive: "fill-destructive/70",
   warning: "fill-warning/70",
@@ -51,7 +68,21 @@ export const LINE_DASH: Record<EdgeLine, string> = {
   dotted: "[stroke-dasharray:1_4] [stroke-linecap:round]",
 };
 
+/**
+ * The slow dash flow along a selected job's downstream links, only when the
+ * person has not asked for reduced motion. A solid link takes dashes for the
+ * flow; dashed and dotted links move their own pattern.
+ */
+export const LINE_FLOW: Record<EdgeLine, string> = {
+  solid: "motion-safe:[stroke-dasharray:6_4] motion-safe:animate-map-flow",
+  dashed: "motion-safe:animate-map-flow",
+  dotted: "motion-safe:animate-map-flow",
+};
+
 const TYPE_NAME: Record<DependencyType, string> = { job: "job", child_job: "child job", service: "service" };
+
+/** The type of a link, as the side panel names it. */
+export const TYPE_LABEL: Record<DependencyType, string> = { job: "Job", child_job: "Child job", service: "Service" };
 
 /** A box's accessible name: its name, then its status, or that it is a service. */
 export function boxLabel(box: GraphNode, statusLoading: boolean): string {
@@ -77,4 +108,37 @@ export function linkMeaning(link: GraphEdge): string {
     case "service":
       return `Service link. ${job} needs ${on}.`;
   }
+}
+
+/**
+ * Where the overlays sit on the canvas, in pixels: each is `inset` from the
+ * edges. The toolbar is at the top left, the legend at the bottom left, the
+ * minimap at the bottom right, and the side panel down the right.
+ */
+export const OVERLAY = { inset: 12, toolbar: 36, legend: 66, minimap: 120, panel: 360 } as const;
+/** The canvas width from which the minimap shows (Tailwind's @2xl, 42rem). */
+export const MINIMAP_FROM = 672;
+/** The canvas width from which a fit keeps clear of the side panel; on a narrower canvas the panel covers it. */
+export const PANEL_CLEAR_FROM = 768;
+const GAP = 16;
+
+/**
+ * How the view fits the cards: clear of the toolbar at the top, of the legend
+ * and the minimap at the bottom, and of the side panel while it is open.
+ */
+export function fitOptions(width: number, panelOpen: boolean): FitViewOptions {
+  const top = OVERLAY.inset + OVERLAY.toolbar + GAP;
+  const bottom = OVERLAY.inset + (width >= MINIMAP_FROM ? OVERLAY.minimap : OVERLAY.legend) + GAP;
+  const right = panelOpen && width >= PANEL_CLEAR_FROM ? OVERLAY.inset + OVERLAY.panel + GAP : 24;
+  return { padding: { top: `${top}px`, right: `${right}px`, bottom: `${bottom}px`, left: "24px" }, maxZoom: 1.1 };
+}
+
+/** True when the person asked for less motion. */
+export function prefersReducedMotion(): boolean {
+  return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/** How long a zoom or a fit from the toolbar takes: a short glide, or none with reduced motion. */
+export function viewDuration(): number {
+  return prefersReducedMotion() ? 0 : 200;
 }

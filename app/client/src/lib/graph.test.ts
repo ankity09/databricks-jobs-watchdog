@@ -3,6 +3,9 @@ import { dependencyKey, type JobListDocument } from "../../../shared/joblist/typ
 import { EXAMPLE_DOCUMENT } from "../test/example-document";
 import {
   type GraphNode,
+  JOB_SIZE,
+  SERVICE_SIZE,
+  buildEdges,
   buildGraph,
   changeIssues,
   downstreamOf,
@@ -134,6 +137,55 @@ describe("buildGraph", () => {
 
   it("gives an empty list an empty graph", () => {
     expect(buildGraph({ jobs: [] }, new Map())).toEqual({ nodes: [], edges: [] });
+  });
+});
+
+describe("buildGraph layout options", () => {
+  it("sizes each job as a 248 by 68 card and each service as a narrower card", () => {
+    const { nodes } = buildGraph(EXAMPLE_DOCUMENT, STATUSES);
+    expect(JOB_SIZE).toEqual({ width: 248, height: 68 });
+    expect(SERVICE_SIZE.width).toBeLessThan(JOB_SIZE.width);
+    for (const n of nodes) expect([n.width, n.height]).toEqual(n.kind === "job" ? [248, 68] : [SERVICE_SIZE.width, SERVICE_SIZE.height]);
+  });
+
+  it("lays the links out top to bottom when asked: every edge points down", () => {
+    const { nodes, edges } = buildGraph(EXAMPLE_DOCUMENT, STATUSES, { direction: "TB" });
+    for (const edge of edges) {
+      const from = node(nodes, edge.source);
+      const to = node(nodes, edge.target);
+      expect(from.position.y + from.height, `${edge.id}`).toBeLessThan(to.position.y);
+    }
+  });
+
+  it("places no box on top of another, top to bottom too, with the jobs without links below", () => {
+    const { nodes } = buildGraph(EXAMPLE_DOCUMENT, STATUSES, { direction: "TB" });
+    for (const [i, a] of nodes.entries()) {
+      for (const b of nodes.slice(i + 1)) expect(overlaps(a, b), `${a.id} and ${b.id}`).toBe(false);
+    }
+    const linkedBottom = Math.max(...nodes.filter((n) => n.linked).map((n) => n.position.y + n.height));
+    for (const n of nodes.filter((m) => !m.linked)) expect(n.position.y).toBeGreaterThan(linkedBottom);
+  });
+
+  it("leaves the services and their links out when asked, and keeps the jobs they link in the graph", () => {
+    const doc: JobListDocument = {
+      jobs: [{ job_name: "a" }, { job_name: "b" }, { job_name: "c" }, { job_name: "d" }],
+      dependencies: [
+        { job_name: "b", depends_on: "a" },
+        { job_name: "c", depends_on: "queue", dependency_type: "service" },
+      ],
+    };
+    const graph = buildGraph(doc, new Map(), { services: false });
+    expect(graph.nodes.map((n) => n.id)).toEqual([jobNodeId("a"), jobNodeId("b"), jobNodeId("c"), jobNodeId("d")]);
+    expect(graph.edges.map((e) => e.id)).toEqual(["b->a:job"]);
+    // c has a link, to a service the map does not show: it stays with the linked jobs, not under "Not linked yet".
+    expect(node(graph.nodes, jobNodeId("c")).linked).toBe(true);
+    expect(node(graph.nodes, jobNodeId("d")).linked).toBe(false);
+    const linkedBottom = Math.max(...graph.nodes.filter((n) => n.linked).map((n) => n.position.y + n.height));
+    expect(node(graph.nodes, jobNodeId("d")).position.y).toBeGreaterThan(linkedBottom);
+  });
+
+  it("builds every link of the list, services included, whatever the map shows", () => {
+    expect(buildEdges(EXAMPLE_DOCUMENT).map((e) => e.id)).toEqual((EXAMPLE_DOCUMENT.dependencies ?? []).map(dependencyKey));
   });
 });
 

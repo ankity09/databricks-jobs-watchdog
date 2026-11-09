@@ -17,64 +17,86 @@ import {
 import {
   Background,
   BackgroundVariant,
-  Controls,
   type EdgeChange,
   type EdgeTypes,
-  type FitViewOptions,
   MiniMap,
   type NodeTypes,
   Panel,
   Position,
   ReactFlow,
+  ReactFlowProvider,
   useReactFlow,
   useStore,
 } from "@xyflow/react";
-import { CircleAlert, Link2, Network, RotateCw, Server, X } from "lucide-react";
-import { type KeyboardEvent, type ReactNode, type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { CircleAlert, Link2, Network, RotateCw, Server } from "lucide-react";
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Link } from "react-router";
-import { impactOf } from "../../../../shared/joblist/impact";
-import type { Change, JobListDocument, RuleIssue } from "../../../../shared/joblist/types";
-import { type ReloadJobList, useJobList } from "../../hooks/useJobList";
+import type { Change, JobEntry, RuleIssue } from "../../../../shared/joblist/types";
+import { type ReloadJobList, type SaveOutcome, useJobList } from "../../hooks/useJobList";
 import { useLiveStatus } from "../../hooks/useLiveStatus";
 import { useRefreshKey } from "../../hooks/useRefreshKey";
 import { PageHeader } from "../../layout/PageHeader";
-import { type Downstream, type GraphEdge, type GraphNode, buildGraph, downstreamOf, unlinkChange } from "../../lib/graph";
+import {
+  type Downstream,
+  type GraphEdge,
+  type GraphNode,
+  type LayoutDirection,
+  buildEdges,
+  buildGraph,
+  downstreamOf,
+  unlinkChange,
+} from "../../lib/graph";
+import type { EntryJobIds } from "../../lib/picker";
 import { statusTone } from "../../lib/status";
-import { cn } from "../../lib/utils";
 import { AddLinkDialog, AddServiceDialog } from "./AddLinkDialog";
 import { ConfigBanner } from "./ConfigBanner";
+import { JobEditorSheet } from "./JobEditorSheet";
+import { type Upstream, affectsText, impactSteps, upstreamOf } from "./mapChain";
 import { JobNode, LinkEdge, MapLegend, MapMarkers, SectionNode, ServiceNode } from "./MapElements";
-import { QueryProblemLine } from "./QueryProblemLine";
-import { ReloadButton } from "./ReloadButton";
+import { type CardFacts, cardFacts } from "./mapFacts";
 import {
   type EdgeHighlight,
   type LinkFlowEdge,
   type MapFlowNode,
+  MINIMAP_FROM,
   type NodeHighlight,
-  STATUS_LABEL,
-  TONE_DOT,
+  OVERLAY,
+  PANEL_CLEAR_FROM,
   TONE_FILL,
+  fitOptions,
   linkLabel,
   linkMeaning,
+  viewDuration,
 } from "./mapModel";
+import { MapSidePanel } from "./MapSidePanel";
+import { MapToolbar, type MapToolbarProps } from "./MapToolbar";
+import { PatternMatches } from "./PatternMatches";
+import { QueryProblemLine } from "./QueryProblemLine";
+import { ReloadButton } from "./ReloadButton";
+import type { ReturnFocus } from "./returnFocus";
 
 const NODE_TYPES: NodeTypes = { job: JobNode, service: ServiceNode, section: SectionNode };
 const EDGE_TYPES: EdgeTypes = { link: LinkEdge };
 const EMPTY_COPY = "No links yet. Add a link, or import a job list that has dependencies.";
-/**
- * How the view fits the boxes: clear of the legend at the top, which ends about
- * 72 pixels from the edge, and of the minimap and the controls at the bottom,
- * where the minimap starts about 166 pixels from the edge.
- */
-const FIT_OPTIONS: FitViewOptions = { padding: { top: "84px", right: "24px", bottom: "180px", left: "24px" }, maxZoom: 1.1 };
+/** The ports' size: the static handles below match the rendered ones. */
+const PORT = 8;
+/** The first fit, before the canvas's width is known: clear of the minimap too, which a wide canvas shows. */
+const FIRST_FIT = fitOptions(MINIMAP_FROM, false);
 
 /** React Flow's keyboard hints, without the delete key, which the map does not use. */
 const ARIA_LABELS = {
   "edge.a11yDescription.default": "Press Enter to see this link and remove it, or Escape to close it.",
-  "controls.ariaLabel": "Map controls",
-  "controls.zoomIn.ariaLabel": "Zoom in",
-  "controls.zoomOut.ariaLabel": "Zoom out",
-  "controls.fitView.ariaLabel": "Fit the map to the screen",
   "minimap.ariaLabel": "Overview of the map",
 };
 
@@ -116,10 +138,14 @@ function edgeRect(container: HTMLElement | null, edgeId: string, fallback: DOMRe
  */
 type FocusTarget = { kind: "link" | "box"; id: string } | { kind: "panel" } | { kind: "map" };
 
+function boxButton(container: HTMLElement | null, id: string): HTMLButtonElement | null {
+  return mapElement(container, "node", id)?.querySelector("button") ?? null;
+}
+
 function focusOn(container: HTMLElement | null, panel: HTMLElement | null, target: FocusTarget): void {
   let element: HTMLElement | SVGElement | null = null;
   if (target.kind === "link") element = mapElement(container, "edge", target.id);
-  else if (target.kind === "box") element = mapElement(container, "node", target.id)?.querySelector("button") ?? null;
+  else if (target.kind === "box") element = boxButton(container, target.id);
   else if (target.kind === "panel") element = panel;
   (element ?? container)?.focus();
 }
@@ -143,7 +169,13 @@ function staysWithout(graph: Graph, edgeId: string, nodeId: string): boolean {
   return graph.edges.some((e) => e.id !== edgeId && (e.source === nodeId || e.target === nodeId));
 }
 
-function nodeHighlight(box: GraphNode, link: LinkMode, selected: GraphNode | null, downstream: Downstream | null): NodeHighlight {
+/** The selection's chain: what a failure there affects (downstream) and what it depends on (upstream). */
+interface Chain {
+  downstream: Downstream;
+  upstream: Upstream;
+}
+
+function nodeHighlight(box: GraphNode, link: LinkMode, selected: GraphNode | null, chain: Chain | null): NodeHighlight {
   switch (link.step) {
     case "source":
       return "candidate";
@@ -155,30 +187,47 @@ function nodeHighlight(box: GraphNode, link: LinkMode, selected: GraphNode | nul
     case "off":
       if (selected === null) return "none";
       if (box.id === selected.id) return "selected";
-      return box.kind === "job" && downstream?.jobs.includes(box.name) ? "downstream" : "dimmed";
+      // A child job's parent is both upstream and affected: affected wins, as on the scan's impact.
+      if (box.kind === "job" && chain?.downstream.jobs.includes(box.name)) return "downstream";
+      return chain?.upstream.nodes.has(box.id) ? "upstream" : "dimmed";
   }
 }
 
-function edgeHighlight(edge: GraphEdge, link: LinkMode, selected: GraphNode | null, downstream: Downstream | null): EdgeHighlight {
+function edgeHighlight(edge: GraphEdge, link: LinkMode, selected: GraphNode | null, chain: Chain | null): EdgeHighlight {
   if (link.step !== "off" || selected === null) return "none";
-  return downstream?.edges.has(edge.id) ? "downstream" : "dimmed";
+  if (chain?.downstream.edges.has(edge.id)) return "downstream";
+  return chain?.upstream.edges.has(edge.id) ? "upstream" : "dimmed";
 }
 
-function toFlowNode(box: GraphNode, highlight: NodeHighlight, statusLoading: boolean): MapFlowNode {
-  const middle = box.height / 2 - 2.5;
+/** The ports' bounds, the same as the rendered handles, so links draw before the cards are measured. */
+function portsOf(box: GraphNode, direction: LayoutDirection): NonNullable<MapFlowNode["handles"]> {
+  const half = PORT / 2;
+  const size = { width: PORT, height: PORT };
+  if (direction === "LR") {
+    return [
+      { type: "target", position: Position.Left, x: -half, y: box.height / 2 - half, ...size },
+      { type: "source", position: Position.Right, x: box.width - half, y: box.height / 2 - half, ...size },
+    ];
+  }
+  return [
+    { type: "target", position: Position.Top, x: box.width / 2 - half, y: -half, ...size },
+    { type: "source", position: Position.Bottom, x: box.width / 2 - half, y: box.height - half, ...size },
+  ];
+}
+
+function toFlowNode(box: GraphNode, highlight: NodeHighlight, statusLoading: boolean, direction: LayoutDirection, facts: CardFacts | null): MapFlowNode {
   return {
     id: box.id,
     type: box.kind,
     position: box.position,
-    data: { box, highlight, statusLoading },
-    // Fixed sizes and handles, the same as the rendered ones, so links draw before the boxes are measured.
+    data: { box, highlight, statusLoading, direction, facts },
+    // The group the ports' hover classes look at.
+    className: "group",
+    // Fixed sizes and handles, the same as the rendered ones, so links draw before the cards are measured.
     width: box.width,
     height: box.height,
     measured: { width: box.width, height: box.height },
-    handles: [
-      { type: "target", position: Position.Left, x: -2.5, y: middle, width: 5, height: 5 },
-      { type: "source", position: Position.Right, x: box.width - 2.5, y: middle, width: 5, height: 5 },
-    ],
+    handles: portsOf(box, direction),
     selectable: false,
     focusable: false,
     draggable: false,
@@ -186,19 +235,25 @@ function toFlowNode(box: GraphNode, highlight: NodeHighlight, statusLoading: boo
   };
 }
 
-/** The heading above the jobs without links, when there are linked jobs above them. */
+/** The group frame's room around its cards: its label sits in the top band. */
+const GROUP_PAD = { x: 16, top: 40, bottom: 16 } as const;
+
+/** The labeled group around the jobs without links, when there are linked jobs above them. */
 function sectionNode(nodes: GraphNode[]): MapFlowNode | null {
   const unlinked = nodes.filter((n) => !n.linked);
   if (unlinked.length === 0 || unlinked.length === nodes.length) return null;
-  const top = Math.min(...unlinked.map((n) => n.position.y));
+  const left = Math.min(...unlinked.map((n) => n.position.x)) - GROUP_PAD.x;
+  const top = Math.min(...unlinked.map((n) => n.position.y)) - GROUP_PAD.top;
+  const width = Math.max(...unlinked.map((n) => n.position.x + n.width)) + GROUP_PAD.x - left;
+  const height = Math.max(...unlinked.map((n) => n.position.y + n.height)) + GROUP_PAD.bottom - top;
   return {
     id: "section:unlinked",
     type: "section",
-    position: { x: 0, y: top - 28 },
-    data: { text: "Jobs with no links" },
-    width: 240,
-    height: 16,
-    measured: { width: 240, height: 16 },
+    position: { x: left, y: top },
+    data: { title: "Not linked yet", count: unlinked.length },
+    width,
+    height,
+    measured: { width, height },
     selectable: false,
     focusable: false,
     draggable: false,
@@ -208,15 +263,22 @@ function sectionNode(nodes: GraphNode[]): MapFlowNode | null {
 
 function minimapClass(node: MapFlowNode): string {
   if (node.type === "section") return "fill-transparent";
-  if (node.type === "service") return "fill-secondary";
+  if (node.type === "service") return "fill-muted-foreground/25";
   return TONE_FILL[statusTone(node.data.box.status)];
 }
 
+/** Under the editor's pattern fields, as on the Job list: which of the region's jobs the patterns match. */
+function patternPreview(pattern: string, exclude: string, jobIds: EntryJobIds): ReactNode {
+  return <PatternMatches pattern={pattern} exclude={exclude} jobIds={jobIds} />;
+}
+
 /**
- * The dependency map: jobs and services as boxes, links as arrows, colored by
- * live status. Select a box to see what a failure there affects; add a link
- * by picking two boxes; click a link to remove it. Every edit saves one change
- * through useJobList, so conflicts and rule errors come back as alerts.
+ * The dependency map, as a designer canvas: jobs and services as cards on a
+ * dot grid, links as arrows, colored by live status. Select a card to see what
+ * a failure there affects downstream and what it depends on upstream, with its
+ * settings in the side panel; add a link by picking two cards; click a link to
+ * remove it. Every edit saves one change through useJobList, so conflicts and
+ * rule errors come back as alerts.
  */
 export function DependencyMapPage() {
   const { state, loading, error, reload, save } = useJobList();
@@ -225,12 +287,22 @@ export function DependencyMapPage() {
   const document = state?.document ?? null;
   // The version on screen: a change made on the map is made from it.
   const version = state?.version ?? null;
-  const graph = useMemo(() => (document ? buildGraph(document, live.byJob) : null), [document, live.byJob]);
+  const [direction, setDirection] = useState<LayoutDirection>("LR");
+  const [showServices, setShowServices] = useState(true);
+  // Laid out again only when the list, the statuses, the direction or the services switch change, never on a selection.
+  const graph = useMemo(
+    () => (document ? buildGraph(document, live.byJob, { direction, services: showServices }) : null),
+    [document, live.byJob, direction, showServices],
+  );
+  // Every link, the hidden service links too: the side panel lists a job's real links whatever the map shows.
+  const allEdges = useMemo(() => (document ? buildEdges(document) : []), [document]);
+  const facts = useMemo(() => (document ? cardFacts(document) : null), [document]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [link, setLink] = useState<LinkMode>({ step: "off" });
   const [serviceOpen, setServiceOpen] = useState(false);
   const [menuEdge, setMenuEdge] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
@@ -239,17 +311,28 @@ export function DependencyMapPage() {
 
   const mapRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
+  const editRef = useRef<HTMLButtonElement>(null);
+  // The card of the job being edited, kept when Edit job is pressed: focus goes there if the panel closed meanwhile.
+  const editedCardRef = useRef<HTMLElement | null>(null);
   const bannerRef = useRef<HTMLDivElement>(null);
   const addLinkRef = useRef<HTMLButtonElement>(null);
   const addServiceRef = useRef<HTMLButtonElement>(null);
   const anchor = useRef<Measurable>({ getBoundingClientRect: () => rect(0, 0) });
   const [refocus, setRefocus] = useState<FocusTarget | null>(null);
 
-  // A box removed by a save (a service whose last link went) drops out of the selection on its own.
+  // A box removed by a save (a service whose last link went), or hidden by the services switch, drops out of the selection on its own.
   const selected = graph?.nodes.find((n) => n.id === selectedId) ?? null;
-  const downstream = useMemo(() => (document && selected ? downstreamOf(document, selected) : null), [document, selected]);
+  const chain = useMemo<Chain | null>(
+    () => (document && graph && selected ? { downstream: downstreamOf(document, selected), upstream: upstreamOf(graph.edges, selected.id) } : null),
+    [document, graph, selected],
+  );
+  const steps = useMemo(() => (document && selected ? impactSteps(document, selected) : null), [document, selected]);
   const menuLink = graph?.edges.find((e) => e.id === menuEdge) ?? null;
   const statusLoading = live.loading && live.byJob.size === 0;
+  const panelOpen = selected !== null && link.step === "off";
+  const editingJob = editing !== null ? document?.jobs.find((job) => job.job_name === editing) : undefined;
+  // When the editor closes: Edit job, else the job's card (the panel closed meanwhile), else the map.
+  const editorReturnFocus = useMemo<ReturnFocus>(() => [editRef, editedCardRef, mapRef], []);
 
   // Moves focus on when a change takes away what had it.
   useEffect(() => {
@@ -282,6 +365,16 @@ export function DependencyMapPage() {
     [save],
   );
 
+  /** Saves the job editor's entry, the way the Job list does; the editor shows its own conflicts and issues. */
+  const saveEntry = async (entry: JobEntry, baseVersion: number | null): Promise<SaveOutcome> => {
+    const outcome = await save({ kind: "upsert", target: { type: "job", name: entry.job_name }, value: entry }, baseVersion);
+    if (outcome.ok) {
+      setProblem(null);
+      setNotice(`Saved version ${outcome.result.version}: ${outcome.result.summary}.`);
+    }
+    return outcome;
+  };
+
   const openEdge = useCallback((edgeId: string) => {
     let last = rect(0, 0);
     anchor.current = {
@@ -311,20 +404,29 @@ export function DependencyMapPage() {
     });
   };
 
+  /** A click on the canvas or on the group frame: close the menu, and clear the selection unless a link is being added. */
+  const clearOnCanvas = () => {
+    setMenuEdge(null);
+    if (link.step === "off") setSelectedId(null);
+  };
+
   const flowNodes = useMemo<MapFlowNode[]>(() => {
     if (!graph) return [];
-    const nodes = graph.nodes.map((box) => toFlowNode(box, nodeHighlight(box, link, selected, downstream), statusLoading));
+    const nodes = graph.nodes.map((box) =>
+      toFlowNode(box, nodeHighlight(box, link, selected, chain), statusLoading, direction, box.kind === "job" ? (facts?.get(box.name) ?? null) : null),
+    );
     const section = sectionNode(graph.nodes);
-    return section ? [...nodes, section] : nodes;
-  }, [graph, link, selected, downstream, statusLoading]);
+    // The group frame goes first, so it is drawn under its cards.
+    return section ? [section, ...nodes] : nodes;
+  }, [graph, link, selected, chain, statusLoading, direction, facts]);
 
-  // Changes when a save adds, removes or moves a box, so the view fits the new layout.
+  // Changes when a save, the direction or the services switch adds, removes or moves a box, so the view fits the new layout.
   const layoutKey = useMemo(() => (graph?.nodes ?? []).map((n) => `${n.id}@${n.position.x},${n.position.y}`).join("|"), [graph]);
 
   const flowEdges = useMemo<LinkFlowEdge[]>(
     () =>
       (graph?.edges ?? []).map((edge) => {
-        const highlight = edgeHighlight(edge, link, selected, downstream);
+        const highlight = edgeHighlight(edge, link, selected, chain);
         return {
           id: edge.id,
           type: "link",
@@ -339,10 +441,11 @@ export function DependencyMapPage() {
           ariaLabel: linkLabel(edge),
           ariaRole: "button",
           interactionWidth: 18,
-          zIndex: highlight === "downstream" || edge.id === menuEdge ? 1 : 0,
+          // The selection's chain draws over the faded links.
+          zIndex: highlight === "downstream" || highlight === "upstream" || edge.id === menuEdge ? 1 : 0,
         };
       }),
-    [graph, link, selected, downstream, menuEdge],
+    [graph, link, selected, chain, menuEdge],
   );
 
   const onEdgesChange = useCallback(
@@ -414,7 +517,7 @@ export function DependencyMapPage() {
 
   let body: ReactNode;
   if (state === null && error === null) {
-    body = <Skeleton className="min-h-[520px] w-full flex-1 rounded-md" />;
+    body = <CanvasSkeleton />;
   } else if (state === null) {
     body = (
       <Alert variant="destructive">
@@ -448,105 +551,124 @@ export function DependencyMapPage() {
   } else {
     body = (
       <>
-        {graph.edges.length === 0 && link.step === "off" ? (
+        {allEdges.length === 0 && link.step === "off" ? (
           <p className="-mt-1 flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
             <Network className="size-4 shrink-0" aria-hidden="true" />
             {EMPTY_COPY}
           </p>
         ) : null}
-        {/* tabIndex -1: focus lands on the map itself when nothing on it can take it. */}
-        <div ref={mapRef} tabIndex={-1} className="relative min-h-[520px] flex-1 overflow-hidden rounded-md border border-border bg-muted" onKeyDown={onKeyDown}>
-          <MapMarkers />
-          <div className="absolute inset-0">
-            <ReactFlow<MapFlowNode, LinkFlowEdge>
-              nodes={flowNodes}
-              edges={flowEdges}
-              nodeTypes={NODE_TYPES}
-              edgeTypes={EDGE_TYPES}
-              // Also what gives the boxes pointer events: React Flow turns them off on a node that is neither selectable nor clickable.
-              onNodeClick={(_event, node) => {
-                if (node.type !== "section") activate(node.data.box);
-              }}
-              onEdgeClick={(_event, edge) => {
-                if (link.step === "off") openEdge(edge.id);
-              }}
-              onEdgesChange={onEdgesChange}
-              onPaneClick={() => {
-                setMenuEdge(null);
-                if (link.step === "off") setSelectedId(null);
-              }}
-              nodesDraggable={false}
-              nodesConnectable={false}
-              nodesFocusable={false}
-              edgesFocusable
-              deleteKeyCode={null}
-              selectionKeyCode={null}
-              multiSelectionKeyCode={null}
-              fitView
-              fitViewOptions={FIT_OPTIONS}
-              minZoom={0.2}
-              maxZoom={1.75}
-              colorMode="light"
-              // React Flow asks that only Pro subscribers hide its attribution; it sits between the controls and the minimap.
-              attributionPosition="bottom-center"
-              ariaLabelConfig={ARIA_LABELS}
-              aria-label="Dependency map"
-            >
-              <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="var(--input)" bgColor="var(--muted)" />
-              <Controls
-                showInteractive={false}
-                position="bottom-left"
-                className="overflow-hidden rounded-md border border-border bg-card shadow-xs [&_.react-flow__controls-button]:border-b [&_.react-flow__controls-button]:border-border [&_.react-flow__controls-button]:bg-card [&_.react-flow__controls-button]:text-foreground [&_.react-flow__controls-button:hover]:bg-muted [&_.react-flow__controls-button:last-child]:border-b-0"
-              />
-              <MiniMap<MapFlowNode>
-                pannable
-                zoomable
-                position="bottom-right"
-                nodeClassName={minimapClass}
-                nodeBorderRadius={4}
-                bgColor="var(--card)"
-                maskColor="color-mix(in srgb, var(--muted) 75%, transparent)"
-                maskStrokeColor="var(--border)"
-                className="overflow-hidden rounded-md border border-border shadow-xs"
-              />
-              <Refit layoutKey={layoutKey} />
-              <Panel position="top-left">
-                <MapLegend />
-              </Panel>
-              {/* Adding a link clears the selection, so the banner takes the inspector's corner and never covers the legend. */}
-              {link.step !== "off" ? (
-                <Panel position="top-right">
-                  <LinkBanner
-                    mode={link}
-                    containerRef={bannerRef}
-                    onCancel={() => {
-                      setLink({ step: "off" });
-                      addLinkRef.current?.focus();
-                    }}
-                  />
+        <ReactFlowProvider>
+          {/* tabIndex -1: focus lands on the map itself when nothing on it can take it. */}
+          <div
+            ref={mapRef}
+            tabIndex={-1}
+            className="@container relative min-h-[520px] flex-1 overflow-hidden rounded-lg border border-border bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onKeyDown={onKeyDown}
+          >
+            <MapMarkers />
+            {/* Before the canvas, so Tab reaches the toolbar before the links and the cards. */}
+            <Toolbar
+              className="absolute top-3 left-3 z-10"
+              direction={direction}
+              onDirectionChange={setDirection}
+              showServices={showServices}
+              onShowServicesChange={setShowServices}
+              panelOpen={panelOpen}
+            />
+            <div className="absolute inset-0">
+              <ReactFlow<MapFlowNode, LinkFlowEdge>
+                nodes={flowNodes}
+                edges={flowEdges}
+                nodeTypes={NODE_TYPES}
+                edgeTypes={EDGE_TYPES}
+                // Also what gives the cards pointer events: React Flow turns them off on a node that is neither selectable nor clickable.
+                onNodeClick={(_event, node) => {
+                  if (node.type === "section") clearOnCanvas();
+                  else activate(node.data.box);
+                }}
+                onEdgeClick={(_event, edge) => {
+                  if (link.step === "off") openEdge(edge.id);
+                }}
+                onEdgesChange={onEdgesChange}
+                onPaneClick={clearOnCanvas}
+                nodesDraggable={false}
+                nodesConnectable={false}
+                nodesFocusable={false}
+                edgesFocusable
+                deleteKeyCode={null}
+                selectionKeyCode={null}
+                multiSelectionKeyCode={null}
+                fitView
+                fitViewOptions={FIRST_FIT}
+                // Low enough for a fit to show a 200-job map whole; zoom in, pan or use the minimap from there.
+                minZoom={0.1}
+                maxZoom={1.75}
+                colorMode="light"
+                // React Flow asks that only Pro subscribers hide its attribution; it sits between the legend and the minimap.
+                attributionPosition="bottom-center"
+                ariaLabelConfig={ARIA_LABELS}
+                aria-label="Dependency map"
+              >
+                <Background variant={BackgroundVariant.Dots} gap={16} size={1.1} color="var(--input)" bgColor="var(--muted)" />
+                <MiniMap<MapFlowNode>
+                  pannable
+                  zoomable
+                  position="bottom-right"
+                  nodeClassName={minimapClass}
+                  nodeBorderRadius={6}
+                  bgColor="var(--card)"
+                  maskColor="color-mix(in srgb, var(--muted) 72%, transparent)"
+                  maskStrokeColor="var(--input)"
+                  maskStrokeWidth={1}
+                  className="m-3 overflow-hidden rounded-lg border border-border shadow-[0_1px_2px_rgb(27_49_57/0.06)] @max-2xl:hidden [&>svg]:h-[120px] [&>svg]:w-[160px]"
+                />
+                <Refit layoutKey={layoutKey} panelOpen={panelOpen} />
+                <KeepInView nodeId={panelOpen ? selected.id : null} />
+                <Panel position="bottom-left" className="m-3">
+                  <MapLegend />
                 </Panel>
-              ) : null}
-              {selected && document ? (
-                <Panel position="top-right">
-                  <Inspector
-                    box={selected}
-                    document={document}
-                    downstream={downstream}
-                    links={graph.edges.filter((e) => e.source === selected.id || e.target === selected.id)}
-                    saving={saving}
-                    panelRef={panelRef}
-                    onRemove={(edgeId) => removeLink(edgeId, "panel")}
-                    onClose={() => {
-                      setSelectedId(null);
-                      setRefocus({ kind: "box", id: selected.id });
-                    }}
-                  />
-                </Panel>
-              ) : null}
-            </ReactFlow>
+                {/* Adding a link clears the selection, so the banner takes the panel's corner, below the toolbar on a narrow canvas. */}
+                {link.step !== "off" ? (
+                  <Panel position="top-right" className="m-3 @max-3xl:mt-14">
+                    <LinkBanner
+                      mode={link}
+                      containerRef={bannerRef}
+                      onCancel={() => {
+                        setLink({ step: "off" });
+                        addLinkRef.current?.focus();
+                      }}
+                    />
+                  </Panel>
+                ) : null}
+                {panelOpen && document ? (
+                  // Down the right, over the minimap when it needs the height; the frame lets clicks through around the panel.
+                  <Panel position="top-right" className="pointer-events-none bottom-0 m-3 flex items-start">
+                    <MapSidePanel
+                      box={selected}
+                      document={document}
+                      links={allEdges.filter((e) => e.source === selected.id || e.target === selected.id)}
+                      steps={steps ?? new Map()}
+                      statusLoading={statusLoading}
+                      saving={saving}
+                      panelRef={panelRef}
+                      editRef={editRef}
+                      onRemove={(edgeId) => removeLink(edgeId, "panel")}
+                      onEdit={() => {
+                        editedCardRef.current = boxButton(mapRef.current, selected.id);
+                        setEditing(selected.name);
+                      }}
+                      onClose={() => {
+                        setSelectedId(null);
+                        setRefocus({ kind: "box", id: selected.id });
+                      }}
+                    />
+                  </Panel>
+                ) : null}
+              </ReactFlow>
+            </div>
+            <LinkMenu link={menuLink} anchor={anchor} saving={saving} onRemove={(edgeId) => removeLink(edgeId, "menu")} onClose={closeMenu} />
           </div>
-          <LinkMenu link={menuLink} anchor={anchor} saving={saving} onRemove={(edgeId) => removeLink(edgeId, "menu")} onClose={closeMenu} />
-        </div>
+        </ReactFlowProvider>
       </>
     );
   }
@@ -555,7 +677,7 @@ export function DependencyMapPage() {
     <>
       <PageHeader
         title="Dependency map"
-        description="How the monitored jobs depend on each other and on services. Select a box to see what a failure there affects."
+        description="How the monitored jobs depend on each other and on services. Select a card to see what a failure there affects."
         actions={headerActions}
       />
       <ConfigBanner savedVersion={state ? state.version : undefined} />
@@ -611,38 +733,133 @@ export function DependencyMapPage() {
             defaultJob={selected?.kind === "job" ? selected.name : null}
             saving={saving}
             returnFocus={[addServiceRef]}
-            onSave={(change) => void runSave(change, version).then(() => setServiceOpen(false))}
+            onSave={(change) =>
+              void runSave(change, version).then((saved) => {
+                setServiceOpen(false);
+                // A new service shows on the map, even when the switch had hidden the services.
+                if (saved) setShowServices(true);
+              })
+            }
           />
         </>
+      ) : null}
+      {/* Outside the map, so Escape in the editor closes the editor and leaves the selection alone. */}
+      {state ? (
+        <JobEditorSheet
+          open={editingJob !== undefined}
+          onOpenChange={(open) => {
+            if (!open) setEditing(null);
+          }}
+          mode="edit"
+          initial={editingJob ?? { job_name: "" }}
+          document={state.document}
+          version={state.version}
+          onSave={saveEntry}
+          renderPatternPreview={patternPreview}
+          onReload={reload}
+          returnFocus={editorReturnFocus}
+        />
       ) : null}
     </>
   );
 }
 
+/** The canvas while the job list loads: a dot grid with a few card skeletons. */
+function CanvasSkeleton() {
+  return (
+    <div className="relative min-h-[520px] flex-1 overflow-hidden rounded-lg border border-border bg-muted bg-[radial-gradient(var(--input)_1px,transparent_1.2px)] bg-size-[16px_16px]">
+      <Skeleton className="absolute top-3 left-3 h-9 w-80 rounded-full" />
+      <div className="absolute inset-0 flex items-center justify-center gap-24">
+        <div className="flex flex-col gap-6">
+          <Skeleton className="h-[68px] w-[248px] rounded-lg" />
+          <Skeleton className="h-[52px] w-[184px] rounded-full" />
+        </div>
+        <div className="flex flex-col gap-6">
+          <Skeleton className="h-[68px] w-[248px] rounded-lg" />
+          <Skeleton className="h-[68px] w-[248px] rounded-lg" />
+        </div>
+        <div className="hidden flex-col gap-6 xl:flex">
+          <Skeleton className="h-[68px] w-[248px] rounded-lg" />
+        </div>
+      </div>
+      <Skeleton className="absolute bottom-3 left-3 h-[66px] w-[300px] rounded-lg" />
+    </div>
+  );
+}
+
+interface ToolbarProps extends Omit<MapToolbarProps, "fitOptions"> {
+  panelOpen: boolean;
+}
+
+/** The toolbar with the fit for the canvas's width, which only the map's store knows. */
+function Toolbar({ panelOpen, ...props }: ToolbarProps) {
+  const width = useStore((state) => state.width);
+  return <MapToolbar {...props} fitOptions={fitOptions(width, panelOpen)} />;
+}
+
 interface RefitProps {
   layoutKey: string;
+  panelOpen: boolean;
 }
 
 /**
- * Fits the view again when the boxes change place (a save added or removed
- * one) and when the map's area changes size (an alert or a note above it came
- * or went, or the window changed). The first fit is the fitView prop's.
+ * Fits the view again when the boxes change place (a save, the direction or
+ * the services switch moved them) and when the map's area changes size (an
+ * alert or a note above it came or went, or the window changed), clear of the
+ * overlays and of the side panel while it is open. Opening the panel does not
+ * refit: the view stays where the person put it. The first fit is the fitView
+ * prop's, which runs before the size is known.
  */
-function Refit({ layoutKey }: RefitProps) {
+function Refit({ layoutKey, panelOpen }: RefitProps) {
   const { fitView } = useReactFlow();
   // The size of the drawing area, which React Flow measures on every resize.
   const width = useStore((state) => state.width);
   const height = useStore((state) => state.height);
   const first = useRef(true);
+  const refit = useEffectEvent(() => void fitView(fitOptions(width, panelOpen)));
   useEffect(() => {
     if (first.current) {
       first.current = false;
       return;
     }
     // After React Flow has taken the new nodes into its store.
-    const frame = window.requestAnimationFrame(() => void fitView(FIT_OPTIONS));
+    const frame = window.requestAnimationFrame(() => refit());
     return () => window.cancelAnimationFrame(frame);
-  }, [layoutKey, width, height, fitView]);
+  }, [layoutKey, width, height]);
+  return null;
+}
+
+interface KeepInViewProps {
+  /** The selected box while the side panel is open, else null. */
+  nodeId: string | null;
+}
+
+/**
+ * Brings a newly selected box out from under the side panel: the view moves
+ * left just enough, at the same zoom. A box already in view does not move it.
+ */
+function KeepInView({ nodeId }: KeepInViewProps) {
+  const { getInternalNode, getViewport, setViewport } = useReactFlow();
+  const width = useStore((state) => state.width);
+  const reveal = useEffectEvent((id: string) => {
+    if (width < PANEL_CLEAR_FROM) return;
+    const node = getInternalNode(id);
+    if (!node) return;
+    const { x, y, zoom } = getViewport();
+    const left = x + node.internals.positionAbsolute.x * zoom;
+    const right = left + (node.measured.width ?? node.width ?? 0) * zoom;
+    const edge = width - (OVERLAY.inset + OVERLAY.panel + 16);
+    // Never past the left edge of the canvas.
+    const shift = Math.min(right - edge, left - 24);
+    // A straight glide: the smooth path would zoom out and back in on the way.
+    if (right > edge && shift > 0) void setViewport({ x: x - shift, y, zoom }, { duration: viewDuration(), interpolate: "linear" });
+  });
+  useEffect(() => {
+    if (nodeId === null) return;
+    // After the panel is drawn.
+    const frame = window.requestAnimationFrame(() => reveal(nodeId));
+    return () => window.cancelAnimationFrame(frame);
+  }, [nodeId]);
   return null;
 }
 
@@ -653,7 +870,7 @@ interface LinkBannerProps {
   onCancel: () => void;
 }
 
-/** The step of adding a link, above the map, with Cancel. */
+/** The step of adding a link, over the canvas, with Cancel. */
 function LinkBanner({ mode, containerRef, onCancel }: LinkBannerProps) {
   let text: string;
   if (mode.step === "source") text = "Pick the upstream job or service.";
@@ -662,11 +879,14 @@ function LinkBanner({ mode, containerRef, onCancel }: LinkBannerProps) {
   return (
     <div
       ref={containerRef}
-      className="flex max-w-md items-center gap-3 rounded-md border border-primary/40 bg-card py-1.5 pr-1.5 pl-3 text-sm shadow-sm"
+      className="flex max-w-[min(28rem,calc(100cqw-24px))] items-center gap-3 rounded-xl border border-primary/35 bg-card py-1.5 pr-1.5 pl-3.5 text-[13px] shadow-[0_2px_10px_rgb(27_49_57/0.10)]"
       role="status"
       aria-live="polite"
     >
-      <span className="size-2 shrink-0 rounded-full bg-primary" aria-hidden="true" />
+      <span className="relative flex size-2 shrink-0" aria-hidden="true">
+        <span className="absolute inline-flex size-full rounded-full bg-primary opacity-60 motion-safe:animate-ping" />
+        <span className="relative inline-flex size-2 rounded-full bg-primary" />
+      </span>
       <span className="min-w-0 break-words">{text}</span>
       <Button variant="ghost" size="sm" className="h-7" onClick={onCancel}>
         Cancel
@@ -739,109 +959,6 @@ function LinkMenu({ link, anchor, saving, onRemove, onClose }: LinkMenuProps) {
         </PopoverContent>
       ) : null}
     </Popover>
-  );
-}
-
-interface InspectorProps {
-  box: GraphNode;
-  document: JobListDocument;
-  downstream: Downstream | null;
-  links: GraphEdge[];
-  saving: boolean;
-  /** The panel's element, which takes focus after a link is removed in it. */
-  panelRef: RefObject<HTMLElement | null>;
-  onRemove: (edgeId: string) => void;
-  onClose: () => void;
-}
-
-function affectsText(count: number): string {
-  if (count === 0) return "A failure here affects no other job.";
-  return count === 1 ? "A failure here affects 1 job." : `A failure here affects ${count} jobs.`;
-}
-
-/** The selected box: its status, what a failure there affects, and its links, each with Remove. */
-function Inspector({ box, document, downstream, links, saving, panelRef, onRemove, onClose }: InspectorProps) {
-  const affected = downstream?.jobs ?? [];
-  const parent = box.kind === "job" ? impactOf(document, box.name).parentJob : null;
-  const tone = statusTone(box.status);
-  return (
-    <section
-      ref={panelRef}
-      tabIndex={-1}
-      aria-label={box.name}
-      className="flex max-h-[min(60svh,520px)] w-80 flex-col overflow-hidden rounded-md border border-border bg-card text-sm shadow-sm"
-    >
-      <header className="flex items-start gap-2 border-b border-border px-3 py-2.5">
-        <div className="min-w-0 flex-1">
-          <p className="truncate font-mono text-[13px] font-medium" title={box.name}>
-            {box.name}
-          </p>
-          <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-            {box.kind === "service" ? (
-              "Service"
-            ) : (
-              <>
-                <span className={cn("size-1.5 rounded-full", TONE_DOT[tone])} aria-hidden="true" />
-                {STATUS_LABEL[box.status]}
-                {box.active ? null : " · Switched off"}
-              </>
-            )}
-          </p>
-        </div>
-        <Button variant="ghost" size="icon-sm" aria-label="Clear the selection" onClick={onClose}>
-          <X aria-hidden="true" />
-        </Button>
-      </header>
-      <div className="flex flex-col gap-3 overflow-auto px-3 py-2.5">
-        {parent ? (
-          <p className="text-xs text-muted-foreground">
-            Child job of <span className="font-mono text-foreground">{parent}</span>
-          </p>
-        ) : null}
-        <div>
-          <p className="text-xs font-medium text-foreground">{affectsText(affected.length)}</p>
-          {affected.length > 0 ? (
-            <ul className="mt-1 flex flex-col gap-0.5">
-              {affected.map((name) => (
-                <li key={name} className="truncate font-mono text-[11px] text-muted-foreground" title={name}>
-                  {name}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-        {links.length > 0 ? (
-          <div>
-            <p className="text-xs font-medium text-foreground">Links</p>
-            <ul className="mt-1 flex flex-col">
-              {links.map((edge) => {
-                const upstream = edge.target === box.id;
-                const other = upstream ? edge.dependency.depends_on : edge.dependency.job_name;
-                return (
-                  <li key={edge.id} className="flex items-center gap-2 border-b border-border/60 py-1 last:border-b-0">
-                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={linkLabel(edge)}>
-                      {upstream ? "Needs " : "Needed by "}
-                      <span className="font-mono text-foreground">{other}</span>
-                      {edge.type === "child_job" ? " (child job)" : edge.type === "service" ? " (service)" : null}
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 px-1.5 text-xs text-muted-foreground hover:text-destructive"
-                      disabled={saving}
-                      aria-label={`Remove the link: ${linkLabel(edge)}`}
-                      onClick={() => onRemove(edge.id)}
-                    >
-                      Remove
-                    </Button>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ) : null}
-      </div>
-    </section>
   );
 }
 
