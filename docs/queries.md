@@ -67,13 +67,15 @@ All four use `INSERT OVERWRITE`, which keeps the table definition and column com
 
 ## sql/views
 
-Made current by notebook 01, after the tables are upgraded. Notebook 01 creates the view when it is missing, and replaces it only when its columns no longer match `findings` or its definition version (the table property `watchdog.view_version`) differs from the file's. A view that is current is left alone, so its owner and grants stay.
+Made current by notebook 01, after the tables are upgraded. Notebook 01 creates each view when it is missing, and replaces it only when its columns change or its definition version (the table property `watchdog.view_version`) differs from the file's. A view that is current is left alone, so its owner and grants stay.
 
 | File | Parameters | What it does |
 |---|---|---|
 | `01_findings_latest.sql` | `catalog`, `schema`, through the template below | Creates `findings_latest`: every row of the newest scan from each source. |
+| `02_incidents.sql` | `catalog`, `schema`, through the template below | Creates `incidents`: one row per problem with one check of one job, from the scan that found it until a HEALTHY row clears it. |
 
-- **Read it:** the view shows the current status. It keeps no history: `findings` does. Dashboards read the view. See [The findings_latest view](data-model.md#the-findings_latest-view).
+- **Read `findings_latest`:** the view shows the current status. It keeps no history: `findings` does. Dashboards read the view. See [The findings_latest view](data-model.md#the-findings_latest-view).
+- **Read `incidents`:** `state` is `OPEN`, `RESOLVED` or `NOT_CHECKED`. The file's comments hold the rules, and [The incidents view](data-model.md#the-incidents-view) explains every column.
 
 **Why views use a template.** A view cannot take parameter markers, so the file holds `{schema}` where the name goes. `jobs_watchdog/upgrade.py` replaces it with the checked, quoted catalog and schema (`` `catalog`.`schema` ``) before it runs, so the names pass the same check as every other statement. To run the file in the SQL editor, replace `{schema}` with `` `<catalog>`.`<schema>` `` first.
 
@@ -183,6 +185,14 @@ Adds the rows of `watchdog_new_findings` to `findings`, each at most once.
 - **Returns:** the merge counts, including `num_inserted_rows`.
 - **Read it:** a row whose key (`scan_id`, `workspace_id`, `job_id`, `job_name`, `check_id`, `source`) is already in the table is skipped. `<=>` treats two NULLs as equal, so `not_found` rows are matched too. Re-running a scan with the same `scan_id` inserts 0 rows.
 
+### 31_scan_summary.sql
+
+What a scan wrote, and how its problems moved. Notebooks 05 and 06 print their own source's row as two lines after they write.
+
+- **Parameters:** `catalog`, `schema`, `scan_id`.
+- **Columns:** `source`, `rows_written`, `new_problems`, `still_open`, `resolved`.
+- **Read it:** one row per source. `rows_written` counts the rows the scan holds in `findings`, one per job and check; running the same scan again adds none. `new_problems` counts incidents that opened in this scan, `still_open` OPEN incidents that opened in an earlier scan, and `resolved` incidents that a HEALTHY row in this scan cleared.
+
 ## sql/validate
 
 Run by notebook 07. `:scan_id` works the same way in `40` and `42`: set it to check one scan, or leave it empty to check each source's newest scan. Empty is what you want after running notebooks 05 and 06 by hand, because each makes its own `scan_id`.
@@ -204,6 +214,12 @@ Run by notebook 07. `:scan_id` works the same way in `40` and `42`: set it to ch
 - **Parameters:** `catalog`, `schema`, `scan_id`.
 - **Columns:** `job_name`, `source`.
 - **Read it:** expect no rows. It checks every job switched on in at least one environment: `enabled: true`, or `enabled: true` for a label in its `environments` section. The system table scan always writes `last_run_result` or `not_found` for such a job, and the Jobs API scan always writes `live_run_status`, `not_found` or `api_unreachable`. A row here names a job and the source that wrote nothing about it.
+
+### 43_open_incidents_match_latest.sql
+
+- **Parameters:** `catalog`, `schema`.
+- **Columns:** `problem`, `source`, `job_name`, `check_id`, `workspace_id`, `job_id`, `scan_id`.
+- **Read it:** expect no rows. Every FAILED or WARNING row in `findings_latest` has an OPEN incident with the same key, and every OPEN incident's newest problem row is in its source's newest scan, unless that scan says UNKNOWN for it. A row here names the key and what disagrees. Run notebook 01 first if the view is out of date.
 
 ## sql/maintenance
 

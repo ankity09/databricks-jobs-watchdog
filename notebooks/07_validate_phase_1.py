@@ -4,15 +4,16 @@
 # MAGIC
 # MAGIC **What it does.** Checks that Phase 1 is complete and prints one PASS or FAIL line per check:
 # MAGIC
-# MAGIC 1. the five tables and the `findings_latest` view exist;
+# MAGIC 1. the five tables and the `findings_latest` and `incidents` views exist;
 # MAGIC 2. the config has enabled jobs (switched on in at least one environment);
 # MAGIC 3. both sources (system tables and the Jobs API) wrote findings;
 # MAGIC 4. every enabled job got at least one finding from each source;
-# MAGIC 5. no findings key appears twice.
+# MAGIC 5. no findings key appears twice;
+# MAGIC 6. every FAILED or WARNING row in `findings_latest` has an OPEN incident, and every OPEN incident was found in its source's newest scan.
 # MAGIC
 # MAGIC **Inputs (widgets).** `catalog`, `schema`, `scan_id`. With `scan_id` empty, it checks each source's newest scan, which is what you want after running notebooks 05 and 06 by hand. The input boxes appear at the top of the notebook after you run the first two code cells; when the notebook runs as a job, its parameters fill them in.
 # MAGIC
-# MAGIC **What to look for.** Five PASS lines. The notebook fails if any check fails, so a job run of the Watchdog shows red.
+# MAGIC **What to look for.** Six PASS lines. The notebook fails if any check fails, so a job run of the Watchdog shows red.
 
 # COMMAND ----------
 

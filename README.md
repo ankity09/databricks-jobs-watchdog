@@ -1,6 +1,6 @@
 # Watchdog: job monitoring across Databricks workspaces
 
-Watchdog checks your Databricks jobs in every workspace of a cloud region and writes what it finds into one Unity Catalog table. It is built in phases. **Phase 1.3**, in this repo today, creates the tables, loads your list of jobs to watch (by name or by job ID, with shared defaults and per-environment settings), runs the scans on a schedule (paused until you turn it on), lists what a failure affects through the whole dependency chain, deletes old findings, and adds a first dashboard.
+Watchdog checks your Databricks jobs in every workspace of a cloud region and writes what it finds into one Unity Catalog table. It is built in phases. **Phase 1.4**, in this repo today, creates the tables, loads your list of jobs to watch (by name or by job ID, with shared defaults and per-environment settings), runs the scans on a schedule (paused until you turn it on), lists each ongoing problem once until it clears, lists what a failure affects through the whole dependency chain, deletes old findings, and adds a first dashboard.
 
 > **Already running the first release?** [CHANGELOG.md](CHANGELOG.md) lists everything that changed and how to upgrade: pull, restart Python on open notebooks, then run notebook 01 once.
 
@@ -51,12 +51,13 @@ Each row names the job, the check, its status and severity, and the run the row 
 
 ### History and current status: `findings` and `findings_latest`
 
-The Watchdog keeps two views of the same results:
+The Watchdog keeps three views of the same results:
 
-- **`findings` is the history, like a logbook.** It is a table that keeps every scan. Each scan adds rows, one per job, check and source, and nothing is overwritten. Re-running a scan never adds duplicates.
+- **`findings` is the history, like a logbook.** It is a table that keeps every scan. Each scan adds rows, one per job, check and source, and nothing is overwritten. Re-running a scan never adds duplicates. A problem that lasts is in every scan, so it has a row in each one.
 - **`findings_latest` is the current status, like a status board.** It is a view, a saved query rather than a second copy of the data, that shows only the newest scan from each source. It is up to date as soon as a scan finishes.
+- **`incidents` lists each problem once, like a ticket list.** It is a view too. One row stands for one problem with one check of one job, from the scan that found it until a HEALTHY row clears it, with its state (`OPEN`, `RESOLVED` or `NOT_CHECKED`), when it opened and how many scans found it.
 
-Use `findings_latest` for "what is wrong right now". The dashboard's Now and Versions and runs pages read it. Use `findings` for "since when, how often, and did it recover". The dashboard's History page reads it, and the alerts in Phase 3 need it to alert once when a job breaks and once when it recovers, instead of on every scan.
+Use `findings_latest` for "what is wrong right now". The dashboard's Now and Versions and runs pages read it. Use `incidents` for "what is still broken, and since when". Use `findings` for "how often, and what exactly each scan saw". The dashboard's History page reads it, and the alerts in later phases will read `incidents` to alert once when a problem opens and once when it is resolved, instead of on every scan.
 
 ## What this deploys
 
@@ -65,8 +66,9 @@ In the catalog and schema you choose (schema `watchdog` by default):
 - `monitored_jobs`, `job_dependencies`, `monitored_workspaces` and `monitored_job_environments`: your config, loaded from a YAML file.
 - `findings`: the history, every scan, one row per job, check and source. Re-running a scan never adds duplicate rows. Scans older than `scan.retention_days` (30 by default) are deleted once a day, except each source's newest.
 - `findings_latest`: a view of the newest scan from each source, the current status (see [History and current status](#history-and-current-status-findings-and-findings_latest)).
+- `incidents`: a view that lists each problem once, from the scan that found it until it clears ([data-model.md](docs/data-model.md#the-incidents-view)).
 
-Notebook `01_create_tables` creates these, and upgrades existing tables and the view in place. Run it after each pull; each scheduled run runs it too. The bundle does not own them, so they and your findings history survive a teardown unless you ask for the schema to be dropped.
+Notebook `01_create_tables` creates these, and upgrades existing tables and the views in place. Run it after each pull; each scheduled run runs it too. The bundle does not own them, so they and your findings history survive a teardown unless you ask for the schema to be dropped.
 
 With the bundle (`databricks.yml`):
 
@@ -163,7 +165,7 @@ Both targets use development mode, so deployed names start with `[dev <your name
 ./teardown.sh -t demo --drop-schema --profile <your-profile>  # also the sample jobs and the Watchdog schema
 ```
 
-`--drop-schema` asks you to type the schema name first. It drops the schema with its five tables and the `findings_latest` view. It stops before changing anything if the schema holds any other table. The script does not delete the dashboard: move it to the trash in the workspace yourself. Any service principal, secret scope or grants you created are yours to remove.
+`--drop-schema` asks you to type the schema name first. It drops the schema with its five tables and its two views, `findings_latest` and `incidents`. It stops before changing anything if the schema holds any other table. The script does not delete the dashboard: move it to the trash in the workspace yourself. Any service principal, secret scope or grants you created are yours to remove.
 
 ## Phases
 
@@ -172,8 +174,9 @@ Both targets use development mode, so deployed names start with `[dev <your name
 | 1 | Tables, config, both scans into one `findings` table, validation, and an on-demand job | Built |
 | 1.1 | A scan every 20 minutes (paused until you unpause it), the `findings_latest` view, a first dashboard, environment labels, run timing, trigger and code version on each finding, and a template for your own checks | Built |
 | 1.2 | Shared `defaults` and per-environment settings in the job list, a retry rule for tasks that fail fast and restart, and the CI pipeline link on each finding | Built |
-| 1.3 | Jobs pinned by job ID, a duplicate-name check, child jobs read with their parent, impact through the whole dependency chain, and a daily job that deletes old findings | Built: this repo |
-| 2 | An incident view that changes only when a status changes, and more checks such as stuck batches and service probes | Planned |
+| 1.3 | Jobs pinned by job ID, a duplicate-name check, child jobs read with their parent, impact through the whole dependency chain, and a daily job that deletes old findings | Built |
+| 1.4 | The `incidents` view: each problem once, from the scan that found it until it clears, and plainer scan output | Built: this repo |
+| 2 | Escalation of incidents that stay open or get worse, and more checks such as stuck batches and service probes | Planned |
 | 3 | Databricks SQL alerts on `findings`, sent to Slack, email, Microsoft Teams, PagerDuty or a webhook, with severity routing, alerts on change and recovery, and routing by environment | Planned |
 | 4 | The Watchdog app, a Databricks App reading `findings` and `findings_latest`: health, incidents, impact, coverage, and Genie questions | Planned |
 | 5 | Other regions and production, and a cross-region roll-up if your security team approves | Planned |
@@ -182,7 +185,7 @@ Both targets use development mode, so deployed names start with `[dev <your name
 
 ## Security notes
 
-- `findings` can hold error text from your jobs, and the dashboard shows it too. Govern `findings`, `findings_latest` and `monitored_workspaces` with Unity Catalog grants like any operational table, and share the dashboard only with people who may read them.
+- `findings` can hold error text from your jobs, and the dashboard shows it too. Govern `findings`, its views `findings_latest` and `incidents`, and `monitored_workspaces` with Unity Catalog grants like any operational table, and share the dashboard only with people who may read them.
 - Catalog and schema names must be letters, digits or underscores, and are checked before any SQL runs. Values reach SQL only as named parameters, and table names only through `IDENTIFIER()`.
 - The service principal's secret stays in a secret scope. Nothing in this repo stores a token, host or secret.
 
@@ -201,10 +204,10 @@ notebooks/explore/     03 and 04, read-only exploration, run by hand
 sql/setup/             schema and table DDL
 sql/config/            loads the config tables
 sql/explore/           read-only system table queries
-sql/scan/              system table checks and the findings merge
+sql/scan/              system table checks, the findings merge and the scan summary
 sql/validate/          checks used by notebook 07
 sql/maintenance/       deletes old findings scans (notebook 10)
-sql/views/             the findings_latest view, created by notebook 01
+sql/views/             the findings_latest and incidents views, created by notebook 01
 jobs_watchdog/         Python package the notebooks use
 demo/                  the four sample job notebooks
 scripts/               bundle_vars.py
