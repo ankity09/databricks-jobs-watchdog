@@ -191,7 +191,7 @@ What a scan wrote, and how its problems moved. Notebooks 05 and 06 print their o
 
 - **Parameters:** `catalog`, `schema`, `scan_id`.
 - **Columns:** `source`, `rows_written`, `new_problems`, `still_open`, `resolved`.
-- **Read it:** one row per source. `rows_written` counts the rows the scan holds in `findings`, one per job and check; running the same scan again adds none. `new_problems` counts incidents that opened in this scan, `still_open` OPEN incidents that opened in an earlier scan, and `resolved` incidents that a HEALTHY row in this scan cleared.
+- **Read it:** one row per source that has rows in this scan. `rows_written` counts the rows the scan holds in `findings`, one per job and check; running the same scan again adds none. `new_problems` counts incidents that opened in this scan, `still_open` OPEN incidents that opened in an earlier scan, and `resolved` incidents that a HEALTHY row in this scan cleared.
 
 ## sql/validate
 
@@ -219,7 +219,7 @@ Run by notebook 07. `:scan_id` works the same way in `40` and `42`: set it to ch
 
 - **Parameters:** `catalog`, `schema`.
 - **Columns:** `problem`, `source`, `job_name`, `check_id`, `workspace_id`, `job_id`, `scan_id`.
-- **Read it:** expect no rows. Every FAILED or WARNING row in `findings_latest` has an OPEN incident with the same key, and every OPEN incident's newest problem row is in its source's newest scan, unless that scan says UNKNOWN for it. A row here names the key and what disagrees. Run notebook 01 first if the view is out of date.
+- **Read it:** expect no rows. Every FAILED or WARNING row in `findings_latest` has an OPEN incident with the same key, and every OPEN incident's newest problem row is in its source's newest scan, unless that scan's row for it is neither HEALTHY nor a problem, such as UNKNOWN. A row here names the key and what disagrees. Run notebook 01 first if the view is out of date.
 
 ## sql/maintenance
 

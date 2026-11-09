@@ -295,19 +295,19 @@ Change-only alerts (Phase 3) compare each finding with the previous one for the 
 
 `findings` repeats a problem in every scan, because each scan writes a row for every check, HEALTHY or not. `incidents` is a view that lists each problem once. An incident is one problem with one check of one job, from the scan that found it until a HEALTHY row clears it. `sql/views/02_incidents.sql` holds the rules as comments.
 
-- **The key.** An incident belongs to one check of one job from one source: `source`, `workspace_id`, `job_id`, `job_name` and `check_id`. A name pattern can match two jobs, and each gets its own incidents. Rows with no workspace or job ID, such as `duplicate_name` and `CUSTOM` rows, group the same way.
+- **The key.** An incident belongs to one check of one job from one source: `source`, `workspace_id`, `job_id`, `job_name` and `check_id`. A name pattern can match two jobs, and each gets its own incidents. Rows with no job ID, such as `duplicate_name` rows, or with no workspace or job ID, such as `CUSTOM` rows, group the same way.
 - **Scan order.** Each source's scans are ordered by when they first wrote rows, as in `findings_latest`, so re-running an old `scan_id` never makes it the newest.
-- **What opens and ends one.** A problem is a FAILED or WARNING row. FAILED and WARNING rows for one key, in scan order, with no HEALTHY row between them, are one incident. A HEALTHY row ends it. An UNKNOWN row neither opens nor ends one, because a check that cannot tell is not news. A scan with no row for the key does not end it either.
+- **What opens and ends one.** A problem is a FAILED or WARNING row. FAILED and WARNING rows for one key, in scan order, with no HEALTHY row between them, are one incident. A HEALTHY row ends it. An UNKNOWN row neither opens nor ends one, because a check that cannot tell is not news, and neither does any other status a custom check writes. A scan with no row for the key does not end it either.
 
 | `state` | Meaning |
 |---|---|
 | `OPEN` | No HEALTHY row came after it, and its source's newest scan has a row for it. When that row is UNKNOWN, the incident stays open and `current_status` says UNKNOWN. |
 | `RESOLVED` | A HEALTHY row came after it. `resolved_at` and `resolved_scan_id` are the scan of that first HEALTHY row. |
-| `NOT_CHECKED` | No HEALTHY row came after it, but its source's newest scan has no row for it: the job was removed from the list, switched off, or not reached. If it comes back as a problem before any HEALTHY row, it is the same incident again, `OPEN`. |
+| `NOT_CHECKED` | No HEALTHY row came after it, but its source's newest scan has no row for it: the job was removed from the list, switched off or not reached, or the check writes rows only while it finds a problem. If it comes back as a problem before any HEALTHY row, it is the same incident again, `OPEN`. A fixed `duplicate_name` warning shows as `NOT_CHECKED`, not `RESOLVED`, because that check writes no HEALTHY row. |
 
 | Column | Type | Meaning |
 |---|---|---|
-| `incident_id` | STRING | A SHA-256 hash of the key and `opened_scan_id`, so the same incident always has the same ID. |
+| `incident_id` | STRING | A SHA-256 hash of the key and `opened_scan_id`, so an incident keeps its ID from scan to scan, until retention deletes the scan it opened in (see Retention below). |
 | `state` | STRING | `OPEN`, `RESOLVED` or `NOT_CHECKED`, as above. |
 | `source`, `check_id`, `workspace_id`, `job_id`, `job_name` | STRING | The key. |
 | `workspace_name`, `environment`, `owner`, `schedule_type`, `parent_job`, `severity`, `failure_category` | STRING | From the incident's newest problem row. |
@@ -336,9 +336,11 @@ Notebook 01 creates whatever is missing, and it is safe to run again. The schedu
 
 [CHANGELOG.md](../CHANGELOG.md) lists the tables and columns each release adds.
 
-Replacing a view needs ownership. If another identity owns a view that needs replacing, notebook 01 stops with an error. Its owner can run notebook 01 once, or drop the view so that notebook 01 creates it again.
+Replacing a view needs ownership. If another identity owns a view that needs replacing, notebook 01 stops with an error. Its owner can run notebook 01 once, or drop the view so that notebook 01 creates it again. Notebook 01 replaces only its own views: an object named `findings_latest` or `incidents` that is not a view with the `watchdog.view_version` property, such as a table of yours, stops it with a message that names the object.
 
-Notebooks 02, 05, 06 and 09 check the tables and the views first. A missing table or column, or a missing or out-of-date view, stops them with a message that says to run notebook 01. Each scheduled run runs notebook 01 before its config load and its scans, so a deploy that adds columns is picked up by the next run.
+On compute where replacing a view does not keep its grants, a replaced view loses the grants made on the view itself. After notebook 01 prints `view findings_latest: replaced`, grant `SELECT` on `findings_latest` again, and grant `SELECT` on `incidents` to the same readers. Grants on the schema are not affected, and they cover both views.
+
+Notebooks 02, 05, 06, 09 and 10 check the tables and the views first. A missing table or column, or a missing or out-of-date view, stops them with a message that says to run notebook 01. Each scheduled run runs notebook 01 before its config load and its scans, so a deploy that adds columns is picked up by the next run.
 
 ## Checks
 

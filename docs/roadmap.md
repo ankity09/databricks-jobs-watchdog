@@ -46,7 +46,7 @@ Delivered in this release:
 ## Phase 1.4: one row per problem (built)
 
 - **The `incidents` view.** One row per problem with one check of one job, from the scan that found it until a HEALTHY row clears it: `OPEN`, `RESOLVED` or `NOT_CHECKED`, with when it opened and how many scans found it. Notebook 01 creates it. It reads `findings`, so it covers the rows already there.
-- **Plainer scan output.** Notebooks 05 and 06 print the rows they wrote, one per check, and how many problems are new, still open and resolved.
+- **Plainer scan output.** Notebooks 05 and 06 print how many rows the scan holds, one per check, and how many problems are new, still open and resolved.
 - **A validation check.** Notebook 07 checks the open incidents against `findings_latest`.
 
 ## Phase 2: escalation and more checks

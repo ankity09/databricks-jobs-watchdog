@@ -14,8 +14,8 @@ New in this release is the view **`incidents`**. It lists each problem once, fro
 - `state` says where it is:
   - `OPEN`: no HEALTHY row came after it, and the source's newest scan has a row for it;
   - `RESOLVED`: a HEALTHY row came after it. `resolved_at` and `resolved_scan_id` name that scan;
-  - `NOT_CHECKED`: no HEALTHY row came after it, but the newest scan has no row for it, for example because the job was removed from the list or switched off. If it comes back as a problem, it is the same incident again, `OPEN`.
-- An UNKNOWN row neither opens nor ends an incident: a check that cannot tell is not news.
+  - `NOT_CHECKED`: no HEALTHY row came after it, but the newest scan has no row for it: the job was removed from the list, switched off or not reached, or the check writes rows only while it finds a problem. If it comes back as a problem, it is the same incident again, `OPEN`. A fixed `duplicate_name` warning shows as `NOT_CHECKED`, not `RESOLVED`, because that check writes no HEALTHY row.
+- An UNKNOWN row neither opens nor ends an incident: a check that cannot tell is not news. Any other status a custom check writes counts the same way.
 - `opened_at` says when it started, `scans_seen` how many scans found it, `worst_status` the worst it got, `current_status` the newest status, and `is_new` whether it opened in the newest scan.
 - `watchdog_cleanup` deletes old scans, so an incident older than `scan.retention_days` starts at the oldest row kept: read its `opened_at` as "open since at least".
 
@@ -26,23 +26,28 @@ The view reads `findings` each time, so it covers the rows you already have. [do
 Notebook 06 printed `Offered 2 rows to findings (rows already there for this scan_id are skipped)`, which was easy to read as "a problem that happens again is not written again". Notebooks 05 and 06 now both print two lines, each for its own source:
 
 ```
-Wrote 12 rows for scan 20261109T040000Z, one per check. Running the same scan again adds nothing.
+Scan 20261109T040000Z has 12 rows, one per check. Running the same scan again adds nothing.
 Problems: 2 new, 3 still open, 1 resolved. The incidents view lists each problem once until it clears.
 ```
+
+A scan with no rows prints only the first line. Notebook 09, your own checks, still prints the old line for now: `Offered N rows` is the number of rows it wrote for this scan, and running the same scan again adds nothing. Its incidents show up in the view all the same.
 
 ### Changed behavior
 
 - Notebook 05 prints these two lines instead of the merge counts table.
-- Notebook 07 has a sixth check, `open incidents match the newest scans`: every FAILED or WARNING row in `findings_latest` has an OPEN incident, and every OPEN incident was found in its source's newest scan (or that scan says UNKNOWN for it). Its first check now includes the `incidents` view.
+- Notebook 07 has a sixth check, `open incidents match the newest scans`: every FAILED or WARNING row in `findings_latest` has an OPEN incident, and every OPEN incident was found in its source's newest scan (or that scan's row for it is neither HEALTHY nor a problem, such as UNKNOWN). Its first check now includes the `incidents` view.
 - Notebooks 02, 05, 06, 09 and 10 stop until notebook 01 has created the view, with `incidents is missing or out of date: run notebook 01 once.`
 - `teardown.sh --drop-schema` accepts the new view as a Watchdog object.
+- Notebook 01 never replaces a table or view of yours named `findings_latest` or `incidents`. If an object with one of those names is not a view with the `watchdog.view_version` property, it stops and names it.
 
 ### How to upgrade from Phase 1.2 or 1.3
 
-1. In the Git folder, click Pull. If Pull reports a conflict in a notebook you have run, keep the incoming version: Databricks saves the serverless environment into a notebook when it runs it, and that is the only local change.
-2. Restart Python on any open notebook (detach and reattach).
-3. Run notebook 01 once. It prints `view incidents: created`. Your rows stay. Until you run it, the scans refuse to run: notebooks 05 and 06 stop with a message that says to run notebook 01. From Phase 1.2 it also adds the Phase 1.3 columns and prints `view findings_latest: replaced`; read the Phase 1.3 notes below for what they add.
-4. If you deployed the jobs with the bundle, deploy it again, so the jobs run the new code. From Phase 1.2, this also creates `watchdog_cleanup`, paused unless `scan.schedule_status` is UNPAUSED.
+1. In the Git folder, click Pull. If Pull reports a conflict in a notebook you have only run, keep the incoming version: Databricks saves the serverless environment into a notebook when it runs it. If you edited a notebook yourself, such as notebook 09 for your own checks, copy your edits first, as the conflict row in [docs/git-folder-setup.md](docs/git-folder-setup.md#troubleshooting) says.
+2. If you deployed the jobs with the bundle, deploy it again right after the pull, so the jobs run the new code. From Phase 1.2, this also creates `watchdog_cleanup`, paused unless `scan.schedule_status` is UNPAUSED.
+3. Restart Python on any open notebook (detach and reattach).
+4. Run notebook 01 once. It prints `view incidents: created`. Your rows stay. Until you run it, the scans refuse to run: notebooks 05 and 06 stop with a message that says to run notebook 01.
+   - From Phase 1.2 it also adds the Phase 1.3 columns and prints `view findings_latest: replaced`; read the Phase 1.3 notes below for what they add. On compute where replacing a view does not keep its grants, that drops any grant made on `findings_latest` itself, so grant `SELECT` on it again. Grants on the schema are not affected.
+   - Grant `SELECT` on `incidents` to the readers who have `SELECT` on `findings_latest` itself. A grant on the schema already covers both views.
 5. Run notebooks 05 and 06, and check that notebook 07 prints six PASS lines.
 
 ## Phase 1.3 (2026-11-04)
