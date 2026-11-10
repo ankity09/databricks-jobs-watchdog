@@ -29,14 +29,23 @@ function mockLayout(saved: Record<MapDirection, LayoutPosition[]>, saveMoves: ()
   return fetchMock;
 }
 
+const NOT_READY = { error: "not_ready", message: "The map's database did not answer. Try again in a moment." };
+const MOVE_PROBLEM = "That move couldn't be saved, so the box went back.";
+
+/** Saves of moves that wait for the test to answer them, one by one. */
+function heldSaves() {
+  const answers: Array<(response: Response) => void> = [];
+  return { answers, saveMoves: () => new Promise<Response>((resolve) => answers.push(resolve)) };
+}
+
 describe("useMapLayout", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
   it("a failed move reverts and sets the problem", async () => {
-    let answer: (response: Response) => void = () => undefined;
-    mockLayout({ LR: [{ nodeKey: "job:orders_ingest", x: 10, y: 20 }], TB: [] }, () => new Promise<Response>((resolve) => (answer = resolve)));
+    const { answers, saveMoves } = heldSaves();
+    mockLayout({ LR: [{ nodeKey: "job:orders_ingest", x: 10, y: 20 }], TB: [] }, saveMoves);
     const { result } = renderHook(() => useMapLayout("LR"));
     await waitFor(() => expect(result.current.status).toBe("ready"));
 
@@ -48,12 +57,73 @@ describe("useMapLayout", () => {
     expect(result.current.positions).toEqual([{ nodeKey: "job:orders_ingest", x: 50, y: 60 }]);
     expect(result.current.problem).toBeNull();
 
+    await waitFor(() => expect(answers).toHaveLength(1));
     await act(async () => {
-      answer(json(503, { error: "not_ready", message: "The map's database did not answer. Try again in a moment." }));
+      answers[0]?.(json(503, NOT_READY));
       expect(await saved).toBe(false);
     });
     expect(result.current.positions).toEqual([{ nodeKey: "job:orders_ingest", x: 10, y: 20 }]);
-    expect(result.current.problem).toBe("That move couldn't be saved, so the box went back.");
+    expect(result.current.problem).toBe(MOVE_PROBLEM);
+  });
+
+  it("two moves of a box that fail in the order they were sent leave it on its saved spot", async () => {
+    const { answers, saveMoves } = heldSaves();
+    mockLayout({ LR: [{ nodeKey: "job:orders_ingest", x: 0, y: 0 }], TB: [] }, saveMoves);
+    const { result } = renderHook(() => useMapLayout("LR"));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    let first: Promise<boolean> = Promise.resolve(true);
+    let second: Promise<boolean> = Promise.resolve(true);
+    act(() => {
+      first = result.current.move([{ nodeKey: "job:orders_ingest", x: 100, y: 0 }]);
+    });
+    act(() => {
+      second = result.current.move([{ nodeKey: "job:orders_ingest", x: 200, y: 0 }]);
+    });
+    expect(result.current.positions).toEqual([{ nodeKey: "job:orders_ingest", x: 200, y: 0 }]);
+    // One save at a time: the second goes out once the first has its answer.
+    await waitFor(() => expect(answers).toHaveLength(1));
+
+    await act(async () => {
+      answers[0]?.(json(503, NOT_READY));
+      expect(await first).toBe(false);
+    });
+    // The first move drops out; the second is still on its way, so the box stays at its spot.
+    expect(result.current.positions).toEqual([{ nodeKey: "job:orders_ingest", x: 200, y: 0 }]);
+    await waitFor(() => expect(answers).toHaveLength(2));
+    await act(async () => {
+      answers[1]?.(json(503, NOT_READY));
+      expect(await second).toBe(false);
+    });
+    // Back on the spot the server has, never on the first move's.
+    expect(result.current.positions).toEqual([{ nodeKey: "job:orders_ingest", x: 0, y: 0 }]);
+    expect(result.current.problem).toBe(MOVE_PROBLEM);
+  });
+
+  it("a move that saved stays when a later move of the box fails", async () => {
+    const { answers, saveMoves } = heldSaves();
+    mockLayout({ LR: [{ nodeKey: "job:orders_ingest", x: 0, y: 0 }], TB: [] }, saveMoves);
+    const { result } = renderHook(() => useMapLayout("LR"));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    act(() => {
+      void result.current.move([{ nodeKey: "job:orders_ingest", x: 100, y: 0 }]);
+    });
+    act(() => {
+      void result.current.move([{ nodeKey: "job:orders_ingest", x: 200, y: 0 }]);
+    });
+    await waitFor(() => expect(answers).toHaveLength(1));
+    await act(async () => {
+      answers[0]?.(new Response(null, { status: 204 }));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(answers).toHaveLength(2));
+    await act(async () => {
+      answers[1]?.(json(503, NOT_READY));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.problem).toBe(MOVE_PROBLEM));
+    expect(result.current.positions).toEqual([{ nodeKey: "job:orders_ingest", x: 100, y: 0 }]);
   });
 
   it("a direction change loads that direction", async () => {

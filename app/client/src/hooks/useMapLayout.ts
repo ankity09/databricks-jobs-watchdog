@@ -26,13 +26,16 @@ export interface MapLayoutState {
   retry(this: void): void;
 }
 
-/** A load's answer for a direction, with this page's changes since. */
+/** A load's answer for a direction, with this page's saves since. */
 interface Loaded {
   direction: MapDirection;
   /** The retry it answers: a newer retry makes it old. */
   attempt: number;
   status: "ready" | "failed";
-  positions: LayoutPosition[];
+  /** What the server has, as far as this page knows: the load's answer, with each save since that worked. */
+  confirmed: LayoutPosition[];
+  /** Moves sent and not answered yet, in the order they were sent. */
+  sending: { id: number; moves: LayoutPosition[] }[];
   problem: string | null;
 }
 
@@ -45,38 +48,33 @@ function withMoves(positions: LayoutPosition[], moves: LayoutPosition[]): Layout
   return [...next.values()];
 }
 
-/** The positions with failed moves taken back: each box gets its spot from before, unless a later move has moved it since. */
-function withoutMoves(positions: LayoutPosition[], moves: LayoutPosition[], before: ReadonlyMap<string, LayoutPosition>): LayoutPosition[] {
-  const next = new Map(positions.map((position) => [position.nodeKey, position]));
-  for (const move of moves) {
-    const now = next.get(move.nodeKey);
-    if (now === undefined || now.x !== move.x || now.y !== move.y) continue;
-    const earlier = before.get(move.nodeKey);
-    if (earlier) next.set(move.nodeKey, earlier);
-    else next.delete(move.nodeKey);
-  }
-  return [...next.values()];
-}
-
 /**
  * The map's saved box positions for one direction, shared by everyone who
  * opens the map. A direction change loads that direction's positions; until
- * they are in, the status is loading and no positions show. Moves are
- * optimistic: they show at once and go back if their save fails.
+ * they are in, the status is loading and no positions show.
+ *
+ * Moves are optimistic. The positions shown are what the server has, with
+ * the moves still on their way put on top in the order they were sent. A
+ * move that saves joins what the server has; one that fails drops out, so a
+ * box never stays on a spot the server doesn't have. Saves and Tidy ups go
+ * out one at a time, in order, so the server keeps the last one made here.
  */
 export function useMapLayout(direction: MapDirection): MapLayoutState {
   const [attempt, setAttempt] = useState(0);
   const [loaded, setLoaded] = useState<Loaded | null>(null);
+  // The last write sent, which the next one waits for, and a count that names each move on its way.
+  const line = useRef<Promise<void>>(Promise.resolve());
+  const sent = useRef(0);
 
   useEffect(() => {
     // An answer that comes after the direction changed, or after a retry, is dropped.
     let current = true;
     void getMapLayout(direction).then(
       (layout) => {
-        if (current) setLoaded({ direction, attempt, status: "ready", positions: layout.positions, problem: null });
+        if (current) setLoaded({ direction, attempt, status: "ready", confirmed: layout.positions, sending: [], problem: null });
       },
       () => {
-        if (current) setLoaded({ direction, attempt, status: "failed", positions: NO_POSITIONS, problem: LOAD_PROBLEM });
+        if (current) setLoaded({ direction, attempt, status: "failed", confirmed: NO_POSITIONS, sending: [], problem: LOAD_PROBLEM });
       },
     );
     return () => {
@@ -87,40 +85,60 @@ export function useMapLayout(direction: MapDirection): MapLayoutState {
   // The last answer counts only for its own direction and retry; until a newer one is in, the positions are loading.
   const shown = loaded !== null && loaded.direction === direction && loaded.attempt === attempt ? loaded : null;
   const ready = shown?.status === "ready";
-  const positions = shown !== null && ready ? shown.positions : NO_POSITIONS;
-
-  const move = useCallback(
-    async (moves: LayoutPosition[]): Promise<boolean> => {
-      if (!ready) return false;
-      if (moves.length === 0) return true;
-      const before = new Map(positions.map((position) => [position.nodeKey, position]));
-      // A change applies only to the answer it was made on, not to one for another direction or a later load.
-      const sameLoad = (state: Loaded | null): state is Loaded => state !== null && state.direction === direction && state.attempt === attempt;
-      setLoaded((state) => (sameLoad(state) ? { ...state, positions: withMoves(state.positions, moves), problem: null } : state));
-      try {
-        await saveMapMoves(direction, moves);
-        return true;
-      } catch {
-        setLoaded((state) => (sameLoad(state) ? { ...state, positions: withoutMoves(state.positions, moves, before), problem: MOVE_PROBLEM } : state));
-        return false;
-      }
-    },
-    [ready, positions, direction, attempt],
+  const positions = useMemo(
+    () => (shown?.status === "ready" ? shown.sending.reduce((spots, out) => withMoves(spots, out.moves), shown.confirmed) : NO_POSITIONS),
+    [shown],
   );
 
-  const reset = useCallback(async (): Promise<boolean> => {
-    if (!ready) return false;
+  /** Sends a write after the one before it has its answer, whatever that was. */
+  const inTurn = useCallback(<T>(send: () => Promise<T>): Promise<T> => {
+    const answer = line.current.then(send);
+    line.current = answer.then(
+      () => undefined,
+      () => undefined,
+    );
+    return answer;
+  }, []);
+
+  const move = useCallback(
+    (moves: LayoutPosition[]): Promise<boolean> => {
+      if (!ready) return Promise.resolve(false);
+      if (moves.length === 0) return Promise.resolve(true);
+      const id = ++sent.current;
+      // A change applies only to the answer it was made on, not to one for another direction or a later load.
+      const sameLoad = (state: Loaded | null): state is Loaded => state !== null && state.direction === direction && state.attempt === attempt;
+      const done = (state: Loaded) => state.sending.filter((out) => out.id !== id);
+      setLoaded((state) => (sameLoad(state) ? { ...state, sending: [...state.sending, { id, moves }], problem: null } : state));
+      return inTurn(() => saveMapMoves(direction, moves)).then(
+        () => {
+          setLoaded((state) => (sameLoad(state) ? { ...state, confirmed: withMoves(state.confirmed, moves), sending: done(state) } : state));
+          return true;
+        },
+        () => {
+          setLoaded((state) => (sameLoad(state) ? { ...state, sending: done(state), problem: MOVE_PROBLEM } : state));
+          return false;
+        },
+      );
+    },
+    [ready, direction, attempt, inTurn],
+  );
+
+  const reset = useCallback((): Promise<boolean> => {
+    if (!ready) return Promise.resolve(false);
     const sameLoad = (state: Loaded | null): state is Loaded => state !== null && state.direction === direction && state.attempt === attempt;
     setLoaded((state) => (sameLoad(state) ? { ...state, problem: null } : state));
-    try {
-      await resetMapLayout(direction);
-      setLoaded((state) => (sameLoad(state) ? { ...state, positions: NO_POSITIONS } : state));
-      return true;
-    } catch {
-      setLoaded((state) => (sameLoad(state) ? { ...state, problem: TIDY_PROBLEM } : state));
-      return false;
-    }
-  }, [ready, direction, attempt]);
+    return inTurn(() => resetMapLayout(direction)).then(
+      () => {
+        // The moves sent before it have their answers by now; any still on their way were made after it, so they stay.
+        setLoaded((state) => (sameLoad(state) ? { ...state, confirmed: NO_POSITIONS } : state));
+        return true;
+      },
+      () => {
+        setLoaded((state) => (sameLoad(state) ? { ...state, problem: TIDY_PROBLEM } : state));
+        return false;
+      },
+    );
+  }, [ready, direction, attempt, inTurn]);
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 

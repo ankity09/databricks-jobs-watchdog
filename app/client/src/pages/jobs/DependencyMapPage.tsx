@@ -125,6 +125,16 @@ function typingIn(target: EventTarget): boolean {
   return target instanceof Element && target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])") !== null;
 }
 
+/**
+ * Whether a key came from the map itself: a card, a link, or the map's frame.
+ * Not from the toolbar or a panel over the map, where the arrow keys scroll
+ * or pick as usual.
+ */
+function onCanvas(target: EventTarget, map: HTMLElement | null): boolean {
+  if (map === null || !(target instanceof Element) || !map.contains(target)) return false;
+  return target === map || target.closest(".react-flow__node, .react-flow__edge") !== null;
+}
+
 /** Adding a link: pick the upstream box, then the downstream job, then the type. */
 type LinkMode =
   | { step: "off" }
@@ -478,11 +488,12 @@ export function DependencyMapPage() {
     });
   }, [laidOut, moves.moving]);
 
-  // Changes when boxes come or go, the direction changes, Tidy up runs or the saved positions load, so the view fits the
-  // new layout. A box someone moved never changes it: the view stays where they are working.
+  // Changes when the automatic layout changes (boxes come or go, a link edit moves boxes, the direction or the services
+  // switch), the saved spots load or Tidy up runs, so the view fits the new layout. Moving a box changes only its saved
+  // spot, never the automatic layout, so a drag or a key move never refits the view.
   const layoutKey = useMemo(
-    () => [direction, layout.status, tidies, ...(graph?.nodes ?? []).map((n) => n.id).sort()].join("|"),
-    [direction, layout.status, tidies, graph],
+    () => [direction, showServices, layout.status, tidies, ...(automatic?.nodes ?? []).map((n) => `${n.id}@${n.position.x},${n.position.y}`)].join("|"),
+    [direction, showServices, layout.status, tidies, automatic],
   );
 
   const flowEdges = useMemo<LinkFlowEdge[]>(
@@ -521,8 +532,10 @@ export function DependencyMapPage() {
   const onKeyDown = (event: KeyboardEvent) => {
     const arrow = ARROWS.get(event.key);
     if (arrow) {
-      // The arrow keys move the selected box, but not while a person types in a field, nor when a control used the key.
-      if (!selected || !canMove || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || typingIn(event.target)) return;
+      // The arrow keys move the selected box when they come from the map, not while a person types in a field, nor when
+      // a control used the key.
+      if (!selected || !canMove || !onCanvas(event.target, mapRef.current)) return;
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || typingIn(event.target)) return;
       event.preventDefault();
       const step = event.shiftKey ? KEY_STEP_SHIFT : KEY_STEP;
       moves.nudge(selected.id, selected.position, arrow.x * step, arrow.y * step);
@@ -1003,10 +1016,11 @@ interface ViewKeeperProps {
 
 /**
  * Keeps the view sensible as the map changes:
- * - fits it again when the layout key changes (boxes come or go, the
- *   direction, Tidy up, the saved spots load; never a box someone moved) or
- *   the map's area changes size (an alert or a note above it, or the window),
- *   as if the side panel were closed: a fit never zooms for the panel;
+ * - fits it again when the layout key changes (the automatic layout changes:
+ *   boxes come or go, a link edit moves them, the direction or the services
+ *   switch; Tidy up; the saved spots load; never a box someone moved) or the
+ *   map's area changes size (an alert or a note above it, or the window), as
+ *   if the side panel were closed: a fit never zooms for the panel;
  * - while the panel is open over the map, slides the map left at the same zoom
  *   so the selected box and what its failure affects clear the panel (its
  *   upstream path too, when all of it fits), never so far that the selected

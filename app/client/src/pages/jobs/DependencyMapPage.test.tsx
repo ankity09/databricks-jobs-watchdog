@@ -611,9 +611,9 @@ describe("DependencyMapPage", () => {
     const fitted = boxesOnScreen(container).zoom;
     fireEvent.click(screen.getByRole("button", { name: "orders_ingest (Unknown, switched off)" }));
     const panel = await screen.findByRole("region", { name: "orders_ingest" });
-    // Remove kafka's only link in the panel: kafka leaves the map, so the map refits while the panel is open.
-    await user.click(within(panel).getByRole("button", { name: "Remove the link: orders_ingest depends on kafka (service link)" }));
-    await waitFor(() => expect(screen.queryByRole("button", { name: "kafka (service)" })).toBeNull());
+    // Remove a link in the panel: the save moves the boxes, so the map refits while the panel is open.
+    await user.click(within(panel).getByRole("button", { name: "Remove the link: orders_enrich depends on orders_ingest (job link)" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "orders_enrich depends on orders_ingest (job link)" })).toBeNull());
     await waitFor(() => expect(boxesOnScreen(container).zoom).not.toBe(fitted));
     // The new layout's own fit, as with the panel closed: the space under the panel still counts.
     const shown = boxesOnScreen(container);
@@ -1188,27 +1188,28 @@ describe("DependencyMapPage", () => {
     await screen.findByRole("region", { name: "orders_ingest" });
     const start = cornerOf(container, "job:orders_ingest");
 
+    // Fake time: each wait also runs the promises it lets go, so a save that went out would be in layoutSaves.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const wait = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
     fireEvent.keyDown(ingest, { key: "ArrowRight" });
+    await wait(400);
     fireEvent.keyDown(ingest, { key: "ArrowRight" });
+    await wait(400);
+    // 800 ms after the first key, but only 400 after the last: nothing is saved yet.
+    expect(layoutSaves).toEqual([]);
     // Shift moves 50 pixels.
     fireEvent.keyDown(ingest, { key: "ArrowDown", shiftKey: true });
     fireEvent.keyDown(ingest, { key: "ArrowLeft" });
     const moved = { x: start.x + 10, y: start.y + 50 };
     expect(cornerOf(container, "job:orders_ingest")).toEqual(moved);
-    act(() => {
-      vi.advanceTimersByTime(599);
-    });
+    await wait(599);
     expect(layoutSaves).toEqual([]);
-    act(() => {
-      vi.advanceTimersByTime(1);
-    });
-    vi.useRealTimers();
-
-    await waitFor(() => expect(layoutSaves).toHaveLength(1));
-    expect(layoutSaves[0]).toEqual({ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", ...moved }] });
-    await frames();
+    // 600 ms after the last key: one save, with where the keys left the box.
+    await wait(1);
+    expect(layoutSaves).toEqual([{ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", ...moved }] }]);
+    await wait(2000);
     expect(layoutSaves).toHaveLength(1);
+    vi.useRealTimers();
     expect(cornerOf(container, "job:orders_ingest")).toEqual(moved);
     expect(saves).toEqual([]);
   });
@@ -1235,6 +1236,59 @@ describe("DependencyMapPage", () => {
     expect(cornerOf(container, "job:orders_ingest")).toEqual({ x: start.x + 10, y: start.y });
     await waitFor(() => expect(layoutSaves).toHaveLength(1));
     for (const field of fields) field.remove();
+  });
+
+  it("arrow keys on the side panel's buttons and on the toolbar do not move the box", async () => {
+    const { container, layoutSaves } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    fireEvent.click(ingest);
+    const panel = await screen.findByRole("region", { name: "orders_ingest" });
+    const start = cornerOf(container, "job:orders_ingest");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // ArrowDown on a panel button is left to the panel, which scrolls: the map does not take the key.
+    expect(fireEvent.keyDown(within(panel).getByRole("button", { name: "Edit job" }), { key: "ArrowDown" })).toBe(true);
+    const remove = within(panel).getByRole("button", { name: "Remove the link: orders_enrich depends on orders_ingest (job link)" });
+    expect(fireEvent.keyDown(remove, { key: "ArrowDown", shiftKey: true })).toBe(true);
+    // Shift and an arrow on the direction toggle, which the toggle leaves alone, and an arrow on a zoom button.
+    fireEvent.keyDown(screen.getByRole("radio", { name: "Left to right" }), { key: "ArrowRight", shiftKey: true });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Zoom in" }), { key: "ArrowUp" });
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    vi.useRealTimers();
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(start);
+    expect(layoutSaves).toEqual([]);
+  });
+
+  it("saves a key move still waiting under its own direction when the direction changes", async () => {
+    const { container, layoutSaves } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    fireEvent.click(ingest);
+    await screen.findByRole("region", { name: "orders_ingest" });
+    const start = cornerOf(container, "job:orders_ingest");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    fireEvent.keyDown(ingest, { key: "ArrowRight" });
+    // Top to bottom well before the 600 ms are up: the move is saved now, for left to right.
+    fireEvent.click(screen.getByRole("radio", { name: "Top to bottom" }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(layoutSaves).toEqual([{ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", x: start.x + 10, y: start.y }] }]);
+    // And only once: nothing more goes out after the wait, for either direction.
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    vi.useRealTimers();
+    expect(layoutSaves).toHaveLength(1);
+    await waitFor(() => expect(cornerOf(container, "job:orders_enrich").y).toBeGreaterThan(cornerOf(container, "job:orders_ingest").y + 68));
+  });
+
+  it("saves a key move still waiting when the page closes", async () => {
+    const { container, layoutSaves, unmount } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    fireEvent.click(ingest);
+    await screen.findByRole("region", { name: "orders_ingest" });
+    const start = cornerOf(container, "job:orders_ingest");
+    fireEvent.keyDown(ingest, { key: "ArrowDown", shiftKey: true });
+    unmount();
+    // Saved as the page goes, well before the 600 ms wait would have saved it.
+    await waitFor(() => expect(layoutSaves).toEqual([{ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", x: start.x, y: start.y + 50 }] }]), {
+      timeout: 300,
+    });
   });
 
   it("a drag does not refit the view", async () => {
