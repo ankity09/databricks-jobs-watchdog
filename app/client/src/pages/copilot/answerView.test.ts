@@ -9,13 +9,17 @@ function statement(columns: [string, string][], rows: (string | null)[][]): Geni
   };
 }
 
+/** One row per day from 2026-10-01, each day once, however many rows. */
 function perDay(count: number): GenieStatementResponse {
   return statement(
     [
       ['day', 'DATE'],
       ['failed_jobs', 'BIGINT'],
     ],
-    Array.from({ length: count }, (_, i) => [`2026-10-${String((i % 28) + 1).padStart(2, '0')}`, String(i + 1)])
+    Array.from({ length: count }, (_, i) => [
+      new Date(Date.UTC(2026, 9, 1 + i)).toISOString().slice(0, 10),
+      String(i + 1),
+    ])
   );
 }
 
@@ -83,10 +87,74 @@ describe('chooseAnswerView', () => {
   });
 
   it('every row with the same number opens as a table', () => {
+    // Categories with nothing to compare: a text axis.
     const view = chooseAnswerView(parts(3, () => '1'));
     expect(view.kind).toBe('table');
     if (view.kind !== 'table') return;
     expect(view.choices).toContain('bar');
+  });
+
+  it('a steady daily series is still a chart', () => {
+    const view = chooseAnswerView(
+      statement(
+        [
+          ['day', 'DATE'],
+          ['failed_jobs', 'BIGINT'],
+        ],
+        [
+          ['2026-10-01', '1'],
+          ['2026-10-02', '1'],
+          ['2026-10-03', '1'],
+          ['2026-10-04', '1'],
+        ]
+      )
+    );
+    expect(view).toMatchObject({ kind: 'chart', chartType: 'line', xKey: 'day', yKey: 'failed_jobs' });
+  });
+
+  it('repeated dates open as a table', () => {
+    // Two jobs on each day: one line through both jobs' values would zigzag between them.
+    const view = chooseAnswerView(
+      statement(
+        [
+          ['day', 'DATE'],
+          ['job_name', 'STRING'],
+          ['failures', 'BIGINT'],
+        ],
+        [
+          ['2026-10-01', 'orders_ingest', '2'],
+          ['2026-10-01', 'daily_revenue_report', '5'],
+          ['2026-10-02', 'orders_ingest', '1'],
+          ['2026-10-02', 'daily_revenue_report', '4'],
+        ]
+      )
+    );
+    expect(view.kind).toBe('table');
+    if (view.kind !== 'table') return;
+    expect(view.choices).toContain('bar');
+    expect(view.choices).not.toContain('line');
+    expect(view.choices).not.toContain('area');
+  });
+
+  it('repeated categories open as a table', () => {
+    const view = chooseAnswerView(
+      statement(
+        [
+          ['job_name', 'STRING'],
+          ['failures', 'BIGINT'],
+        ],
+        [
+          ['orders_ingest', '2'],
+          ['daily_revenue_report', '5'],
+          ['orders_ingest', '3'],
+        ]
+      )
+    );
+    expect(view.kind).toBe('table');
+    if (view.kind !== 'table') return;
+    expect(view.choices).toContain('bar');
+    expect(view.choices).not.toContain('line');
+    expect(view.choices).not.toContain('area');
   });
 
   it('60 categories open as a table', () => {
@@ -123,6 +191,7 @@ describe('chooseAnswerView', () => {
   });
 
   it('5,000 rows choose a view', () => {
+    // 5,000 different days, so no date repeats.
     expect(chooseAnswerView(perDay(5000)).kind).toBe('chart');
     expect(chooseAnswerView(parts(5000, (i) => String(i))).kind).toBe('table');
   });

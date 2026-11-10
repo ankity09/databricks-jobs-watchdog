@@ -31,6 +31,9 @@ function rowsLabel(count: number): string {
   return `${count.toLocaleString("en-US")} ${count === 1 ? "row" : "rows"}`;
 }
 
+/** How long the CSV file's URL stays good after the click: the browser reads the file once the click has returned. */
+const CSV_URL_LIFETIME_MS = 5_000;
+
 /** Downloads the rows as a CSV file named after the answer. */
 function downloadCsv(query: CopilotQuery, columns: string[], rows: (string | null)[][]) {
   const url = URL.createObjectURL(new Blob([toCsv(columns, rows)], { type: "text/csv;charset=utf-8" }));
@@ -40,7 +43,8 @@ function downloadCsv(query: CopilotQuery, columns: string[], rows: (string | nul
   document.body.append(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
+  // Not at once: revoking the URL right after click() can cancel the download.
+  window.setTimeout(() => URL.revokeObjectURL(url), CSV_URL_LIFETIME_MS);
 }
 
 function ChartSkeleton() {
@@ -125,7 +129,7 @@ export function AnswerBlock({ query, ranAs, resultState, onRetryRows, retryFaile
       </Suspense>
     );
   } else {
-    body = <AnswerTable columns={columns} rows={rows} total={query.rowCount} />;
+    body = <AnswerTable columns={columns} rows={rows} total={query.rowCount} truncated={query.truncated} />;
   }
 
   return (

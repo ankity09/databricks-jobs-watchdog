@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CopilotQuery } from "../../hooks/useCopilot";
@@ -33,6 +33,7 @@ const PER_DAY = makeQuery(
 
 describe("AnswerBlock", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -116,6 +117,26 @@ describe("AnswerBlock", () => {
     expect(lines[0]).toBe("day,failed_jobs");
     expect(lines).toHaveLength(13);
     expect(downloads).toEqual(["failed-jobs-per-day.csv"]);
+  });
+
+  it("CSV lets go of the file only after the download has started", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const revokeObjectURL = vi.fn((_url: string) => undefined);
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: vi.fn((_blob: Blob) => "blob:csv"), revokeObjectURL }));
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    render(<AnswerBlock query={PER_DAY} ranAs="dana@example.com" resultState="ready" />);
+    fireEvent.click(screen.getByRole("button", { name: "Download the rows as CSV" }));
+    // The browser reads the file after the click returns: revoking its URL at once can cancel the download.
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    vi.runOnlyPendingTimers();
+    expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:csv");
+  });
+
+  it("a truncated result says so under its table", async () => {
+    const user = userEvent.setup();
+    render(<AnswerBlock query={{ ...PER_DAY, truncated: true }} ranAs="dana@example.com" resultState="ready" />);
+    await user.click(screen.getByRole("button", { name: "Table" }));
+    expect(screen.getByText("Genie returned only part of this result. The table and the CSV hold the rows it sent.")).toBeInTheDocument();
   });
 
   it("rows loading show a skeleton, then the chart", async () => {

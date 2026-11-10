@@ -21,7 +21,8 @@ function isPie(type: ChartType): boolean {
 
 /**
  * Picks the view for a statement. AppKit infers the chart first; these guards
- * then keep a pie to parts of a whole and a long list of categories in a table.
+ * then keep a pie to parts of a whole, and keep in a table a long list of
+ * categories, a list with nothing to compare, and rows whose x values repeat.
  */
 export function chooseAnswerView(statement: GenieStatementResponse | null): AnswerView {
   const data = transformGenieData(statement);
@@ -48,15 +49,19 @@ export function chooseAnswerView(statement: GenieStatementResponse | null): Answ
       return typeof value === 'number' && value < 0;
     });
   const xIsText = text.some((c) => c.name === inferred.xKey);
-  // A line or an area through unordered categories reads as a trend that is not there.
+  // An x value on more than one row, such as two jobs on one day: one line would zigzag through them.
+  const xRepeats = new Set(rows.map((row) => row[inferred.xKey])).size < rows.length;
+  // A line or an area through unordered categories, or through repeated x values, reads as a trend that is not there.
   const choices = getCompatibleChartTypes(rows, columns).filter(
-    (type) => (partsOfAWhole || !isPie(type)) && !(xIsText && (type === 'line' || type === 'area'))
+    (type) => (partsOfAWhole || !isPie(type)) && !((xIsText || xRepeats) && (type === 'line' || type === 'area'))
   );
 
+  if (xRepeats) return { kind: 'table', choices };
   if (xIsText && rows.length > TEXT_AXIS_MAX_ROWS) return { kind: 'table', choices };
 
-  // A list where every row has the same number has nothing to compare.
-  if (rows.length >= 2 && numeric.length === 1) {
+  // A list of categories where every row has the same number has nothing to compare. A steady series over time still
+  // shows its trend.
+  if (xIsText && rows.length >= 2 && numeric.length === 1) {
     const first = rows[0][numeric[0].name];
     if (rows.every((row) => row[numeric[0].name] === first)) return { kind: 'table', choices };
   }

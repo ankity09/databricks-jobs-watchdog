@@ -26,7 +26,7 @@ The map page shows the monitored jobs and the services they need as cards, and e
 
 The copilot page asks the Genie space in plain language. Each answer is one card.
 
-- **Charts, numbers and tables.** Each query in an answer opens as a chart, a single number or a table. A chart never defaults to a pie. A person can switch the chart type, and pie and donut stay in the menu when the rows are parts of a whole. A list where every row has the same number opens as a table.
+- **Charts, numbers and tables.** Each query in an answer opens as a chart, a single number or a table. A chart never defaults to a pie. A person can switch the chart type, and pie and donut stay in the menu when the rows are parts of a whole. A list of categories where every row has the same number opens as a table, and so does an answer whose x values repeat, such as two jobs on each day. A steady daily series stays a chart.
 - **Table and CSV.** Every answer has a table of its rows, and a button that downloads them as a CSV file. Show SQL opens the query Genie ran, and who it ran as.
 - **Feedback.** Each finished answer has Good answer and Bad answer buttons. A click goes to Genie through `POST /api/copilot/feedback`, as the signed-in person. Clicking the pressed button again clears the rating. A reopened chat shows the rating Genie holds.
 

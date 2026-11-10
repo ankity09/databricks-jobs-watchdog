@@ -64,5 +64,19 @@ describe("AnswerTable", () => {
   it("says nothing when every row is shown", () => {
     render(<AnswerTable columns={["job_name"]} rows={[["orders_ingest"]]} total={1} />);
     expect(screen.queryByText(/Showing/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Genie returned only part/)).not.toBeInTheDocument();
+  });
+
+  it("says when Genie returned only part of the result, as well as how many rows it shows", () => {
+    const line = "Genie returned only part of this result. The table and the CSV hold the rows it sent.";
+    const rows = Array.from({ length: 60 }, (_, i) => [`job_${i}`]);
+    const { rerender } = render(<AnswerTable columns={["job_name"]} rows={rows} total={12000} truncated />);
+    expect(screen.getByText("Showing 50 of 12,000 rows")).toBeInTheDocument();
+    expect(screen.getByText(line)).toBeInTheDocument();
+
+    // Every row Genie sent fits, and the result is still only part of the whole.
+    rerender(<AnswerTable columns={["job_name"]} rows={rows.slice(0, 20)} truncated />);
+    expect(screen.queryByText(/Showing/)).not.toBeInTheDocument();
+    expect(screen.getByText(line)).toBeInTheDocument();
   });
 });

@@ -11,6 +11,8 @@ export interface AnswerTableProps {
   total?: number | null;
   /** The most rows to show. */
   limit?: number;
+  /** Genie cut the result short: the rows given are only part of it. */
+  truncated?: boolean;
 }
 
 const NUMBER = /^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
@@ -36,7 +38,7 @@ function numberColumns(columns: string[], rows: (string | null)[][]): Set<number
 }
 
 /** The rows of an answer: status words as badges, numbers right-aligned in mono, null in italics. */
-export function AnswerTable({ columns, rows, total = null, limit = 50 }: AnswerTableProps) {
+export function AnswerTable({ columns, rows, total = null, limit = 50, truncated = false }: AnswerTableProps) {
   const shown = rows.slice(0, limit);
   const all = Math.max(total ?? 0, rows.length);
   const statusColumns = statusColumnIndexes(columns, rows);
@@ -88,6 +90,7 @@ export function AnswerTable({ columns, rows, total = null, limit = 50 }: AnswerT
           Showing {shown.length.toLocaleString("en-US")} of {all.toLocaleString("en-US")} rows
         </p>
       ) : null}
+      {truncated ? <p className="px-1 pt-1.5 text-xs text-muted-foreground">Genie returned only part of this result. The table and the CSV hold the rows it sent.</p> : null}
     </div>
   );
 }
