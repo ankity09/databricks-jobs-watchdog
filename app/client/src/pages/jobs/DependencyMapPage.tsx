@@ -90,6 +90,7 @@ import {
   panelGoesUnder,
   viewDuration,
 } from "./mapModel";
+import { DeleteJobDialog } from "./DeleteJobDialog";
 import { MapSidePanel } from "./MapSidePanel";
 import { MapToolbar, type MapToolbarProps } from "./MapToolbar";
 import { NewLinkCard } from "./NewLinkCard";
@@ -387,6 +388,8 @@ export function DependencyMapPage() {
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
   const [dropped, setDropped] = useState<DroppedLink | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  // The job whose Remove from Watchdog is asking to confirm.
+  const [removing, setRemoving] = useState<string | null>(null);
   // A job someone else deleted while its editor was open, for the line that says so.
   const [goneJob, setGoneJob] = useState<string | null>(null);
   // Counts the toolbar's finished fits, after which the map slides a selection clear of the panel again.
@@ -477,6 +480,19 @@ export function DependencyMapPage() {
       setProblem(null);
       setNotice(`Saved version ${outcome.result.version}: ${outcome.result.summary}.`);
     }
+    return outcome;
+  };
+
+  /** Saves a job's settings from the side panel; a refusal shows on the line above the map, as for a link. */
+  const saveSettings = async (entry: JobEntry): Promise<SaveOutcome> => {
+    setSaving(true);
+    setNotice(null);
+    const outcome = await saveEntry(entry, version);
+    setSaving(false);
+    if (outcome.ok) return outcome;
+    if (outcome.conflict) setProblem({ kind: "conflict" });
+    else if (outcome.issues.length > 0) setProblem({ kind: "invalid", message: outcome.message, issues: outcome.issues });
+    else setProblem({ kind: "failed", message: outcome.message });
     return outcome;
   };
 
@@ -761,6 +777,8 @@ export function DependencyMapPage() {
             editRef={editRef}
             className={className}
             onRemove={(edgeId) => void removeLink(edgeId, "panel")}
+            onSaveSettings={saveSettings}
+            onRemoveJob={() => setRemoving(selected.name)}
             onEdit={() => {
               editedCardRef.current = boxButton(mapRef.current, selected.id);
               setEditing(selected.name);
@@ -1046,6 +1064,27 @@ export function DependencyMapPage() {
             }
           />
         </>
+      ) : null}
+      {state && removing !== null ? (
+        <DeleteJobDialog
+          name={removing}
+          document={state.document}
+          version={state.version}
+          onCancel={() => setRemoving(null)}
+          onDelete={async (baseVersion) => {
+            const outcome = await save({ kind: "delete", target: { type: "job", name: removing } }, baseVersion);
+            if (outcome.ok) {
+              setProblem(null);
+              setNotice(`Saved version ${outcome.result.version}: ${outcome.result.summary}.`);
+              setRemoving(null);
+              setSelectedId(null);
+              setRefocus({ kind: "map" });
+            }
+            return outcome;
+          }}
+          onReload={reload}
+          returnFocus={editorReturnFocus}
+        />
       ) : null}
       {/* Outside the map, so Escape in the editor closes the editor and leaves the selection alone. */}
       {state ? (

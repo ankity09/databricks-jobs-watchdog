@@ -1,17 +1,18 @@
 import { Button } from "@databricks/appkit-ui/react";
-import { CircleHelp, History, MessageSquareText, Server, SquarePen, X } from "lucide-react";
+import { CircleHelp, History, MessageSquareText, Server, SquarePen, Trash2, X } from "lucide-react";
 import type { ReactNode, RefObject } from "react";
 import { Link } from "react-router";
 import { impactOf } from "../../../../shared/joblist/impact";
-import type { JobListDocument } from "../../../../shared/joblist/types";
+import type { JobEntry, JobListDocument } from "../../../../shared/joblist/types";
 import { copilotLink } from "../../lib/copilot-link";
 import type { GraphEdge, GraphNode } from "../../lib/graph";
+import type { SaveOutcome } from "../../hooks/useJobList";
 import { inheritedSettings } from "../../lib/job-form";
 import { statusTone } from "../../lib/status";
 import { cn } from "../../lib/utils";
 import { affectsText, stepsLabel } from "./mapChain";
-import { type Detail, jobDetails } from "./mapFacts";
 import { CriticalMarker, StatusChip } from "./MapElements";
+import { MapSettingsForm } from "./MapSettingsForm";
 import { SCHEDULE_ICON, TONE_TILE, TYPE_LABEL, linkLabel } from "./mapModel";
 
 /** The change log, filtered to one job and its links (the contract with the change log's filters). */
@@ -30,29 +31,6 @@ function PanelSection({ title, children }: PanelSectionProps) {
       <h3 className="mb-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{title}</h3>
       {children}
     </section>
-  );
-}
-
-interface DetailCellProps {
-  label: string;
-  detail: Detail;
-  mono?: boolean;
-  className?: string;
-}
-
-/** One setting in the details grid: its label over its value, muted with "(default)" for screen readers when the job takes it from the defaults. */
-function DetailCell({ label, detail, mono = false, className }: DetailCellProps) {
-  return (
-    <div className={cn("min-w-0", className)}>
-      <dt className="text-[11px] leading-4 text-muted-foreground">{label}</dt>
-      <dd
-        className={cn("truncate text-xs leading-5", mono && "font-mono text-[11.5px]", detail.inherited ? "text-muted-foreground" : "text-foreground")}
-        title={detail.inherited ? `${detail.text}, from the defaults` : detail.text}
-      >
-        {detail.text}
-        {detail.inherited ? <span className="sr-only"> (default)</span> : null}
-      </dd>
-    </div>
   );
 }
 
@@ -110,6 +88,10 @@ export interface MapSidePanelProps {
   /** Edit job, where focus goes back when the editor closes. */
   editRef: RefObject<HTMLButtonElement | null>;
   onRemove: (edgeId: string) => void;
+  /** Saves the job with its changed settings (the settings form's Save). */
+  onSaveSettings: (entry: JobEntry) => Promise<SaveOutcome>;
+  /** Remove from Watchdog: the page asks to confirm, then deletes the job. */
+  onRemoveJob: () => void;
   onEdit: () => void;
   onClose: () => void;
   /** Its size where it opens: a 360 pixel column over the map, or the map's width under it. */
@@ -122,10 +104,9 @@ export interface MapSidePanelProps {
  * there affects (with the steps from it), and links to its history, the
  * copilot and the job editor.
  */
-export function MapSidePanel({ box, document, links, steps, statusLoading, saving, panelRef, editRef, onRemove, onEdit, onClose, className }: MapSidePanelProps) {
+export function MapSidePanel({ box, document, links, steps, statusLoading, saving, panelRef, editRef, onRemove, onSaveSettings, onRemoveJob, onEdit, onClose, className }: MapSidePanelProps) {
   const isJob = box.kind === "job";
   const entry = isJob ? document.jobs.find((job) => job.job_name === box.name) : undefined;
-  const details = entry ? jobDetails(entry, inheritedSettings(document)) : null;
   const parent = isJob ? impactOf(document, box.name).parentJob : null;
   const dependsOn = links.filter((edge) => edge.target === box.id);
   const neededBy = links.filter((edge) => edge.source === box.id);
@@ -157,7 +138,7 @@ export function MapSidePanel({ box, document, links, steps, statusLoading, savin
           )}
         >
           <Icon className="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
-          {details?.severity.text === "CRITICAL" ? <CriticalMarker className="absolute -top-1.5 -right-1.5" /> : null}
+          {entry && (entry.severity ?? inheritedSettings(document).severity) === "CRITICAL" ? <CriticalMarker className="absolute -top-1.5 -right-1.5" /> : null}
         </span>
         <div className="min-w-0 flex-1">
           <h2 className={cn("truncate text-sm leading-5 font-medium text-foreground", isJob && "font-mono text-[13.5px]")} title={box.name}>
@@ -174,17 +155,9 @@ export function MapSidePanel({ box, document, links, steps, statusLoading, savin
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {details ? (
-          <PanelSection title="Details">
-            <dl className="grid grid-cols-3 gap-x-3 gap-y-2">
-              <DetailCell label="Owner" detail={details.owner} />
-              <DetailCell label="Schedule" detail={details.schedule} />
-              <DetailCell label="Severity" detail={details.severity} mono />
-              <DetailCell label="Max gap" detail={details.maxGap} mono />
-              <DetailCell label="Max runtime" detail={details.maxRuntime} mono />
-              <DetailCell label="Max retries" detail={details.maxRetries} mono />
-              <DetailCell label="Enabled" detail={details.enabled} className="col-span-3" />
-            </dl>
+        {entry ? (
+          <PanelSection title="Settings">
+            <MapSettingsForm job={entry} document={document} saving={saving} onSave={onSaveSettings} />
           </PanelSection>
         ) : null}
         {isJob ? (
@@ -232,6 +205,12 @@ export function MapSidePanel({ box, document, links, steps, statusLoading, savin
               <MessageSquareText aria-hidden="true" />
               Ask the copilot
             </Link>
+          </Button>
+        ) : null}
+        {entry ? (
+          <Button variant="outline" size="sm" className="col-span-2 text-destructive hover:text-destructive" disabled={saving} onClick={onRemoveJob}>
+            <Trash2 aria-hidden="true" />
+            Remove from Watchdog
           </Button>
         ) : null}
       </footer>

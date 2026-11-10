@@ -320,11 +320,6 @@ function frames(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 50));
 }
 
-/** The value next to a label in the side panel's details. */
-function detail(panel: HTMLElement, label: string): string {
-  return within(panel).getByText(label, { selector: "dt" }).nextElementSibling?.textContent ?? "";
-}
-
 /** A section of the side panel, by its heading. */
 function panelSection(panel: HTMLElement, heading: string): HTMLElement {
   const section = within(panel).getByRole("heading", { name: heading }).closest("section");
@@ -531,6 +526,50 @@ describe("DependencyMapPage", () => {
     await user.click(within(panel).getByRole("button", { name: "Remove the link: orders_enrich depends on orders_ingest (job link)" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "orders_enrich depends on orders_ingest (job link)" })).toBeNull());
     await waitFor(() => expect(panel).toHaveFocus());
+  });
+
+  it("saves a job's settings from the side panel and says so", async () => {
+    const user = userEvent.setup();
+    const { saves } = renderMap();
+    fireEvent.click(await box("watchdog_demo_slow (Unknown)"));
+    const panel = screen.getByRole("region", { name: "watchdog_demo_slow" });
+    const owner = within(panel).getByRole("textbox", { name: "Owner" });
+    await user.type(owner, "data-team");
+    await user.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].change).toMatchObject({ kind: "upsert", target: { type: "job", name: "watchdog_demo_slow" }, value: { owner: "data-team" } });
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Saved version 4/);
+  });
+
+  it("a 409 from the side panel shows Reload", async () => {
+    const user = userEvent.setup();
+    const view = renderMap(EXAMPLE_DOCUMENT, () =>
+      json({ error: "conflict", message: "Someone else changed this since you opened it. Reload to see their change.", latestVersion: 4 }, 409),
+    );
+    fireEvent.click(await box("watchdog_demo_slow (Unknown)"));
+    const panel = screen.getByRole("region", { name: "watchdog_demo_slow" });
+    await user.type(within(panel).getByRole("textbox", { name: "Owner" }), "data-team");
+    await user.click(within(panel).getByRole("button", { name: "Save" }));
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("Someone else changed the job list since you opened it.")).toBeInTheDocument();
+    expect(within(alert).getByRole("button", { name: "Reload" })).toBeInTheDocument();
+    expect(view.saves).toHaveLength(1);
+  });
+
+  it("Remove from Watchdog deletes after the confirm and closes the panel", async () => {
+    const user = userEvent.setup();
+    const { saves } = renderMap();
+    fireEvent.click(await box("watchdog_demo_slow (Unknown)"));
+    const panel = screen.getByRole("region", { name: "watchdog_demo_slow" });
+    await user.click(within(panel).getByRole("button", { name: "Remove from Watchdog" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete watchdog_demo_slow?" });
+    expect(saves).toEqual([]);
+    await user.click(within(dialog).getByRole("button", { name: "Delete job" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].change).toEqual({ kind: "delete", target: { type: "job", name: "watchdog_demo_slow" } });
+    await waitFor(() => expect(screen.queryByRole("region", { name: "watchdog_demo_slow" })).toBeNull());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: "watchdog_demo_slow (Unknown)" })).toBeNull();
   });
 
   it("gives focus back to the box when its side panel closes, with the button or with Escape", async () => {
@@ -870,13 +909,12 @@ describe("DependencyMapPage", () => {
     expect(within(panel).getByRole("heading", { level: 2, name: "orders_ingest" })).toBeInTheDocument();
     expect(part(panel, "status")).toHaveTextContent("Unknown");
 
-    expect(detail(panel, "Owner")).toBe("ingestion-team");
-    expect(detail(panel, "Schedule")).toBe("Continuous");
-    expect(detail(panel, "Severity")).toBe("CRITICAL");
-    expect(detail(panel, "Max gap")).toBe("30 min");
-    expect(detail(panel, "Max runtime")).toBe("None");
-    expect(detail(panel, "Max retries")).toBe("3");
-    expect(detail(panel, "Enabled")).toBe("No");
+    expect(within(panel).getByRole("textbox", { name: "Owner" })).toHaveValue("ingestion-team");
+    expect(within(panel).getByRole("radio", { name: "Continuous" })).toBeChecked();
+    expect(within(panel).getByRole("combobox", { name: "Severity" })).toHaveTextContent("CRITICAL");
+    expect(within(panel).getByRole("textbox", { name: /Max gap/ })).toHaveValue("");
+    expect(within(panel).getByRole("textbox", { name: "Max retries" })).toHaveValue("3");
+    expect(within(panel).getByRole("switch", { name: "Monitored" })).not.toBeChecked();
 
     const dependsOn = panelSection(panel, "Depends on");
     expect(dependsOn).toHaveTextContent("kafka");
