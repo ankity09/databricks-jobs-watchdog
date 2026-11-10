@@ -17,10 +17,12 @@ import {
 import {
   Background,
   BackgroundVariant,
-  type EdgeChange,
+  type Connection,
+  ConnectionMode,
   type EdgeTypes,
   MiniMap,
   type NodeTypes,
+  type OnConnectEnd,
   Panel,
   Position,
   ReactFlow,
@@ -61,6 +63,7 @@ import {
   unlinkChange,
 } from "../../lib/graph";
 import { applySavedLayout, notLinkedYet } from "../../lib/layoutMerge";
+import { proposeLink } from "../../lib/linkRules";
 import type { EntryJobIds } from "../../lib/picker";
 import { statusTone } from "../../lib/status";
 import { cn } from "../../lib/utils";
@@ -68,12 +71,13 @@ import { AddLinkDialog, AddServiceDialog } from "./AddLinkDialog";
 import { ConfigBanner } from "./ConfigBanner";
 import { JobEditorSheet } from "./JobEditorSheet";
 import { type Upstream, affectsText, impactSteps, upstreamOf } from "./mapChain";
-import { JobNode, LinkEdge, MapLegend, MapMarkers, SectionNode, ServiceNode } from "./MapElements";
+import { DraftLine, JobNode, LinkEdge, MapLegend, MapMarkers, SectionNode, ServiceNode } from "./MapElements";
 import { type CardFacts, cardFacts } from "./mapFacts";
 import {
   type EdgeHighlight,
   type LinkFlowEdge,
   type MapFlowNode,
+  type Measurable,
   EDGE_GAP,
   MINIMAP_FROM,
   type NodeHighlight,
@@ -88,6 +92,7 @@ import {
 } from "./mapModel";
 import { MapSidePanel } from "./MapSidePanel";
 import { MapToolbar, type MapToolbarProps } from "./MapToolbar";
+import { NewLinkCard } from "./NewLinkCard";
 import { PatternMatches } from "./PatternMatches";
 import { QueryProblemLine } from "./QueryProblemLine";
 import { ReloadButton } from "./ReloadButton";
@@ -144,9 +149,15 @@ type LinkMode =
 
 type Problem = { kind: "conflict" } | { kind: "invalid"; message: string; issues: RuleIssue[] } | { kind: "failed"; message: string };
 
-/** What a popover anchors to: anything with a screen rectangle. */
-interface Measurable {
-  getBoundingClientRect(): DOMRect;
+/**
+ * A link dropped on the map, waiting in the New link card: its two boxes by
+ * node ID, as React Flow gives them (the source is upstream of the target),
+ * and the box it was dropped on, which the card opens next to.
+ */
+interface DroppedLink {
+  source: string;
+  target: string;
+  at: string;
 }
 
 function rect(x: number, y: number, width = 0, height = 0): DOMRect {
@@ -156,6 +167,14 @@ function rect(x: number, y: number, width = 0, height = 0): DOMRect {
 /** A link's or a box's element on the map, by the id React Flow puts in data-id. */
 function mapElement(container: HTMLElement | null, kind: "edge" | "node", id: string): HTMLElement | SVGElement | null {
   return container?.querySelector<HTMLElement | SVGElement>(`.react-flow__${kind}[data-id="${id.replace(/["\\]/g, "\\$&")}"]`) ?? null;
+}
+
+/** The job or service box under the pointer where a link drag ended, by its node ID; null over anything else. */
+function boxUnder(event: MouseEvent | TouchEvent, nodes: GraphNode[]): string | null {
+  const point = "changedTouches" in event ? event.changedTouches.item(0) : event;
+  if (point === null) return null;
+  const id = document.elementFromPoint(point.clientX, point.clientY)?.closest(".react-flow__node")?.getAttribute("data-id");
+  return id && nodes.some((n) => n.id === id) ? id : null;
 }
 
 /** Where a link is on screen, so its menu opens next to it and follows a pan or zoom. */
@@ -240,18 +259,29 @@ function portsOf(box: GraphNode, direction: LayoutDirection): NonNullable<MapFlo
   const size = { width: PORT, height: PORT };
   if (direction === "LR") {
     return [
-      { type: "target", position: Position.Left, x: -half, y: box.height / 2 - half, ...size },
-      { type: "source", position: Position.Right, x: box.width - half, y: box.height / 2 - half, ...size },
+      { id: "in", type: "target", position: Position.Left, x: -half, y: box.height / 2 - half, ...size },
+      { id: "out", type: "source", position: Position.Right, x: box.width - half, y: box.height / 2 - half, ...size },
     ];
   }
   return [
-    { type: "target", position: Position.Top, x: box.width / 2 - half, y: -half, ...size },
-    { type: "source", position: Position.Bottom, x: box.width / 2 - half, y: box.height - half, ...size },
+    { id: "in", type: "target", position: Position.Top, x: box.width / 2 - half, y: -half, ...size },
+    { id: "out", type: "source", position: Position.Bottom, x: box.width / 2 - half, y: box.height - half, ...size },
   ];
 }
 
-/** A box on the canvas. `draggable` is true once the saved positions are in, so a drag never lands on the automatic layout. */
-function toFlowNode(box: GraphNode, highlight: NodeHighlight, statusLoading: boolean, direction: LayoutDirection, facts: CardFacts | null, draggable: boolean): MapFlowNode {
+/**
+ * A box on the canvas. `draggable` is true once the saved positions are in, so a drag never lands on the automatic
+ * layout; `connectable` is true when a link can be dragged from its ports.
+ */
+function toFlowNode(
+  box: GraphNode,
+  highlight: NodeHighlight,
+  statusLoading: boolean,
+  direction: LayoutDirection,
+  facts: CardFacts | null,
+  draggable: boolean,
+  connectable: boolean,
+): MapFlowNode {
   return {
     id: box.id,
     type: box.kind,
@@ -268,7 +298,7 @@ function toFlowNode(box: GraphNode, highlight: NodeHighlight, statusLoading: boo
     // The page moves the selected box with the arrow keys itself, so React Flow's own node focus and key moves stay off.
     focusable: false,
     draggable,
-    connectable: false,
+    connectable,
   };
 }
 
@@ -353,6 +383,9 @@ export function DependencyMapPage() {
   const [link, setLink] = useState<LinkMode>({ step: "off" });
   const [serviceOpen, setServiceOpen] = useState(false);
   const [menuEdge, setMenuEdge] = useState<string | null>(null);
+  // The line selected with a pointer, which shows its ×; Enter on a line opens its menu instead.
+  const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
+  const [dropped, setDropped] = useState<DroppedLink | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   // A job someone else deleted while its editor was open, for the line that says so.
   const [goneJob, setGoneJob] = useState<string | null>(null);
@@ -373,6 +406,11 @@ export function DependencyMapPage() {
   const addLinkRef = useRef<HTMLButtonElement>(null);
   const addServiceRef = useRef<HTMLButtonElement>(null);
   const anchor = useRef<Measurable>({ getBoundingClientRect: () => rect(0, 0) });
+  const cardAnchor = useRef<Measurable>({ getBoundingClientRect: () => rect(0, 0) });
+  // The line that says why a save failed: its Reload leaves the New link card open.
+  const problemRef = useRef<HTMLDivElement>(null);
+  // The box a link drag started from, so the New link card opens at the box the link is dropped on.
+  const dragFrom = useRef<string | null>(null);
   const [refocus, setRefocus] = useState<FocusTarget | null>(null);
 
   // A box removed by a save (a service whose last link went), or hidden by the services switch, drops out of the selection on its own.
@@ -383,6 +421,13 @@ export function DependencyMapPage() {
   );
   const steps = useMemo(() => (document && selected ? impactSteps(document, selected) : null), [document, selected]);
   const menuLink = graph?.edges.find((e) => e.id === menuEdge) ?? null;
+  const selectedLink = graph?.edges.find((e) => e.id === selectedEdge) ?? null;
+  // What the dropped link would be, from the newest list: a reload can change it. Gone with either of its boxes.
+  const proposal = useMemo(() => {
+    const from = graph?.nodes.find((n) => n.id === dropped?.source);
+    const to = graph?.nodes.find((n) => n.id === dropped?.target);
+    return document && from && to ? proposeLink(document, from, to) : null;
+  }, [document, graph, dropped]);
   const statusLoading = live.loading && live.byJob.size === 0;
   const panelOpen = selected !== null && link.step === "off";
   const editingJob = editing !== null ? document?.jobs.find((job) => job.job_name === editing) : undefined;
@@ -435,7 +480,30 @@ export function DependencyMapPage() {
     return outcome;
   };
 
-  const openEdge = useCallback((edgeId: string) => {
+  /** Saves a new link, from the New link card or the Add link dialog. True when the save worked. */
+  const addLink = (change: Change): Promise<boolean> => runSave(change, version);
+
+  /**
+   * Removes a link, from its line (its × or Delete), its menu or the side panel, and moves focus to something that
+   * stays. True when the save worked.
+   */
+  const removeLink = useCallback(
+    async (edgeId: string, from: "map" | "panel" = "map"): Promise<boolean> => {
+      const panelStays = from === "panel" && graph !== null && selected !== null && staysWithout(graph, edgeId, selected.id);
+      const after: FocusTarget = panelStays ? { kind: "panel" } : graph ? focusAfterRemoving(graph, edgeId) : { kind: "map" };
+      const saved = await runSave(unlinkChange(edgeId), version);
+      setMenuEdge(null);
+      // The removed line lets go of its ×; a line still there after a failed save keeps it.
+      if (saved) setSelectedEdge((current) => (current === edgeId ? null : current));
+      // When the save fails, the link is still there: focus goes back to where the removal started.
+      setRefocus(saved ? after : from === "map" ? { kind: "link", id: edgeId } : { kind: "panel" });
+      return saved;
+    },
+    [graph, selected, runSave, version],
+  );
+
+  /** Opens a link's menu, which takes the place of the × of a line selected with a pointer. */
+  const openEdge = (edgeId: string) => {
     let last = rect(0, 0);
     anchor.current = {
       getBoundingClientRect: () => {
@@ -443,12 +511,14 @@ export function DependencyMapPage() {
         return last;
       },
     };
+    setSelectedEdge(null);
     setMenuEdge(edgeId);
-  }, []);
+  };
 
   // A box was clicked or pressed: select it, or pick it while adding a link.
   const activate = (box: GraphNode) => {
     setMenuEdge(null);
+    setSelectedEdge(null);
     if (link.step === "off") {
       const selecting = selectedId !== box.id;
       setSelectedId(selecting ? box.id : null);
@@ -464,21 +534,67 @@ export function DependencyMapPage() {
     });
   };
 
-  /** A click on the canvas or on the group frame: close the menu, and clear the selection unless a link is being added. */
+  /** A click on the canvas or on the group frame: close the menu, let go of a line, and clear the selection unless a link is being added. */
   const clearOnCanvas = () => {
     setMenuEdge(null);
+    setSelectedEdge(null);
     if (link.step === "off") setSelectedId(null);
   };
+
+  /** Opens the New link card for a link dropped on the map, next to the box it was dropped on. Not while a save is on its way. */
+  const openDropped = (source: string, target: string, at: string) => {
+    if (saving) return;
+    let last = rect(0, 0);
+    cardAnchor.current = {
+      getBoundingClientRect: () => {
+        last = mapElement(mapRef.current, "node", at)?.getBoundingClientRect() ?? last;
+        return last;
+      },
+    };
+    setMenuEdge(null);
+    setSelectedEdge(null);
+    // The card takes focus: a focus move still waiting from before (such as the last card's) would close it.
+    setRefocus(null);
+    setDropped({ source, target, at });
+  };
+
+  /** A link dropped on a port. React Flow gives its ends upstream first, whichever port the drag started from. */
+  const onConnect = (connection: Connection) => {
+    openDropped(connection.source, connection.target, connection.target === dragFrom.current ? connection.source : connection.target);
+  };
+
+  /** A link dropped on a box's card, not on a port, which React Flow leaves alone. */
+  const onConnectEnd: OnConnectEnd = (event, state) => {
+    dragFrom.current = null;
+    // A drop on a port went to onConnect.
+    if (state.isValid || !state.fromNode || !state.fromHandle || !graph) return;
+    const at = boxUnder(event, graph.nodes);
+    if (at === null || at === state.fromNode.id) return;
+    // From the port where links start, the box it was dropped on depends on the box it came from; from the other port, the other way round.
+    if (state.fromHandle.type === "source") openDropped(state.fromNode.id, at, at);
+    else openDropped(at, state.fromNode.id, at);
+  };
+
+  // The ports take a link drag except while a link is being picked with Add link.
+  const canConnect = link.step === "off";
 
   const laidOut = useMemo<MapFlowNode[]>(() => {
     if (!graph) return [];
     const nodes = graph.nodes.map((box) =>
-      toFlowNode(box, nodeHighlight(box, link, selected, chain), statusLoading, direction, box.kind === "job" ? (facts?.get(box.name) ?? null) : null, canMove),
+      toFlowNode(
+        box,
+        nodeHighlight(box, link, selected, chain),
+        statusLoading,
+        direction,
+        box.kind === "job" ? (facts?.get(box.name) ?? null) : null,
+        canMove,
+        canConnect,
+      ),
     );
     const section = sectionNode(graph.nodes, graph.placed);
     // The group frame goes first, so it is drawn under its cards.
     return section ? [section, ...nodes] : nodes;
-  }, [graph, link, selected, chain, statusLoading, direction, facts, canMove]);
+  }, [graph, link, selected, chain, statusLoading, direction, facts, canMove, canConnect]);
   // A box on the move is drawn where the drag or the keys have it; the others keep their node, so a drag redraws one box.
   const flowNodes = useMemo(() => {
     if (moves.moving.size === 0) return laidOut;
@@ -500,33 +616,28 @@ export function DependencyMapPage() {
     () =>
       (graph?.edges ?? []).map((edge) => {
         const highlight = edgeHighlight(edge, link, selected, chain);
+        const picked = edge.id === selectedEdge;
         return {
           id: edge.id,
           type: "link",
           source: edge.source,
           target: edge.target,
-          data: { link: edge, highlight },
+          data: { link: edge, highlight, ...(picked ? { onRemove: () => void removeLink(edge.id), saving } : {}) },
           // The group LinkEdge's focus classes look at: React Flow puts this class on the link's focusable <g>.
-          className: "group",
-          selected: edge.id === menuEdge,
-          selectable: link.step === "off",
+          className: link.step === "off" ? "group cursor-pointer" : "group",
+          selected: picked || edge.id === menuEdge,
+          // A click selects a line and Enter opens its menu, both by the page (onEdgeClick, onKeyDown): React Flow's own
+          // selection, which does both on either, stays out of it.
+          selectable: false,
           focusable: true,
           ariaLabel: linkLabel(edge),
           ariaRole: "button",
           interactionWidth: 18,
           // The selection's chain draws over the faded links.
-          zIndex: highlight === "downstream" || highlight === "upstream" || edge.id === menuEdge ? 1 : 0,
+          zIndex: highlight === "downstream" || highlight === "upstream" || picked || edge.id === menuEdge ? 1 : 0,
         };
       }),
-    [graph, link, selected, chain, menuEdge],
-  );
-
-  const onEdgesChange = useCallback(
-    (changes: EdgeChange<LinkFlowEdge>[]) => {
-      // Enter on a focused link selects it; open its menu, as a click does.
-      for (const change of changes) if (change.type === "select" && change.selected && link.step === "off") openEdge(change.id);
-    },
-    [link.step, openEdge],
+    [graph, link, selected, chain, selectedEdge, menuEdge, removeLink, saving],
   );
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -541,15 +652,35 @@ export function DependencyMapPage() {
       moves.nudge(selected.id, selected.position, arrow.x * step, arrow.y * step);
       return;
     }
+    if (event.key === "Delete" || event.key === "Backspace") {
+      // Delete or Backspace removes the line selected with a pointer, never a box: when the key comes from the map, not
+      // while a person types in a field, and not while a save is on its way.
+      if (!selectedLink || saving || !onCanvas(event.target, mapRef.current)) return;
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || typingIn(event.target)) return;
+      event.preventDefault();
+      void removeLink(selectedLink.id);
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      // Enter or Space on a focused link opens its menu.
+      const edgeId = event.target instanceof Element ? event.target.closest(".react-flow__edge")?.getAttribute("data-id") : null;
+      if (!edgeId || link.step !== "off" || event.defaultPrevented) return;
+      event.preventDefault();
+      openEdge(edgeId);
+      return;
+    }
     if (event.key !== "Escape") return;
     const from = event.target instanceof Node ? event.target : null;
-    // React Flow takes focus off a link on Escape, which would drop it on the page body: the link keeps it.
-    const fromLink = event.target instanceof Element ? event.target.closest(".react-flow__edge") : null;
-    if (fromLink instanceof SVGElement || fromLink instanceof HTMLElement) fromLink.focus();
     if (link.step !== "off") {
       setLink({ step: "off" });
       // From the banner, which goes with the mode: back to Add link.
       if (from && bannerRef.current?.contains(from)) addLinkRef.current?.focus();
+      return;
+    }
+    // A selected line lets go first, and a selected box stays. From the line's ×, which goes with it: to the line.
+    if (selectedEdge !== null) {
+      if (event.target instanceof Element && event.target.closest(".react-flow__edgelabel-renderer")) setRefocus({ kind: "link", id: selectedEdge });
+      setSelectedEdge(null);
       return;
     }
     // From inside the side panel, which closes: back to its box.
@@ -562,15 +693,21 @@ export function DependencyMapPage() {
     setMenuEdge(null);
   };
 
-  /** Removes a link, from its menu or from the side panel, and moves focus to something that stays. */
-  const removeLink = (edgeId: string, from: "menu" | "panel") => {
-    const panelStays = from === "panel" && graph !== null && selected !== null && staysWithout(graph, edgeId, selected.id);
-    const after: FocusTarget = panelStays ? { kind: "panel" } : graph ? focusAfterRemoving(graph, edgeId) : { kind: "map" };
-    void runSave(unlinkChange(edgeId), version).then((saved) => {
-      setMenuEdge(null);
-      // When the save fails, the link is still there: focus goes back to where the removal started.
-      setRefocus(saved ? after : from === "menu" ? { kind: "link", id: edgeId } : { kind: "panel" });
+  /** Save link in the New link card: the card closes once the link is saved, and keeps its choices when the save fails. */
+  const saveDropped = (change: Change) => {
+    const shown = dropped;
+    void addLink(change).then((saved) => {
+      if (!saved || shown === null) return;
+      setDropped(null);
+      setRefocus({ kind: "box", id: shown.at });
     });
+  };
+
+  /** Closes the New link card, unless its save is on its way: then the save's answer decides. */
+  const closeDropped = (returnFocus: boolean) => {
+    if (saving || dropped === null) return;
+    if (returnFocus) setRefocus({ kind: "box", id: dropped.at });
+    setDropped(null);
   };
 
   /** Tidy up: the automatic layout again for this direction, for everyone, with the view fitted to it. */
@@ -593,6 +730,8 @@ export function DependencyMapPage() {
         disabled={!canLink || saving}
         onClick={() => {
           setMenuEdge(null);
+          setSelectedEdge(null);
+          setDropped(null);
           setSelectedId(null);
           setLink((mode) => (mode.step === "off" ? { step: "source" } : { step: "off" }));
         }}
@@ -621,7 +760,7 @@ export function DependencyMapPage() {
             panelRef={panelRef}
             editRef={editRef}
             className={className}
-            onRemove={(edgeId) => removeLink(edgeId, "panel")}
+            onRemove={(edgeId) => void removeLink(edgeId, "panel")}
             onEdit={() => {
               editedCardRef.current = boxButton(mapRef.current, selected.id);
               setEditing(selected.name);
@@ -719,10 +858,14 @@ export function DependencyMapPage() {
                       if (node.type === "section") clearOnCanvas();
                       else activate(node.data.box);
                     }}
-                    onEdgeClick={(_event, edge) => {
-                      if (link.step === "off") openEdge(edge.id);
+                    // A pointer click selects a line, which shows its ×. Safari does not focus a line on a click, and Delete
+                    // goes to what has focus.
+                    onEdgeClick={(event, edge) => {
+                      if (link.step !== "off") return;
+                      setMenuEdge(null);
+                      setSelectedEdge(edge.id);
+                      if (event.currentTarget instanceof SVGElement) event.currentTarget.focus();
                     }}
-                    onEdgesChange={onEdgesChange}
                     onPaneClick={clearOnCanvas}
                     // A drag draws its box where the pointer has it, and saves the spot when it ends; it never saves a version.
                     onNodesChange={(changes) => {
@@ -735,7 +878,18 @@ export function DependencyMapPage() {
                     // that click through; d3's drag would swallow the click after any movement otherwise.
                     nodeDragThreshold={4}
                     nodeClickDistance={4}
-                    nodesConnectable={false}
+                    // A link is dragged from a box's port to another box's port or card; each end's port may start it. A
+                    // click on a port does not start one.
+                    nodesConnectable={canConnect}
+                    connectionMode={ConnectionMode.Loose}
+                    connectOnClick={false}
+                    isValidConnection={(connection) => connection.source !== connection.target}
+                    onConnectStart={(_event, { nodeId }) => {
+                      dragFrom.current = nodeId;
+                    }}
+                    onConnect={onConnect}
+                    onConnectEnd={onConnectEnd}
+                    connectionLineComponent={DraftLine}
                     nodesFocusable={false}
                     edgesFocusable
                     deleteKeyCode={null}
@@ -780,7 +934,16 @@ export function DependencyMapPage() {
                   </ReactFlow>
                 )}
               </div>
-              <LinkMenu link={menuLink} anchor={anchor} saving={saving} onRemove={(edgeId) => removeLink(edgeId, "menu")} onClose={closeMenu} />
+              <LinkMenu link={menuLink} anchor={anchor} saving={saving} onRemove={(edgeId) => void removeLink(edgeId, "map")} onClose={closeMenu} />
+              <NewLinkCard
+                proposal={proposal}
+                anchor={cardAnchor}
+                document={state.document}
+                saving={saving}
+                keepOpenWithin={problemRef}
+                onSave={saveDropped}
+                onClose={closeDropped}
+              />
             </div>
             <PanelSlot placement="under" panel={sidePanel} />
           </div>
@@ -797,7 +960,11 @@ export function DependencyMapPage() {
         actions={headerActions}
       />
       <ConfigBanner savedVersion={state ? state.version : undefined} />
-      {problem ? <SaveProblem problem={problem} onReload={reload} onReloaded={() => setProblem(null)} /> : null}
+      {problem ? (
+        <div ref={problemRef}>
+          <SaveProblem problem={problem} onReload={reload} onReloaded={() => setProblem(null)} />
+        </div>
+      ) : null}
       {notice ? (
         <p role="status" className="-mt-2 font-mono text-xs text-muted-foreground">
           {notice}
@@ -859,7 +1026,7 @@ export function DependencyMapPage() {
             document={document}
             saving={saving}
             returnFocus={[addLinkRef]}
-            onSave={(change) => void runSave(change, version).then(() => setLink({ step: "off" }))}
+            onSave={(change) => void addLink(change).then(() => setLink({ step: "off" }))}
           />
           <AddServiceDialog
             open={serviceOpen}

@@ -26,8 +26,20 @@ export type JobFlowNode = Node<MapNodeData, "job">;
 export type ServiceFlowNode = Node<MapNodeData, "service">;
 export type SectionFlowNode = Node<{ title: string; count: number }, "section">;
 export type MapFlowNode = JobFlowNode | ServiceFlowNode | SectionFlowNode;
-export type LinkEdgeData = { link: GraphEdge; highlight: EdgeHighlight };
+export type LinkEdgeData = {
+  link: GraphEdge;
+  highlight: EdgeHighlight;
+  /** On the line selected with a pointer: what its × does, which is to remove the link. */
+  onRemove?: () => void;
+  /** True while a change saves, when the × waits. */
+  saving?: boolean;
+};
 export type LinkFlowEdge = Edge<LinkEdgeData, "link">;
+
+/** What a popover on the map anchors to: anything with a screen rectangle, such as a link or a box. */
+export interface Measurable {
+  getBoundingClientRect(): DOMRect;
+}
 
 /** The arrowheads: one per line color, since a marker cannot follow its line's CSS. */
 export const ARROW = {
