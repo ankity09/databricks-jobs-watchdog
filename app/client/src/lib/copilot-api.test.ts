@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { statementMeta, toGenieStatement } from './copilot-api';
+import { parseGenieEvent, statementMeta, toGenieStatement } from './copilot-api';
 
 describe('toGenieStatement', () => {
   it('keeps column types and turns cells into strings', () => {
@@ -34,5 +34,13 @@ describe('toGenieStatement', () => {
   it('counts the rows when the statement has no total', () => {
     expect(statementMeta({ result: { data_array: [['a'], ['b']] } })).toEqual({ rowCount: 2, truncated: false });
     expect(toGenieStatement({}).result.data_array).toEqual([]);
+  });
+});
+
+describe('parseGenieEvent', () => {
+  it('a message_result with an unknown rating still parses', () => {
+    const data = JSON.stringify({ message: { messageId: 'm1', conversationId: 'c1', feedback: { rating: 'WEIRD' } } });
+    const event = parseGenieEvent({ event: 'message_result', data });
+    expect(event?.type).toBe('message_result');
   });
 });

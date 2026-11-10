@@ -32,8 +32,8 @@ const GenieMessageSchema = z.object({
   content: z.string().nullish(),
   attachments: z.array(Attachment).nullish(),
   error: z.string().nullish(),
-  /** The person's rating Genie holds for this answer, if any. */
-  feedback: z.object({ rating: z.enum(["POSITIVE", "NEGATIVE", "NONE"]).nullish() }).nullish(),
+  /** The person's rating Genie holds for this answer, if any. A string, so an unknown rating never drops the answer. */
+  feedback: z.object({ rating: z.string().nullish() }).nullish(),
 });
 
 export type GenieMessage = z.infer<typeof GenieMessageSchema>;

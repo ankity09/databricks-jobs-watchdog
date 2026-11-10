@@ -116,6 +116,34 @@ describe("useCopilot", () => {
     });
   });
 
+  it("an unknown stored rating still shows the answer, with no thumb pressed", async () => {
+    const stream = controlledSse();
+    answerWith(stream.response);
+    const { result } = renderHook(() => useCopilot({}));
+
+    let sent: Promise<void> = Promise.resolve();
+    act(() => {
+      sent = result.current.send("Which jobs failed?");
+    });
+    stream.push(sseEvent("message_start", { conversationId: "conv-1", messageId: "msg-1", spaceId: "space-1" }));
+    stream.push(
+      sseEvent("message_result", {
+        message: {
+          messageId: "msg-1",
+          conversationId: "conv-1",
+          status: "COMPLETED",
+          content: "Which jobs failed?",
+          attachments: [{ attachmentId: "t-1", text: { content: "orders_ingest failed." } }],
+          feedback: { rating: "WEIRD" },
+        },
+      }),
+    );
+    stream.close();
+    await act(() => sent);
+
+    expect(result.current.messages[1]).toMatchObject({ text: "orders_ingest failed.", feedback: null });
+  });
+
   it("a query keeps its column types, row count and truncation flag", async () => {
     const stream = controlledSse();
     answerWith(stream.response);

@@ -166,6 +166,11 @@ function failureOf(message: GenieMessage): string | null {
   return null;
 }
 
+/** The stored rating when it is one the app knows; anything else counts as none. */
+function ratingFrom(rating: string | null | undefined): CopilotMessage["feedback"] {
+  return rating === "POSITIVE" || rating === "NEGATIVE" || rating === "NONE" ? rating : null;
+}
+
 /** Genie's answer: the text attachments, the queries and the suggested questions. */
 function answerFrom(message: GenieMessage, status: string | null): CopilotMessage {
   const attachments = message.attachments ?? [];
@@ -200,7 +205,7 @@ function answerFrom(message: GenieMessage, status: string | null): CopilotMessag
     status,
     queries,
     suggestions: attachments.flatMap((a) => a.suggestedQuestions ?? []),
-    feedback: message.feedback?.rating ?? null,
+    feedback: ratingFrom(message.feedback?.rating),
     error: failureOf(message),
     rowsExpired: message.status === "QUERY_RESULT_EXPIRED",
   };
