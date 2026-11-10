@@ -39,6 +39,20 @@ describe('chooseAnswerView', () => {
     expect(view.choices.length).toBeGreaterThan(0);
   });
 
+  it('a text axis offers no line or area', () => {
+    const view = chooseAnswerView(parts(9, (i) => String(i + 1)));
+    expect(view.kind).toBe('chart');
+    if (view.kind !== 'chart') return;
+    expect(view.chartType).toBe('bar');
+    expect(view.choices).toContain('bar');
+    expect(view.choices).not.toContain('line');
+    expect(view.choices).not.toContain('area');
+    const many = chooseAnswerView(parts(40, (i) => String(i + 1)));
+    if (many.kind !== 'chart') throw new Error('expected a chart');
+    expect(many.chartType).toBe('bar');
+    expect(many.choices).toEqual(['bar']);
+  });
+
   it('one number is a number', () => {
     const view = chooseAnswerView(statement([['failed_jobs', 'BIGINT']], [['42']]));
     expect(view).toEqual({ kind: 'number', label: 'failed_jobs', value: '42' });

@@ -47,13 +47,17 @@ export function chooseAnswerView(statement: GenieStatementResponse | null): Answ
       const value = row[numeric[0].name];
       return typeof value === 'number' && value < 0;
     });
-  const choices = getCompatibleChartTypes(rows, columns).filter((type) => partsOfAWhole || !isPie(type));
-
   const xIsText = text.some((c) => c.name === inferred.xKey);
+  // A line or an area through unordered categories reads as a trend that is not there.
+  const choices = getCompatibleChartTypes(rows, columns).filter(
+    (type) => (partsOfAWhole || !isPie(type)) && !(xIsText && (type === 'line' || type === 'area'))
+  );
+
   if (xIsText && rows.length > TEXT_AXIS_MAX_ROWS) return { kind: 'table', choices };
 
   let chartType = inferred.chartType;
-  if (isPie(chartType) && !partsOfAWhole) {
+  const unfit = (isPie(chartType) && !partsOfAWhole) || (xIsText && (chartType === 'line' || chartType === 'area'));
+  if (unfit) {
     if (!choices.includes('bar')) return { kind: 'table', choices };
     chartType = 'bar';
   }

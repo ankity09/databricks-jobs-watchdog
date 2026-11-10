@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CopilotQuery } from "../../hooks/useCopilot";
@@ -32,7 +32,7 @@ describe("SqlDisclosure", () => {
   });
 
   it("says who the query ran as, and keeps the SQL folded until asked", () => {
-    render(<SqlDisclosure query={query(2)} ranAs="dana@example.com" resultState="ready" />);
+    render(<SqlDisclosure query={query(2)} ranAs="dana@example.com" />);
     expect(screen.getByText("Ran as")).toBeInTheDocument();
     expect(screen.getByText("dana@example.com")).toBeInTheDocument();
     expect(screen.queryByText(/WHERE fl.status = 'FAILED'/)).not.toBeInTheDocument();
@@ -43,7 +43,7 @@ describe("SqlDisclosure", () => {
     const user = userEvent.setup();
     const writeText = vi.fn(() => Promise.resolve());
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    render(<SqlDisclosure query={query(2)} ranAs="dana@example.com" resultState="ready" />);
+    render(<SqlDisclosure query={query(2)} ranAs="dana@example.com" />);
 
     await user.click(screen.getByRole("button", { name: "Show SQL" }));
     expect(screen.getByRole("button", { name: "Hide SQL" })).toHaveAttribute("aria-expanded", "true");
@@ -56,59 +56,8 @@ describe("SqlDisclosure", () => {
     expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
   });
 
-  it("shows a small result table, at most 20 rows, when the rows came back", async () => {
-    const user = userEvent.setup();
-    render(<SqlDisclosure query={query(25)} ranAs="dana@example.com" resultState="ready" />);
-    await user.click(screen.getByRole("button", { name: "Show SQL" }));
-
-    const table = screen.getByRole("table");
-    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["job_name", "status"]);
-    expect(within(table).getAllByRole("row")).toHaveLength(1 + 20);
-    expect(within(table).getByText("job_20")).toBeInTheDocument();
-    expect(within(table).queryByText("job_21")).not.toBeInTheDocument();
-    expect(within(table).getByText("null")).toBeInTheDocument();
-    expect(screen.getByText("Showing 20 of 25 rows.")).toBeInTheDocument();
-  });
-
-  it("says so when the query returned no rows, and when the rows are not available", async () => {
-    const user = userEvent.setup();
-    const { rerender } = render(<SqlDisclosure query={query(0)} ranAs="dana@example.com" resultState="ready" />);
-    await user.click(screen.getByRole("button", { name: "Show SQL" }));
-    expect(screen.getByText("The query returned no rows.")).toBeInTheDocument();
-    expect(screen.queryByRole("table")).not.toBeInTheDocument();
-
-    rerender(<SqlDisclosure query={query(null)} ranAs="dana@example.com" resultState="missing" />);
-    expect(screen.getByText("The rows are not available. Ask again to run the query again.")).toBeInTheDocument();
-  });
-
-  it("offers Retry for missing rows when it can fetch them again", async () => {
-    const user = userEvent.setup();
-    const onRetryRows = vi.fn();
-    render(<SqlDisclosure query={query(null)} ranAs="dana@example.com" resultState="missing" onRetryRows={onRetryRows} />);
-    await user.click(screen.getByRole("button", { name: "Show SQL" }));
-    expect(screen.getByText("The rows are not available.")).toBeInTheDocument();
-    expect(screen.queryByText(/Ask again/)).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Retry" }));
-    expect(onRetryRows).toHaveBeenCalledOnce();
-  });
-
-  it("falls back to the signed-in person when the email is unknown", () => {
-    render(<SqlDisclosure query={query(1)} ranAs={null} resultState="ready" />);
-    expect(screen.getByText("you, the signed-in person")).toBeInTheDocument();
-  });
-
-  it("says the Retry failed, next to Retry", async () => {
-    const user = userEvent.setup();
-    render(<SqlDisclosure query={query(null)} ranAs="dana@example.com" resultState="missing" onRetryRows={vi.fn()} retryFailed />);
-    await user.click(screen.getByRole("button", { name: "Show SQL" }));
-    expect(screen.getByText("Could not load the rows.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
-  });
-
-  it("does not say so before a Retry has failed", async () => {
-    const user = userEvent.setup();
-    render(<SqlDisclosure query={query(null)} ranAs="dana@example.com" resultState="missing" onRetryRows={vi.fn()} />);
-    await user.click(screen.getByRole("button", { name: "Show SQL" }));
-    expect(screen.queryByText("Could not load the rows.")).not.toBeInTheDocument();
+  it("falls back to the word you when the email is unknown", () => {
+    render(<SqlDisclosure query={query(1)} ranAs={null} />);
+    expect(screen.getByText("you")).toBeInTheDocument();
   });
 });

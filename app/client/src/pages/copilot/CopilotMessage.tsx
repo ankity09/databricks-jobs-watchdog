@@ -4,7 +4,7 @@ import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { CopilotMessage as Message } from "../../hooks/useCopilot";
-import { SqlDisclosure } from "./SqlDisclosure";
+import { AnswerBlock } from "./AnswerBlock";
 
 export interface CopilotMessageProps {
   message: Message;
@@ -115,7 +115,7 @@ export function CopilotMessage({ message, ranAs, statusLabel, onRetry, onAsk, bu
       ) : null}
 
       {message.queries.map((query) => (
-        <SqlDisclosure
+        <AnswerBlock
           key={query.id}
           query={query}
           ranAs={ranAs}
