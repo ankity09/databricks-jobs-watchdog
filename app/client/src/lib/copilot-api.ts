@@ -32,6 +32,8 @@ const GenieMessageSchema = z.object({
   content: z.string().nullish(),
   attachments: z.array(Attachment).nullish(),
   error: z.string().nullish(),
+  /** The person's rating Genie holds for this answer, if any. */
+  feedback: z.object({ rating: z.enum(["POSITIVE", "NEGATIVE", "NONE"]).nullish() }).nullish(),
 });
 
 export type GenieMessage = z.infer<typeof GenieMessageSchema>;
@@ -144,4 +146,17 @@ export function onConversationsChanged(listener: () => void): () => void {
 /** Tells the Recent chats list that a chat started. */
 export function conversationsChanged(): void {
   for (const listener of [...listeners]) listener();
+}
+
+export type FeedbackRating = "POSITIVE" | "NEGATIVE" | "NONE";
+
+export interface FeedbackInput {
+  conversationId: string;
+  messageId: string;
+  rating: FeedbackRating;
+}
+
+/** POST /api/copilot/feedback: sends a thumbs up or down for one answer to Genie. NONE clears it. */
+export async function sendFeedback(input: FeedbackInput): Promise<void> {
+  await apiFetch("/api/copilot/feedback", z.null(), { method: "POST", body: JSON.stringify(input) });
 }

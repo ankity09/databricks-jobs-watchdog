@@ -41,6 +41,8 @@ export interface CopilotMessage {
   error: string | null;
   /** Genie says the rows of this answer's queries have expired: fetching them again cannot work, only asking again. */
   rowsExpired: boolean;
+  /** The rating Genie holds for this answer, when a reopened chat carries one. */
+  feedback?: "POSITIVE" | "NEGATIVE" | "NONE" | null;
 }
 
 export interface UseCopilotOptions {
@@ -198,6 +200,7 @@ function answerFrom(message: GenieMessage, status: string | null): CopilotMessag
     status,
     queries,
     suggestions: attachments.flatMap((a) => a.suggestedQuestions ?? []),
+    feedback: message.feedback?.rating ?? null,
     error: failureOf(message),
     rowsExpired: message.status === "QUERY_RESULT_EXPIRED",
   };

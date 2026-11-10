@@ -1,5 +1,6 @@
 import { getExecutionContext } from "@databricks/appkit";
-import type express from "express";
+import express from "express";
+import { z } from "zod";
 
 /**
  * The copilot's own routes under /api/copilot. The chat itself goes through the
@@ -22,8 +23,22 @@ export interface ConversationSource {
   list(req: express.Request, limit: number): Promise<ConversationSummary[]>;
 }
 
+export type FeedbackRating = "POSITIVE" | "NEGATIVE" | "NONE";
+
+export interface FeedbackInput {
+  conversationId: string;
+  messageId: string;
+  rating: FeedbackRating;
+}
+
+/** Where a rating goes. The real one sends it to Genie, as the person rating. */
+export interface FeedbackSink {
+  send(req: express.Request, input: FeedbackInput): Promise<void>;
+}
+
 export interface CopilotRouteContext {
   conversations: ConversationSource;
+  feedback: FeedbackSink;
 }
 
 /** The Recent chats list returns at most this many chats. */
@@ -72,6 +87,25 @@ export function genieConversations(appkit: UserScopes, spaceId = process.env.DAT
   };
 }
 
+/** Sends a thumbs up or down for one answer to Genie, in the person's caller scope. */
+export function genieFeedback(appkit: UserScopes, spaceId = process.env.DATABRICKS_GENIE_SPACE_ID ?? ""): FeedbackSink {
+  return {
+    send(req, input) {
+      return appkit.asUser(req).run(async () => {
+        await getExecutionContext().client.genie.sendMessageFeedback({
+          space_id: spaceId,
+          conversation_id: input.conversationId,
+          message_id: input.messageId,
+          rating: input.rating,
+        });
+      });
+    },
+  };
+}
+
+const GenieId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
+const FeedbackBody = z.object({ conversationId: GenieId, messageId: GenieId, rating: z.enum(["POSITIVE", "NEGATIVE", "NONE"]) });
+
 function statusOf(error: unknown): number | null {
   if (typeof error !== "object" || error === null) return null;
   const status = "statusCode" in error ? error.statusCode : "status" in error ? error.status : null;
@@ -92,6 +126,27 @@ export function registerCopilotRoutes(app: express.Application, ctx: CopilotRout
       }
       console.error("[copilot] Could not list conversations:", error instanceof Error ? error.message : error);
       res.status(502).json({ error: "genie", message: "Recent chats could not be loaded from Genie." });
+    }
+  });
+
+  // POST /api/copilot/feedback sends { conversationId, messageId, rating } to Genie and answers 204.
+  app.post("/api/copilot/feedback", express.json({ limit: "16kb" }), async (req, res) => {
+    const body = FeedbackBody.safeParse(req.body);
+    if (!body.success) {
+      res.status(400).json({ error: "invalid", message: "Send a conversation ID, a message ID and a rating of POSITIVE, NEGATIVE or NONE." });
+      return;
+    }
+    try {
+      await ctx.feedback.send(req, body.data);
+      res.status(204).end();
+    } catch (error) {
+      const status = statusOf(error);
+      if (status === 401 || status === 403) {
+        res.status(403).json({ error: "genie", message: "You don't have access to the copilot's Genie space." });
+        return;
+      }
+      console.error("[copilot] Could not send feedback:", error instanceof Error ? error.message : error);
+      res.status(502).json({ error: "genie", message: "Your feedback couldn't be sent to Genie." });
     }
   });
 }

@@ -5,6 +5,7 @@ import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { CopilotMessage as Message } from "../../hooks/useCopilot";
 import { AnswerBlock } from "./AnswerBlock";
+import { FeedbackButtons } from "./FeedbackButtons";
 
 export interface CopilotMessageProps {
   message: Message;
@@ -26,6 +27,8 @@ export interface CopilotMessageProps {
   onRetryRows?: () => void;
   /** The last Retry for the rows failed. */
   rowsFailed?: boolean;
+  /** The chat this answer is in, for sending feedback to Genie. */
+  conversationId?: string | null;
 }
 
 /** Markdown elements for Genie's answers: links open in a new tab, tables scroll, single line breaks stay. */
@@ -94,7 +97,7 @@ function RunningState({ label }: { label: string }) {
 }
 
 /** One turn of the chat: the person's question, or Genie's answer with the SQL behind it. */
-export function CopilotMessage({ message, ranAs, statusLabel, onRetry, onAsk, busy = false, loadingChat = false, loadingRows = false, onRetryRows, rowsFailed = false }: CopilotMessageProps) {
+export function CopilotMessage({ message, ranAs, statusLabel, onRetry, onAsk, busy = false, loadingChat = false, loadingRows = false, onRetryRows, rowsFailed = false, conversationId = null }: CopilotMessageProps) {
   if (message.role === "user") {
     return (
       <article aria-label="Your question" className="flex justify-end">
@@ -167,7 +170,12 @@ export function CopilotMessage({ message, ranAs, statusLabel, onRetry, onAsk, bu
             </Alert>
           ) : null}
 
-          {showFooter ? <p className="text-xs text-muted-foreground">AI-generated. Check before acting.</p> : null}
+          {showFooter ? (
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">AI-generated. Check before acting.</p>
+              {!message.error ? <FeedbackButtons conversationId={conversationId} messageId={message.id} initial={message.feedback} /> : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
 

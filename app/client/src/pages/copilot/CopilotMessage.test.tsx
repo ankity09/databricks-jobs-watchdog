@@ -69,4 +69,11 @@ describe("CopilotMessage", () => {
     expect(block.className).not.toMatch(/(^|\s)animate-pulse/);
     for (const line of screen.getByTestId("running-skeleton").children) expect(line).toHaveClass("motion-reduce:animate-none");
   });
+
+  it("a finished answer in a chat has thumbs in its footer, and a running one has none", () => {
+    const { rerender } = render(<CopilotMessage message={makeMessage()} ranAs={null} statusLabel={null} conversationId="conv-1" />);
+    expect(screen.getByRole("button", { name: "Good answer" })).toBeInTheDocument();
+    rerender(<CopilotMessage message={makeMessage({ status: "EXECUTING_QUERY" })} ranAs={null} statusLabel="Running" conversationId="conv-1" />);
+    expect(screen.queryByRole("button", { name: "Good answer" })).not.toBeInTheDocument();
+  });
 });

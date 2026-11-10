@@ -144,6 +144,7 @@ function CopilotChat({ chatKey, conversationId }: CopilotChatProps) {
             loadingRows={chat.loadingRows.includes(message.id)}
             onRetryRows={message.rowsExpired ? undefined : () => void chat.retryRows(message.id)}
             rowsFailed={chat.rowsFailed.includes(message.id)}
+            conversationId={chat.conversationId}
           />
         ))}
       </div>
