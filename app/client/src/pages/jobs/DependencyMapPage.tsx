@@ -132,6 +132,17 @@ function typingIn(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])") !== null;
 }
 
+/** Whether a key came from inside the side panel. */
+function inPanel(target: EventTarget | null, panel: HTMLElement | null): boolean {
+  return target instanceof Node && panel?.contains(target) === true;
+}
+
+/** Whether a key came from the side panel's settings form, whose unsaved edits go when the panel closes. */
+function inPanelForm(target: EventTarget | null, panel: HTMLElement | null): boolean {
+  const form = target instanceof Element ? target.closest("form") : null;
+  return form !== null && panel?.contains(form) === true;
+}
+
 /** Ctrl+Z, or Cmd+Z: Undo. Not with Shift, which is redo elsewhere, nor with Alt. */
 function isUndoKey(event: globalThis.KeyboardEvent): boolean {
   return (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "z";
@@ -812,6 +823,9 @@ export function DependencyMapPage() {
       setSelectedEdge(null);
       return;
     }
+    // The panel stays when a control used the key (Radix closes a list or a tooltip with it, and React events bubble out
+    // of portals), when it came from a text field, and anywhere in the panel's settings form: closing would drop its edits.
+    if (event.defaultPrevented || typingIn(event.target) || inPanelForm(event.target, panelRef.current)) return;
     // From inside the side panel, which closes: back to its box.
     if (selected && from && panelRef.current?.contains(from)) setRefocus({ kind: "box", id: selected.id });
     setSelectedId(null);
@@ -824,12 +838,12 @@ export function DependencyMapPage() {
   };
 
   // Ctrl+Z or Cmd+Z undoes from anywhere on the page, or with nothing focused; not from outside it, such as the nav,
-  // not in a text field, which keeps its own undo, and not while a dialog, the job editor, the link menu or the New
-  // link card is open.
+  // not in a text field, which keeps its own undo, not from the side panel, whose controls edit the job it shows, and
+  // not while a dialog, the job editor, the link menu or the New link card is open.
   const onUndoKey = useEffectEvent((event: globalThis.KeyboardEvent) => {
     if (!isUndoKey(event) || event.defaultPrevented || typingIn(event.target) || overlayOpen()) return;
     const onPage = event.target === window.document.body || (event.target instanceof Node && pageRef.current?.contains(event.target) === true);
-    if (!onPage) return;
+    if (!onPage || inPanel(event.target, panelRef.current)) return;
     event.preventDefault();
     undo();
   });
@@ -1008,9 +1022,14 @@ export function DependencyMapPage() {
                     nodeTypes={NODE_TYPES}
                     edgeTypes={EDGE_TYPES}
                     // Also what gives the cards pointer events: React Flow turns them off on a node that is neither selectable nor clickable.
+                    // Safari, and Firefox on macOS, do not focus a box on a click, and the arrow keys go to what has focus.
                     onNodeClick={(_event, node) => {
-                      if (node.type === "section") clearOnCanvas();
-                      else activate(node.data.box);
+                      if (node.type === "section") {
+                        clearOnCanvas();
+                        return;
+                      }
+                      activate(node.data.box);
+                      boxButton(mapRef.current, node.id)?.focus();
                     }}
                     // A pointer click selects a line, which shows its ×. Safari does not focus a line on a click, and Delete
                     // goes to what has focus.

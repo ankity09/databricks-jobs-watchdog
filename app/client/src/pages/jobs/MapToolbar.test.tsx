@@ -183,7 +183,8 @@ describe("MapToolbar", () => {
     const { toolbar, onTidy, rerender } = renderToolbar();
     const tidy = within(toolbar).getByRole("button", { name: "Tidy up" });
     act(() => tidy.focus());
-    expect(await screen.findByRole("tooltip")).toHaveTextContent("Put the automatic layout back");
+    // Tidy up changes the layout everyone sees, and its tooltip says so.
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/^Put the automatic layout back, for everyone$/);
     // Unavailable, but it keeps focus, as the zoom buttons do at their limits.
     expect(tidy).toHaveAttribute("aria-disabled", "true");
     await user.click(tidy);

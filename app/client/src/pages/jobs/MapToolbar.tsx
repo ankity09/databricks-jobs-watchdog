@@ -43,7 +43,7 @@ export interface MapToolbarProps {
   fitOptions: FitViewOptions;
   /** Called when the Fit button's fit has finished, so the map can slide a selection clear of the side panel. */
   onFitted?: () => void;
-  /** Tidy up: puts the automatic layout back for this direction. */
+  /** Tidy up: puts the automatic layout back for this direction, for everyone. */
   onTidy: () => void;
   /** True when the direction has no saved positions, or they have not loaded. */
   tidyDisabled: boolean;
@@ -159,7 +159,7 @@ export function MapToolbar({
       </label>
       <Divider />
       {/* Unavailable through aria-disabled, as at the zoom limits: a button that goes off as it is pressed keeps focus. */}
-      <ToolTip label="Put the automatic layout back">
+      <ToolTip label="Put the automatic layout back, for everyone">
         <Button
           variant="ghost"
           size="sm"

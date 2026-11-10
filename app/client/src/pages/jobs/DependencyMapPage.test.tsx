@@ -587,6 +587,50 @@ describe("DependencyMapPage", () => {
     await waitFor(() => expect(ingest).toHaveFocus());
   });
 
+  it("Escape in the side panel's Owner field keeps the panel and what was typed", async () => {
+    const user = userEvent.setup();
+    renderMap();
+    fireEvent.click(await box("watchdog_demo_slow (Unknown)"));
+    const panel = screen.getByRole("region", { name: "watchdog_demo_slow" });
+    const owner = within(panel).getByRole("textbox", { name: "Owner" });
+    await user.type(owner, "data-team");
+    await user.keyboard("{Escape}");
+    await frames();
+    expect(screen.getByRole("region", { name: "watchdog_demo_slow" })).toBe(panel);
+    expect(owner).toHaveValue("data-team");
+    expect(owner).toHaveFocus();
+
+    // The same from the form's other controls: a switch that was just changed keeps its change.
+    const monitored = within(panel).getByRole("switch", { name: "Monitored" });
+    expect(monitored).toBeChecked();
+    await user.click(monitored);
+    expect(monitored).not.toBeChecked();
+    expect(monitored).toHaveFocus();
+    await user.keyboard("{Escape}");
+    await frames();
+    expect(screen.getByRole("region", { name: "watchdog_demo_slow" })).toBe(panel);
+    expect(monitored).not.toBeChecked();
+    expect(owner).toHaveValue("data-team");
+  });
+
+  it("Escape in the side panel's Severity list closes only the list, and the panel keeps the typed owner", async () => {
+    const user = userEvent.setup();
+    renderMap();
+    fireEvent.click(await box("watchdog_demo_slow (Unknown)"));
+    const panel = screen.getByRole("region", { name: "watchdog_demo_slow" });
+    const owner = within(panel).getByRole("textbox", { name: "Owner" });
+    await user.type(owner, "data-team");
+    const severity = within(panel).getByRole("combobox", { name: "Severity" });
+    await user.click(severity);
+    expect(await screen.findByRole("listbox")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    await frames();
+    expect(screen.getByRole("region", { name: "watchdog_demo_slow" })).toBe(panel);
+    expect(owner).toHaveValue("data-team");
+    await waitFor(() => expect(severity).toHaveFocus());
+  });
+
   it("gives focus back to Add link and Add service when what they opened closes", async () => {
     const user = userEvent.setup();
     renderMap();
@@ -1265,6 +1309,21 @@ describe("DependencyMapPage", () => {
     expect(saves).toEqual([]);
   });
 
+  it("a clicked box takes focus, so the arrow keys move it after a click in any browser", async () => {
+    const user = userEvent.setup();
+    const { container, layoutSaves } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    const start = cornerOf(container, "job:orders_ingest");
+    // fireEvent.click focuses nothing, like a click in Safari or in Firefox on macOS: the map focuses the box itself.
+    fireEvent.click(ingest);
+    await screen.findByRole("region", { name: "orders_ingest" });
+    expect(ingest).toHaveFocus();
+    // The arrow key goes to what has focus.
+    await user.keyboard("{ArrowRight}");
+    expect(cornerOf(container, "job:orders_ingest")).toEqual({ x: start.x + 10, y: start.y });
+    await waitFor(() => expect(layoutSaves).toEqual([{ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", x: start.x + 10, y: start.y }] }]));
+  });
+
   it("arrow keys move the selected box and save once after 600 ms", async () => {
     const { container, saves, layoutSaves } = renderMap();
     const ingest = await box("orders_ingest (Unknown, switched off)");
@@ -1340,6 +1399,43 @@ describe("DependencyMapPage", () => {
     vi.useRealTimers();
     expect(cornerOf(container, "job:orders_ingest")).toEqual(start);
     expect(layoutSaves).toEqual([]);
+  });
+
+  it("keys typed in the side panel's Owner field move no box, remove no line and undo nothing", async () => {
+    const user = userEvent.setup();
+    const { container, saves, layoutSaves, resets } = renderMap();
+    await box("watchdog_demo_slow (Unknown)");
+    // Something for Undo to take back: a box moved by a drag.
+    dragBox(container, "job:orders_ingest", 120, 80);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    // A selected box with its panel open, and a selected line with its ×: the keys below would move the one and remove the other.
+    fireEvent.click(screen.getByRole("button", { name: "watchdog_demo_slow (Unknown)" }));
+    const panel = await screen.findByRole("region", { name: "watchdog_demo_slow" });
+    const linkName = "orders_enrich depends on orders_ingest (job link)";
+    fireEvent.click(screen.getByRole("button", { name: linkName }));
+    expect(await screen.findByRole("button", { name: `Remove the link: ${linkName}` })).toBeInTheDocument();
+    const ids = ["job:watchdog_demo_slow", "job:orders_ingest"];
+    const corners = ids.map((id) => cornerOf(container, id));
+
+    const owner = within(panel).getByRole("textbox", { name: "Owner" });
+    await user.type(owner, "ops team");
+    await user.keyboard("{ArrowLeft}{ArrowRight}{ArrowUp}{Shift>}{ArrowDown}{/Shift}");
+    await user.keyboard("{Delete}{Backspace}");
+    // As in a browser, Ctrl+Z and Cmd+Z reach the window listener from the field; user-event would type the z with Meta.
+    fireEvent.keyDown(owner, { key: "z", ctrlKey: true });
+    fireEvent.keyDown(owner, { key: "z", metaKey: true });
+    await frames();
+
+    // The field took the keys: Backspace removed the last letter.
+    expect(owner).toHaveValue("ops tea");
+    expect(owner).toHaveFocus();
+    expect(ids.map((id) => cornerOf(container, id))).toEqual(corners);
+    expect(screen.getByRole("button", { name: linkName })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: `Remove the link: ${linkName}` })).toBeInTheDocument();
+    expect(layoutSaves).toHaveLength(1);
+    expect(resets).toEqual([]);
+    expect(saves).toEqual([]);
+    expect(screen.getByRole("button", { name: "Undo: move 1 box" })).toBeInTheDocument();
   });
 
   it("saves a key move still waiting under its own direction when the direction changes", async () => {
@@ -1889,6 +1985,43 @@ describe("DependencyMapPage", () => {
     // From the box, Ctrl+Z takes the move back.
     fireEvent.keyDown(ingest, { key: "z", ctrlKey: true });
     await waitFor(() => expect(layoutSaves).toHaveLength(2));
+  });
+
+  it("Ctrl+Z from the side panel's controls does nothing", async () => {
+    const user = userEvent.setup();
+    const { container, saves, layoutSaves, resets } = renderMap(EXAMPLE_DOCUMENT, applies, {
+      layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] },
+    });
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    dragBox(container, "job:orders_ingest", 120, 80);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    const moved = cornerOf(container, "job:orders_ingest");
+    fireEvent.click(ingest);
+    const panel = await screen.findByRole("region", { name: "orders_ingest" });
+    // A changed switch turns Save on, so Save can take focus too.
+    const monitored = within(panel).getByRole("switch", { name: "Monitored" });
+    await user.click(monitored);
+    const save = within(panel).getByRole("button", { name: "Save" });
+    expect(save).toBeEnabled();
+    const controls = [within(panel).getByRole("combobox", { name: "Severity" }), monitored, save, within(panel).getByRole("button", { name: "Edit job" }), panel];
+    for (const control of controls) {
+      control.focus();
+      expect(control).toHaveFocus();
+      fireEvent.keyDown(control, { key: "z", ctrlKey: true });
+      fireEvent.keyDown(control, { key: "z", metaKey: true });
+    }
+    await frames();
+    expect(layoutSaves).toHaveLength(1);
+    expect(resets).toEqual([]);
+    expect(saves).toEqual([]);
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(moved);
+    expect(screen.getByRole("button", { name: "Undo: move 1 box" })).toBeInTheDocument();
+    expect(monitored).toBeChecked();
+
+    // From the box, Ctrl+Z takes the move back.
+    fireEvent.keyDown(ingest, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(layoutSaves).toHaveLength(2));
+    expect(layoutSaves[1]).toEqual({ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] });
   });
 
   it("Ctrl+Z waits while the New link card is open", async () => {
