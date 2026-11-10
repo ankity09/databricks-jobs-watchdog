@@ -71,12 +71,17 @@ export function messageResult(options: {
 }
 
 /** A query_result for an attachment: the columns and rows Genie's query returned. */
-export function queryResult(attachmentId: string, columns: string[], rows: (string | null)[][]): string {
+export function queryResult(
+  attachmentId: string,
+  columns: (string | { name: string; type: string })[],
+  rows: (string | null)[][],
+  manifest: { total_row_count?: number; truncated?: boolean } = {},
+): string {
   return sseEvent("query_result", {
     attachmentId,
     statementId: "st-1",
     data: {
-      manifest: { schema: { columns: columns.map((name) => ({ name, type_name: "STRING" })) } },
+      manifest: { schema: { columns: columns.map((c) => (typeof c === "string" ? { name: c, type_name: "STRING" } : { name: c.name, type_name: c.type })) }, ...manifest },
       result: { data_array: rows },
     },
   });

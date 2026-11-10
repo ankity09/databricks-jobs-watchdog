@@ -13,6 +13,9 @@ function query(rows: number | null): CopilotQuery {
     title: "Failing jobs",
     description: "Jobs that failed in the newest scan.",
     sql: SQL,
+    statement: null,
+    rowCount: null,
+    truncated: false,
     result:
       rows === null
         ? null

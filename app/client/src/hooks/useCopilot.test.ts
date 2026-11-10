@@ -116,6 +116,44 @@ describe("useCopilot", () => {
     });
   });
 
+  it("a query keeps its column types, row count and truncation flag", async () => {
+    const stream = controlledSse();
+    answerWith(stream.response);
+    const { result } = renderHook(() => useCopilot({}));
+    const sent = result.current.send("Which jobs failed per day?");
+    stream.push(sseEvent("message_start", { conversationId: "conv-1", messageId: "msg-1", spaceId: "space-1" }));
+    stream.push(messageResult({ conversationId: "conv-1", messageId: "msg-1", question: "Which jobs failed per day?", sql: SQL, attachmentId: "att-1" }));
+    await waitFor(() => expect(result.current.messages[1]?.queries).toHaveLength(1));
+    expect(result.current.messages[1].queries[0]).toMatchObject({ statement: null, rowCount: null, truncated: false });
+
+    stream.push(
+      queryResult(
+        "att-1",
+        [
+          { name: "day", type: "DATE" },
+          { name: "failed_jobs", type: "BIGINT" },
+        ],
+        [
+          ["2026-10-01", "3"],
+          ["2026-10-02", "5"],
+        ],
+        { total_row_count: 900, truncated: true },
+      ),
+    );
+    stream.close();
+    await act(() => sent);
+
+    const query = result.current.messages[1].queries[0];
+    expect(query.statement?.manifest.schema.columns).toEqual([
+      { name: "day", type_name: "DATE" },
+      { name: "failed_jobs", type_name: "BIGINT" },
+    ]);
+    expect(query.statement?.result.data_array).toHaveLength(2);
+    expect(query.rowCount).toBe(900);
+    expect(query.truncated).toBe(true);
+    expect(query.result?.columns).toEqual(["day", "failed_jobs"]);
+  });
+
   it("sets error on an error event, on the hook and on the answer", async () => {
     answerWith(
       sseResponse([

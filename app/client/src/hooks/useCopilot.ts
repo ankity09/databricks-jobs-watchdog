@@ -1,5 +1,6 @@
+import type { GenieStatementResponse } from "@databricks/appkit-ui/react";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { GENIE_BASE, type GenieEvent, type GenieMessage, type QueryRows, parseGenieEvent, toQueryRows } from "../lib/copilot-api";
+import { GENIE_BASE, type GenieEvent, type GenieMessage, type QueryRows, type StatementData, parseGenieEvent, statementMeta, toGenieStatement, toQueryRows } from "../lib/copilot-api";
 import { readSse } from "../lib/sse";
 
 /**
@@ -19,6 +20,12 @@ export interface CopilotQuery {
   sql: string;
   /** The rows, once the query_result event came back. */
   result: CopilotQueryResult | null;
+  /** The same rows in AppKit's shape, with each column's type, for choosing a chart. */
+  statement: GenieStatementResponse | null;
+  /** How many rows the query has; null until the rows came back. */
+  rowCount: number | null;
+  /** The result was cut short, so the rows are not all of them. */
+  truncated: boolean;
 }
 
 export interface CopilotMessage {
@@ -170,6 +177,9 @@ function answerFrom(message: GenieMessage, status: string | null): CopilotMessag
       description: attachment.query?.description ?? null,
       sql,
       result: null,
+      statement: null,
+      rowCount: null,
+      truncated: false,
     });
   }
   const written = attachments
@@ -226,7 +236,7 @@ type Action =
   | { type: "started"; id: string; conversationId: string; messageId: string }
   | { type: "status"; id: string; status: string }
   | { type: "answer"; id: string; message: GenieMessage }
-  | { type: "rows"; attachmentId: string; rows: QueryRows }
+  | { type: "rows"; attachmentId: string; data: StatementData }
   | { type: "rows-start"; id: string }
   | { type: "rows-end"; id: string }
   | { type: "rows-failed"; id: string }
@@ -293,7 +303,7 @@ function reducer(state: ChatState, action: Action): ChatState {
         ...state,
         messages: state.messages.map((m) =>
           m.queries.some((q) => q.id === action.attachmentId)
-            ? { ...m, queries: m.queries.map((q) => (q.id === action.attachmentId ? { ...q, result: action.rows } : q)) }
+            ? { ...m, queries: m.queries.map((q) => (q.id === action.attachmentId ? { ...q, result: toQueryRows(action.data), statement: toGenieStatement(action.data), ...statementMeta(action.data) } : q)) }
             : m,
         ),
       };
@@ -373,7 +383,7 @@ export function useCopilot(options: UseCopilotOptions = {}): UseCopilotResult {
           dispatch({ type: "answer", id: track.id, message: event.message });
           break;
         case "query_result":
-          dispatch({ type: "rows", attachmentId: event.attachmentId, rows: toQueryRows(event.data) });
+          dispatch({ type: "rows", attachmentId: event.attachmentId, data: event.data });
           break;
         case "error":
           // After the answer, an error is about one query's rows: the answer stays, without them.
@@ -443,7 +453,7 @@ export function useCopilot(options: UseCopilotOptions = {}): UseCopilotResult {
               replayed.newest = event.message;
               dispatch({ type: "load-message", message: event.message });
             } else if (event.type === "query_result") {
-              dispatch({ type: "rows", attachmentId: event.attachmentId, rows: toQueryRows(event.data) });
+              dispatch({ type: "rows", attachmentId: event.attachmentId, data: event.data });
             } else if (event.type === "error" && loaded === 0) {
               failure ??= readableError(event.error);
             }
@@ -492,7 +502,7 @@ export function useCopilot(options: UseCopilotOptions = {}): UseCopilotResult {
         await follow(conversationId, messageId, controller.signal, (event) => {
           if (event.type !== "query_result") return;
           gotRows = true;
-          dispatch({ type: "rows", attachmentId: event.attachmentId, rows: toQueryRows(event.data) });
+          dispatch({ type: "rows", attachmentId: event.attachmentId, data: event.data });
         });
         // Genie reports a failed fetch as an error event, which ends the stream without throwing.
         if (!gotRows && !controller.signal.aborted) dispatch({ type: "rows-failed", id: messageId });
