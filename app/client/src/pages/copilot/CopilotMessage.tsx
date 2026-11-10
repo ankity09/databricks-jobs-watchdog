@@ -1,10 +1,11 @@
 import { Alert, AlertDescription, AlertTitle, Button, Skeleton } from "@databricks/appkit-ui/react";
-import { CircleAlert, CornerDownRight, Radar, RotateCw } from "lucide-react";
+import { CircleAlert, Radar, RotateCw } from "lucide-react";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { CopilotMessage as Message } from "../../hooks/useCopilot";
-import { SqlDisclosure } from "./SqlDisclosure";
+import { AnswerBlock } from "./AnswerBlock";
+import { FeedbackButtons } from "./FeedbackButtons";
 
 export interface CopilotMessageProps {
   message: Message;
@@ -26,6 +27,8 @@ export interface CopilotMessageProps {
   onRetryRows?: () => void;
   /** The last Retry for the rows failed. */
   rowsFailed?: boolean;
+  /** The chat this answer is in, for sending feedback to Genie. */
+  conversationId?: string | null;
 }
 
 /** Markdown elements for Genie's answers: links open in a new tab, tables scroll, single line breaks stay. */
@@ -65,16 +68,36 @@ const MARKDOWN: Components = {
 function AnswerShell({ children }: { children: ReactNode }) {
   return (
     <article aria-label="Copilot answer" className="flex gap-3">
-      <span aria-hidden="true" className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-secondary text-foreground">
+      <span aria-hidden="true" className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
         <Radar className="size-4" strokeWidth={2.25} />
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-2.5">{children}</div>
+      <div className="flex min-w-0 flex-1 flex-col gap-2">{children}</div>
     </article>
   );
 }
 
+/** The step Genie is on, with placeholder lines and a block where the answer will land. */
+function RunningState({ label }: { label: string }) {
+  return (
+    <>
+      <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+        <span className="relative flex size-2" aria-hidden="true">
+          <span className="absolute inline-flex size-full rounded-full bg-primary opacity-60 motion-safe:animate-ping" />
+          <span className="relative inline-flex size-2 rounded-full bg-primary" />
+        </span>
+        {label}
+      </div>
+      <div data-testid="running-skeleton" className="space-y-2" aria-hidden="true">
+        <Skeleton className="h-3 w-11/12 motion-reduce:animate-none" />
+        <Skeleton className="h-3 w-3/4 motion-reduce:animate-none" />
+      </div>
+      <div data-testid="running-block" aria-hidden="true" className="h-24 w-full rounded-lg bg-muted motion-safe:animate-pulse" />
+    </>
+  );
+}
+
 /** One turn of the chat: the person's question, or Genie's answer with the SQL behind it. */
-export function CopilotMessage({ message, ranAs, statusLabel, onRetry, onAsk, busy = false, loadingChat = false, loadingRows = false, onRetryRows, rowsFailed = false }: CopilotMessageProps) {
+export function CopilotMessage({ message, ranAs, statusLabel, onRetry, onAsk, busy = false, loadingChat = false, loadingRows = false, onRetryRows, rowsFailed = false, conversationId = null }: CopilotMessageProps) {
   if (message.role === "user") {
     return (
       <article aria-label="Your question" className="flex justify-end">
@@ -87,10 +110,21 @@ export function CopilotMessage({ message, ranAs, statusLabel, onRetry, onAsk, bu
   const hasAnswer = message.text !== "" || message.queries.length > 0;
   const rowsComing = inProgress || loadingChat || loadingRows;
 
+  if (inProgress && !hasAnswer) {
+    return (
+      <AnswerShell>
+        <RunningState label={statusLabel ?? "Working"} />
+      </AnswerShell>
+    );
+  }
+
+  const showFooter = !inProgress && hasAnswer;
+  const showSuggestions = showFooter && message.suggestions.length > 0 && onAsk !== undefined;
+
   return (
     <AnswerShell>
       {inProgress ? (
-        <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+        <div role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className="relative flex size-2" aria-hidden="true">
             <span className="absolute inline-flex size-full rounded-full bg-primary opacity-60 motion-safe:animate-ping" />
             <span className="relative inline-flex size-2 rounded-full bg-primary" />
@@ -99,70 +133,71 @@ export function CopilotMessage({ message, ranAs, statusLabel, onRetry, onAsk, bu
         </div>
       ) : null}
 
-      {inProgress && !hasAnswer ? (
-        <div className="space-y-2" aria-hidden="true">
-          <Skeleton className="h-3.5 w-11/12" />
-          <Skeleton className="h-3.5 w-3/4" />
+      {hasAnswer || message.error ? (
+        <div className="flex flex-col gap-3 rounded-lg border border-border bg-card px-3.5 py-3">
+          {message.text ? (
+            <div className="text-sm leading-6 text-foreground">
+              <Markdown remarkPlugins={[remarkGfm]} components={MARKDOWN}>
+                {message.text}
+              </Markdown>
+            </div>
+          ) : null}
+
+          {message.queries.map((query) => (
+            <AnswerBlock
+              key={query.id}
+              query={query}
+              ranAs={ranAs}
+              resultState={rowsComing ? "loading" : query.result ? "ready" : "missing"}
+              onRetryRows={onRetryRows}
+              retryFailed={rowsFailed}
+            />
+          ))}
+
+          {message.error ? (
+            <Alert variant="destructive">
+              <CircleAlert aria-hidden="true" />
+              <AlertTitle>The copilot could not answer.</AlertTitle>
+              <AlertDescription>
+                <p>{message.error}</p>
+                {onRetry ? (
+                  <Button type="button" variant="outline" size="sm" onClick={onRetry} className="mt-2 h-7 gap-1.5 px-2.5 text-xs text-foreground">
+                    <RotateCw aria-hidden="true" className="size-3.5" />
+                    Retry
+                  </Button>
+                ) : null}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {showFooter ? (
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">AI-generated. Check before acting.</p>
+              {!message.error ? <FeedbackButtons conversationId={conversationId} messageId={message.id} initial={message.feedback} /> : null}
+            </div>
+          ) : null}
         </div>
-      ) : null}
-
-      {message.text ? (
-        <div className="text-sm leading-6 text-foreground">
-          <Markdown remarkPlugins={[remarkGfm]} components={MARKDOWN}>
-            {message.text}
-          </Markdown>
-        </div>
-      ) : null}
-
-      {message.queries.map((query) => (
-        <SqlDisclosure
-          key={query.id}
-          query={query}
-          ranAs={ranAs}
-          resultState={rowsComing ? "loading" : query.result ? "ready" : "missing"}
-          onRetryRows={onRetryRows}
-          retryFailed={rowsFailed}
-        />
-      ))}
-
-      {message.error ? (
-        <Alert variant="destructive">
-          <CircleAlert aria-hidden="true" />
-          <AlertTitle>The copilot could not answer.</AlertTitle>
-          <AlertDescription>
-            <p>{message.error}</p>
-            {onRetry ? (
-              <Button type="button" variant="outline" size="sm" onClick={onRetry} className="mt-2 h-7 gap-1.5 px-2.5 text-xs text-foreground">
-                <RotateCw aria-hidden="true" className="size-3.5" />
-                Retry
-              </Button>
-            ) : null}
-          </AlertDescription>
-        </Alert>
       ) : null}
 
       {!inProgress && !message.error && !hasAnswer ? <p className="text-sm text-muted-foreground">Genie sent no answer to this question.</p> : null}
 
-      {!inProgress && hasAnswer && message.suggestions.length > 0 && onAsk ? (
-        <div className="flex flex-col items-start gap-1" role="group" aria-label="Follow-up questions">
+      {showSuggestions ? (
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Follow-up questions">
           {message.suggestions.map((suggestion) => (
             <Button
               key={suggestion}
               type="button"
-              variant="ghost"
+              variant="outline"
               size="sm"
               disabled={busy}
-              onClick={() => onAsk(suggestion)}
-              className="h-auto min-h-7 justify-start gap-1.5 px-1.5 py-1 text-left text-xs font-normal whitespace-normal text-muted-foreground hover:text-foreground"
+              onClick={() => onAsk?.(suggestion)}
+              className="h-auto min-h-7 rounded-full px-3 py-1 text-left text-xs font-normal whitespace-normal text-foreground"
             >
-              <CornerDownRight aria-hidden="true" className="size-3.5 shrink-0" />
               {suggestion}
             </Button>
           ))}
         </div>
       ) : null}
-
-      {!inProgress && hasAnswer ? <p className="text-xs text-muted-foreground">AI-generated. Check before acting.</p> : null}
     </AnswerShell>
   );
 }

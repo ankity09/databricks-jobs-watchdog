@@ -1,3 +1,4 @@
+import type { GenieStatementResponse } from "@databricks/appkit-ui/react";
 import { z } from "zod";
 import { apiFetch } from "./api";
 import type { SseEvent } from "./sse";
@@ -31,17 +32,27 @@ const GenieMessageSchema = z.object({
   content: z.string().nullish(),
   attachments: z.array(Attachment).nullish(),
   error: z.string().nullish(),
+  /** The person's rating Genie holds for this answer, if any. A string, so an unknown rating never drops the answer. */
+  feedback: z.object({ rating: z.string().nullish() }).nullish(),
 });
 
 export type GenieMessage = z.infer<typeof GenieMessageSchema>;
 
 const Cell = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
-/** The statement_response of a query attachment: the columns and the rows, as strings. */
+/** The statement_response of a query attachment: the columns with their types, and the rows. */
 const StatementResponse = z.object({
-  manifest: z.object({ schema: z.object({ columns: z.array(z.object({ name: z.string() })).nullish() }).nullish() }).nullish(),
+  manifest: z
+    .object({
+      schema: z.object({ columns: z.array(z.object({ name: z.string(), type_name: z.string().nullish() })).nullish() }).nullish(),
+      total_row_count: z.number().nullish(),
+      truncated: z.boolean().nullish(),
+    })
+    .nullish(),
   result: z.object({ data_array: z.array(z.array(Cell)).nullish() }).nullish(),
 });
+
+export type StatementData = z.infer<typeof StatementResponse>;
 
 /** The events the genie plugin streams: message_start, status, message_result, query_result, history_info and error. */
 const GenieEventSchema = z.discriminatedUnion("type", [
@@ -85,6 +96,31 @@ export function toQueryRows(data: z.infer<typeof StatementResponse>): QueryRows 
   };
 }
 
+/**
+ * The statement in AppKit's shape: columns keep their type_name (STRING when
+ * Genie sent none) and every cell is a string or null, as transformGenieData expects.
+ */
+export function toGenieStatement(data: StatementData): GenieStatementResponse {
+  const { columns, rows } = toQueryRows(data);
+  const types = data.manifest?.schema?.columns ?? [];
+  return {
+    manifest: { schema: { columns: columns.map((name, i) => ({ name, type_name: types[i]?.type_name ?? "STRING" })) } },
+    result: { data_array: rows },
+  };
+}
+
+/**
+ * How many rows the query has and whether the result was cut short. The genie
+ * plugin passes no result metadata on message_result, so these come from the
+ * statement: its total row count (else the rows it holds) and its truncated flag.
+ */
+export function statementMeta(data: StatementData): { rowCount: number; truncated: boolean } {
+  return {
+    rowCount: data.manifest?.total_row_count ?? data.result?.data_array?.length ?? 0,
+    truncated: data.manifest?.truncated ?? false,
+  };
+}
+
 const ConversationsSchema = z.object({
   conversations: z.array(z.object({ id: z.string(), title: z.string(), updatedAt: z.string() })),
 });
@@ -110,4 +146,17 @@ export function onConversationsChanged(listener: () => void): () => void {
 /** Tells the Recent chats list that a chat started. */
 export function conversationsChanged(): void {
   for (const listener of [...listeners]) listener();
+}
+
+export type FeedbackRating = "POSITIVE" | "NEGATIVE" | "NONE";
+
+export interface FeedbackInput {
+  conversationId: string;
+  messageId: string;
+  rating: FeedbackRating;
+}
+
+/** POST /api/copilot/feedback: sends a thumbs up or down for one answer to Genie. NONE clears it. */
+export async function sendFeedback(input: FeedbackInput): Promise<void> {
+  await apiFetch("/api/copilot/feedback", z.null(), { method: "POST", body: JSON.stringify(input) });
 }

@@ -3,18 +3,23 @@ import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const listConversations = vi.fn();
+const sendMessageFeedback = vi.fn();
 vi.mock("@databricks/appkit", () => ({
-  getExecutionContext: () => ({ client: { genie: { listConversations } } }),
+  getExecutionContext: () => ({ client: { genie: { listConversations, sendMessageFeedback } } }),
 }));
 
-const { COPILOT_NOT_SET_UP, genieConversations, registerCopilotNotSetUp, registerCopilotRoutes, toConversationSummary } = await import("./routes");
+const { COPILOT_NOT_SET_UP, genieConversations, genieFeedback, registerCopilotNotSetUp, registerCopilotRoutes, toConversationSummary } = await import("./routes");
 type ConversationSource = Parameters<typeof registerCopilotRoutes>[1]["conversations"];
 
 let server: ReturnType<express.Application["listen"]> | null = null;
 
-async function start(conversations: ConversationSource): Promise<string> {
+type FeedbackSink = Parameters<typeof registerCopilotRoutes>[1]["feedback"];
+
+const noFeedback: FeedbackSink = { send: () => Promise.resolve() };
+
+async function start(conversations: ConversationSource, feedback: FeedbackSink = noFeedback): Promise<string> {
   const app = express();
-  registerCopilotRoutes(app, { conversations });
+  registerCopilotRoutes(app, { conversations, feedback });
   server = app.listen(0);
   await new Promise((resolve) => server?.once("listening", resolve));
   const { port } = server.address() as AddressInfo;
@@ -62,6 +67,76 @@ describe("GET /api/copilot/conversations", () => {
 
     expect(response.status).toBe(502);
     expect(await response.json()).toEqual({ error: "genie", message: "Recent chats could not be loaded from Genie." });
+  });
+});
+
+const noConversations: ConversationSource = { list: () => Promise.resolve([]) };
+
+function postFeedback(base: string, body: unknown): Promise<Response> {
+  return fetch(`${base}/api/copilot/feedback`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+
+describe("POST /api/copilot/feedback", () => {
+  afterEach(async () => {
+    await new Promise((resolve) => (server ? server.close(resolve) : resolve(undefined)));
+    server = null;
+  });
+
+  it("a good rating reaches Genie as POSITIVE for that message", async () => {
+    const send = vi.fn((_req: express.Request, _input: { conversationId: string; messageId: string; rating: string }) => Promise.resolve());
+    const base = await start(noConversations, { send });
+    const response = await postFeedback(base, { conversationId: "conv-1", messageId: "msg_2", rating: "POSITIVE" });
+
+    expect(response.status).toBe(204);
+    expect(send.mock.calls[0][1]).toEqual({ conversationId: "conv-1", messageId: "msg_2", rating: "POSITIVE" });
+  });
+
+  it("a bad body is 400", async () => {
+    const send = vi.fn(() => Promise.resolve());
+    const base = await start(noConversations, { send });
+    const bodies = [
+      {},
+      { conversationId: "conv-1", messageId: "msg", rating: "MAYBE" },
+      { conversationId: "conv 1", messageId: "msg", rating: "NONE" },
+      { conversationId: "", messageId: "msg", rating: "NONE" },
+      { conversationId: "c", messageId: "m".repeat(129), rating: "NONE" },
+    ];
+    for (const body of bodies) {
+      const response = await postFeedback(base, body);
+      expect(response.status).toBe(400);
+      expect(((await response.json()) as { error: string }).error).toBe("invalid");
+    }
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("a 403 from Genie becomes the no-access message", async () => {
+    const refusal = Object.assign(new Error("User does not have permission"), { statusCode: 403 });
+    const base = await start(noConversations, { send: () => Promise.reject(refusal) });
+    const response = await postFeedback(base, { conversationId: "c", messageId: "m", rating: "NEGATIVE" });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: "genie", message: "You don't have access to the copilot's Genie space." });
+  });
+
+  it("other failures are 502", async () => {
+    const base = await start(noConversations, { send: () => Promise.reject(new Error("socket hang up")) });
+    const response = await postFeedback(base, { conversationId: "c", messageId: "m", rating: "NONE" });
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: "genie", message: "Your feedback couldn't be sent to Genie." });
+  });
+});
+
+describe("genieFeedback", () => {
+  it("sends the rating as the person asking, to the copilot's space", async () => {
+    sendMessageFeedback.mockResolvedValue({});
+    const asUser = vi.fn((_req: express.Request) => ({ run: <T,>(fn: () => Promise<T>): Promise<T> => fn() }));
+    const request = { headers: {} } as express.Request;
+
+    await genieFeedback({ asUser }, "space-1").send(request, { conversationId: "c1", messageId: "m1", rating: "NEGATIVE" });
+
+    expect(asUser).toHaveBeenCalledWith(request);
+    expect(sendMessageFeedback).toHaveBeenCalledWith({ space_id: "space-1", conversation_id: "c1", message_id: "m1", rating: "NEGATIVE" });
   });
 });
 

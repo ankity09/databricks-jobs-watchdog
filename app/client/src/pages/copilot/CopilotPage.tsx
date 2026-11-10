@@ -8,7 +8,7 @@ import { PageHeader } from "../../layout/PageHeader";
 import { conversationsChanged } from "../../lib/copilot-api";
 import { questionFromLink } from "../../lib/copilot-link";
 import { CopilotMessage } from "./CopilotMessage";
-import { SuggestedPrompts } from "./SuggestedPrompts";
+import { CopilotWelcome } from "./CopilotWelcome";
 
 /**
  * The key of the chat a history entry shows. A chat started on /copilot keeps
@@ -127,7 +127,7 @@ function CopilotChat({ chatKey, conversationId }: CopilotChatProps) {
       </div>
     );
   } else if (chat.messages.length === 0) {
-    body = <SuggestedPrompts onPick={ask} disabled={busy} />;
+    body = <CopilotWelcome onPick={ask} disabled={busy} />;
   } else {
     body = (
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-5 py-5">
@@ -144,6 +144,7 @@ function CopilotChat({ chatKey, conversationId }: CopilotChatProps) {
             loadingRows={chat.loadingRows.includes(message.id)}
             onRetryRows={message.rowsExpired ? undefined : () => void chat.retryRows(message.id)}
             rowsFailed={chat.rowsFailed.includes(message.id)}
+            conversationId={chat.conversationId}
           />
         ))}
       </div>
@@ -160,7 +161,7 @@ function CopilotChat({ chatKey, conversationId }: CopilotChatProps) {
           <label htmlFor={inputId} className="sr-only">
             Question
           </label>
-          <div className="flex items-end gap-2">
+          <div className="flex items-end gap-2 rounded-2xl border border-input bg-background p-1.5 focus-within:ring-2 focus-within:ring-ring/50">
             <Textarea
               id={inputId}
               value={draft}
@@ -169,9 +170,9 @@ function CopilotChat({ chatKey, conversationId }: CopilotChatProps) {
               disabled={chat.loadError !== null}
               rows={1}
               placeholder="Ask about failures, missed schedules or what a failure affects"
-              className="max-h-40 min-h-10 resize-none bg-background text-sm"
+              className="max-h-40 min-h-10 resize-none border-0 bg-transparent text-sm shadow-none focus-visible:ring-0"
             />
-            <Button type="submit" disabled={!canAsk || draft.trim() === ""} className="h-10 gap-1.5 px-3.5">
+            <Button type="submit" disabled={!canAsk || draft.trim() === ""} className="h-10 gap-1.5 rounded-xl px-3.5">
               <SendHorizontal aria-hidden="true" className="size-4" />
               Send
             </Button>

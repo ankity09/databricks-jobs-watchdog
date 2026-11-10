@@ -1,6 +1,6 @@
 import { analytics, createApp, genie, lakebase, server } from "@databricks/appkit";
 import { registerAppConfigRoute } from "./app-config";
-import { genieConversations, registerCopilotNotSetUp, registerCopilotRoutes } from "./copilot/routes";
+import { genieConversations, genieFeedback, registerCopilotNotSetUp, registerCopilotRoutes } from "./copilot/routes";
 import { schemaErrorLog, schemaGate } from "./db/schema";
 import { registerIdentityRoutes } from "./identity";
 import { registerJobListRoutes } from "./joblist/routes";
@@ -37,7 +37,7 @@ await createApp({
       registerAppConfigRoute(app, appkit);
       registerJobListRoutes(app, { pool: appkit.lakebase.pool, ready: () => schema.ready() });
       registerMapLayoutRoutes(app, { pool: appkit.lakebase.pool, ready: () => schema.ready() });
-      if (genieSpaceId) registerCopilotRoutes(app, { conversations: genieConversations(appkit, genieSpaceId) });
+      if (genieSpaceId) registerCopilotRoutes(app, { conversations: genieConversations(appkit, genieSpaceId), feedback: genieFeedback(appkit, genieSpaceId) });
       else registerCopilotNotSetUp(app);
       registerScanRoutes(app);
     });

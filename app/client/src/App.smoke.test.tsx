@@ -20,8 +20,8 @@ const PAGES = [
 /** Each page's empty state, with no scans, no chats, no jobs and no versions saved. */
 const EMPTY_STATES = [
   ["/monitoring", "No scans yet"],
-  ["/copilot", "Ask about your monitored jobs"],
-  ["/copilot/example-thread", "Ask about your monitored jobs"],
+  ["/copilot", "What do you want to know?"],
+  ["/copilot/example-thread", "What do you want to know?"],
   ["/jobs", "The job list is empty"],
   ["/jobs/map", "Nothing on the map yet"],
   ["/jobs/changes", "Nothing is saved yet"],

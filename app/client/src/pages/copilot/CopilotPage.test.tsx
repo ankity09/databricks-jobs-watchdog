@@ -67,10 +67,16 @@ describe("the copilot page", () => {
     vi.unstubAllGlobals();
   });
 
-  it("shows the suggested questions in an empty chat", async () => {
+  it("a new chat shows the welcome view and a starter card asks its question", async () => {
+    const user = userEvent.setup();
+    genieAnswers = [answer("conv-1", "msg-1", SAMPLE_QUESTIONS[0], "Nothing is failing.")];
     await renderAt("/copilot");
+    expect(await screen.findByRole("heading", { name: "What do you want to know?" })).toBeInTheDocument();
     const suggestions = await screen.findByRole("group", { name: "Suggested questions" });
-    expect(within(suggestions).getAllByRole("button").map((b) => b.textContent)).toEqual(SAMPLE_QUESTIONS);
+    expect(within(suggestions).getAllByRole("button")).toHaveLength(SAMPLE_QUESTIONS.length);
+    await user.click(within(suggestions).getByRole("button", { name: new RegExp(SAMPLE_QUESTIONS[0]) }));
+    await screen.findByText("Nothing is failing.");
+    expect(genieCalls[0].body).toEqual({ content: SAMPLE_QUESTIONS[0] });
     expect(screen.getByRole("textbox", { name: "Question" })).toHaveValue("");
   });
 
