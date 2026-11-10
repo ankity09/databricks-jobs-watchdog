@@ -1686,4 +1686,41 @@ describe("DependencyMapPage", () => {
     expect(within(menu).getByRole("button", { name: "Remove link" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: remove })).toBeNull();
   });
+
+  it("Delete removes no line after Tab takes focus from the selected line to another", async () => {
+    const user = userEvent.setup();
+    const { saves } = renderMap();
+    const first = await box("orders_enrich depends on orders_ingest (job link)");
+    const remove = "Remove the link: orders_enrich depends on orders_ingest (job link)";
+    fireEvent.click(first);
+    expect(await screen.findByRole("button", { name: remove })).toBeInTheDocument();
+    expect(first).toHaveFocus();
+    // Tab takes focus, and its ring, to the next line: the first line lets go of its ×.
+    await user.tab();
+    const next = screen.getByRole("button", { name: "daily_revenue_report depends on orders_enrich (job link)" });
+    expect(next).toHaveFocus();
+    await waitFor(() => expect(screen.queryByRole("button", { name: remove })).toBeNull());
+    // Delete and Backspace on the focused line remove neither line.
+    await user.keyboard("{Delete}");
+    await user.keyboard("{Backspace}");
+    await frames();
+    expect(saves).toEqual([]);
+    expect(first).toBeInTheDocument();
+    expect(next).toBeInTheDocument();
+  });
+
+  it("Delete on a box leaves the selected line alone", async () => {
+    const { saves } = renderMap();
+    const link = await box("orders_enrich depends on orders_ingest (job link)");
+    fireEvent.click(link);
+    await screen.findByRole("button", { name: "Remove the link: orders_enrich depends on orders_ingest (job link)" });
+    // Focus goes on to a box, as Tab does past the line's ×: the line keeps its ×, and Delete on the box removes nothing.
+    const ingest = screen.getByRole("button", { name: "orders_ingest (Unknown, switched off)" });
+    ingest.focus();
+    fireEvent.keyDown(ingest, { key: "Delete" });
+    fireEvent.keyDown(ingest, { key: "Backspace" });
+    await frames();
+    expect(saves).toEqual([]);
+    expect(link).toBeInTheDocument();
+  });
 });

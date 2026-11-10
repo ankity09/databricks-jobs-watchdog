@@ -33,6 +33,7 @@ import {
 } from "@xyflow/react";
 import { CircleAlert, Link2, Network, RotateCw, Server, X } from "lucide-react";
 import {
+  type FocusEvent,
   type KeyboardEvent,
   type ReactNode,
   type RefObject,
@@ -129,6 +130,11 @@ const NO_UNDO = () => undefined;
 /** Whether a key went to something a person types in: a text field, a list, or editable text. */
 function typingIn(target: EventTarget): boolean {
   return target instanceof Element && target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])") !== null;
+}
+
+/** The link a key or a focus went to, by its ID; null when it went to anything else. */
+function edgeIdOf(target: EventTarget | null): string | null {
+  return target instanceof Element ? (target.closest(".react-flow__edge")?.getAttribute("data-id") ?? null) : null;
 }
 
 /**
@@ -669,17 +675,17 @@ export function DependencyMapPage() {
       return;
     }
     if (event.key === "Delete" || event.key === "Backspace") {
-      // Delete or Backspace removes the line selected with a pointer, never a box: when the key comes from the map, not
-      // while a person types in a field, and not while a save is on its way.
-      if (!selectedLink || saving || !onCanvas(event.target, mapRef.current)) return;
-      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || typingIn(event.target)) return;
+      // Delete or Backspace removes the line selected with a pointer, never a box: only when the key comes from that
+      // line, which has focus, and not while a save is on its way.
+      if (!selectedLink || saving || edgeIdOf(event.target) !== selectedLink.id) return;
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
       event.preventDefault();
       void removeLink(selectedLink.id);
       return;
     }
     if (event.key === "Enter" || event.key === " ") {
       // Enter or Space on a focused link opens its menu.
-      const edgeId = event.target instanceof Element ? event.target.closest(".react-flow__edge")?.getAttribute("data-id") : null;
+      const edgeId = edgeIdOf(event.target);
       if (!edgeId || link.step !== "off" || event.defaultPrevented) return;
       event.preventDefault();
       openEdge(edgeId);
@@ -702,6 +708,12 @@ export function DependencyMapPage() {
     // From inside the side panel, which closes: back to its box.
     if (selected && from && panelRef.current?.contains(from)) setRefocus({ kind: "box", id: selected.id });
     setSelectedId(null);
+  };
+
+  /** Another line took focus, such as with Tab: the selected line lets go of its ×, so Delete never removes a line that has no focus. */
+  const onFocus = (event: FocusEvent) => {
+    const edgeId = edgeIdOf(event.target);
+    if (edgeId !== null) setSelectedEdge((current) => (current !== null && current !== edgeId ? null : current));
   };
 
   const closeMenu = (returnFocus: boolean) => {
@@ -835,7 +847,7 @@ export function DependencyMapPage() {
         ) : null}
         <ReactFlowProvider>
           {/* Escape works the same on the map and in a side panel opened under it. */}
-          <div className="flex min-h-[520px] flex-1 flex-col gap-3" onKeyDown={onKeyDown}>
+          <div className="flex min-h-[520px] flex-1 flex-col gap-3" onKeyDown={onKeyDown} onFocus={onFocus}>
             {/* tabIndex -1: focus lands on the map itself when nothing on it can take it. */}
             <div
               ref={mapRef}
