@@ -46,6 +46,7 @@ import { Link } from "react-router";
 import type { Change, JobEntry, RuleIssue } from "../../../../shared/joblist/types";
 import { type ReloadJobList, type SaveOutcome, useJobList } from "../../hooks/useJobList";
 import { useLiveStatus } from "../../hooks/useLiveStatus";
+import { useBoxMoves, useMapLayout } from "../../hooks/useMapLayout";
 import { useRefreshKey } from "../../hooks/useRefreshKey";
 import { PageHeader } from "../../layout/PageHeader";
 import {
@@ -59,6 +60,7 @@ import {
   jobNodeId,
   unlinkChange,
 } from "../../lib/graph";
+import { applySavedLayout, notLinkedYet } from "../../lib/layoutMerge";
 import type { EntryJobIds } from "../../lib/picker";
 import { statusTone } from "../../lib/status";
 import { cn } from "../../lib/utils";
@@ -104,6 +106,24 @@ const ARIA_LABELS = {
   "edge.a11yDescription.default": "Press Enter to see this link and remove it, or Escape to close it.",
   "minimap.ariaLabel": "Overview of the map",
 };
+
+/** Which way each arrow key moves the selected box; it moves 10 pixels, or 50 with Shift. */
+const ARROWS = new Map([
+  ["ArrowLeft", { x: -1, y: 0 }],
+  ["ArrowRight", { x: 1, y: 0 }],
+  ["ArrowUp", { x: 0, y: -1 }],
+  ["ArrowDown", { x: 0, y: 1 }],
+]);
+const KEY_STEP = 10;
+const KEY_STEP_SHIFT = 50;
+
+/** The map has no undo stack yet, so Undo stays off. */
+const NO_UNDO = () => undefined;
+
+/** Whether a key went to something a person types in: a text field, a list, or editable text. */
+function typingIn(target: EventTarget): boolean {
+  return target instanceof Element && target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])") !== null;
+}
 
 /** Adding a link: pick the upstream box, then the downstream job, then the type. */
 type LinkMode =
@@ -220,7 +240,8 @@ function portsOf(box: GraphNode, direction: LayoutDirection): NonNullable<MapFlo
   ];
 }
 
-function toFlowNode(box: GraphNode, highlight: NodeHighlight, statusLoading: boolean, direction: LayoutDirection, facts: CardFacts | null): MapFlowNode {
+/** A box on the canvas. `draggable` is true once the saved positions are in, so a drag never lands on the automatic layout. */
+function toFlowNode(box: GraphNode, highlight: NodeHighlight, statusLoading: boolean, direction: LayoutDirection, facts: CardFacts | null, draggable: boolean): MapFlowNode {
   return {
     id: box.id,
     type: box.kind,
@@ -234,8 +255,9 @@ function toFlowNode(box: GraphNode, highlight: NodeHighlight, statusLoading: boo
     measured: { width: box.width, height: box.height },
     handles: portsOf(box, direction),
     selectable: false,
+    // The page moves the selected box with the arrow keys itself, so React Flow's own node focus and key moves stay off.
     focusable: false,
-    draggable: false,
+    draggable,
     connectable: false,
   };
 }
@@ -243,9 +265,9 @@ function toFlowNode(box: GraphNode, highlight: NodeHighlight, statusLoading: boo
 /** The group frame's room around its cards: its label sits in the top band. */
 const GROUP_PAD = { x: 16, top: 40, bottom: 16 } as const;
 
-/** The labeled group around the jobs without links, when there are linked jobs above them. */
-function sectionNode(nodes: GraphNode[]): MapFlowNode | null {
-  const unlinked = nodes.filter((n) => !n.linked);
+/** The labeled group around the jobs without links, when other boxes are on the map: a box dragged out of it (placed) stays out. */
+function sectionNode(nodes: GraphNode[], placed: ReadonlySet<string>): MapFlowNode | null {
+  const unlinked = notLinkedYet(nodes, placed);
   if (unlinked.length === 0 || unlinked.length === nodes.length) return null;
   const left = Math.min(...unlinked.map((n) => n.position.x)) - GROUP_PAD.x;
   const top = Math.min(...unlinked.map((n) => n.position.y)) - GROUP_PAD.top;
@@ -283,7 +305,9 @@ function patternPreview(pattern: string, exclude: string, jobIds: EntryJobIds): 
  * a failure there affects downstream and what it depends on upstream, with its
  * settings in the side panel; add a link by picking two cards; click a link to
  * remove it. Every edit saves one change through useJobList, so conflicts and
- * rule errors come back as alerts.
+ * rule errors come back as alerts. Dragging a card, or the arrow keys on a
+ * selected one, moves it: its spot is saved for everyone (useMapLayout), never
+ * as a version of the job list.
  */
 export function DependencyMapPage() {
   const { state, loading, error, reload, save } = useJobList();
@@ -294,11 +318,23 @@ export function DependencyMapPage() {
   const version = state?.version ?? null;
   const [direction, setDirection] = useState<LayoutDirection>("LR");
   const [showServices, setShowServices] = useState(true);
+  // The boxes' saved spots for this direction, shared by everyone; boxes move only once they are in.
+  const layout = useMapLayout(direction);
+  const moves = useBoxMoves(layout.move);
+  const canMove = layout.status === "ready";
+  // Counts the Tidy ups, after which the view fits the automatic layout.
+  const [tidies, setTidies] = useState(0);
   // Laid out again only when the list, the statuses, the direction or the services switch change, never on a selection.
-  const graph = useMemo(
+  const automatic = useMemo(
     () => (document ? buildGraph(document, live.byJob, { direction, services: showServices }) : null),
     [document, live.byJob, direction, showServices],
   );
+  // The saved spots over the automatic layout: what the map draws.
+  const graph = useMemo(() => {
+    if (!automatic) return null;
+    const { nodes, placed } = applySavedLayout(automatic.nodes, layout.positions);
+    return { nodes, edges: automatic.edges, placed };
+  }, [automatic, layout.positions]);
   // Every link, the hidden service links too: the side panel lists a job's real links whatever the map shows.
   const allEdges = useMemo(() => (document ? buildEdges(document) : []), [document]);
   const facts = useMemo(() => (document ? cardFacts(document) : null), [document]);
@@ -424,18 +460,30 @@ export function DependencyMapPage() {
     if (link.step === "off") setSelectedId(null);
   };
 
-  const flowNodes = useMemo<MapFlowNode[]>(() => {
+  const laidOut = useMemo<MapFlowNode[]>(() => {
     if (!graph) return [];
     const nodes = graph.nodes.map((box) =>
-      toFlowNode(box, nodeHighlight(box, link, selected, chain), statusLoading, direction, box.kind === "job" ? (facts?.get(box.name) ?? null) : null),
+      toFlowNode(box, nodeHighlight(box, link, selected, chain), statusLoading, direction, box.kind === "job" ? (facts?.get(box.name) ?? null) : null, canMove),
     );
-    const section = sectionNode(graph.nodes);
+    const section = sectionNode(graph.nodes, graph.placed);
     // The group frame goes first, so it is drawn under its cards.
     return section ? [section, ...nodes] : nodes;
-  }, [graph, link, selected, chain, statusLoading, direction, facts]);
+  }, [graph, link, selected, chain, statusLoading, direction, facts, canMove]);
+  // A box on the move is drawn where the drag or the keys have it; the others keep their node, so a drag redraws one box.
+  const flowNodes = useMemo(() => {
+    if (moves.moving.size === 0) return laidOut;
+    return laidOut.map((node) => {
+      const at = moves.moving.get(node.id);
+      return at ? { ...node, position: at } : node;
+    });
+  }, [laidOut, moves.moving]);
 
-  // Changes when a save, the direction or the services switch adds, removes or moves a box, so the view fits the new layout.
-  const layoutKey = useMemo(() => (graph?.nodes ?? []).map((n) => `${n.id}@${n.position.x},${n.position.y}`).join("|"), [graph]);
+  // Changes when boxes come or go, the direction changes, Tidy up runs or the saved positions load, so the view fits the
+  // new layout. A box someone moved never changes it: the view stays where they are working.
+  const layoutKey = useMemo(
+    () => [direction, layout.status, tidies, ...(graph?.nodes ?? []).map((n) => n.id).sort()].join("|"),
+    [direction, layout.status, tidies, graph],
+  );
 
   const flowEdges = useMemo<LinkFlowEdge[]>(
     () =>
@@ -471,6 +519,15 @@ export function DependencyMapPage() {
   );
 
   const onKeyDown = (event: KeyboardEvent) => {
+    const arrow = ARROWS.get(event.key);
+    if (arrow) {
+      // The arrow keys move the selected box, but not while a person types in a field, nor when a control used the key.
+      if (!selected || !canMove || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || typingIn(event.target)) return;
+      event.preventDefault();
+      const step = event.shiftKey ? KEY_STEP_SHIFT : KEY_STEP;
+      moves.nudge(selected.id, selected.position, arrow.x * step, arrow.y * step);
+      return;
+    }
     if (event.key !== "Escape") return;
     const from = event.target instanceof Node ? event.target : null;
     // React Flow takes focus off a link on Escape, which would drop it on the page body: the link keeps it.
@@ -500,6 +557,14 @@ export function DependencyMapPage() {
       setMenuEdge(null);
       // When the save fails, the link is still there: focus goes back to where the removal started.
       setRefocus(saved ? after : from === "menu" ? { kind: "link", id: edgeId } : { kind: "panel" });
+    });
+  };
+
+  /** Tidy up: the automatic layout again for this direction, for everyone, with the view fitted to it. */
+  const tidy = () => {
+    moves.cancel();
+    void layout.reset().then((done) => {
+      if (done) setTidies((n) => n + 1);
     });
   };
 
@@ -612,71 +677,95 @@ export function DependencyMapPage() {
               <Toolbar
                 className="absolute top-3 left-3 z-10"
                 direction={direction}
-                onDirectionChange={setDirection}
+                onDirectionChange={(next) => {
+                  // A key move still waiting is saved for the direction it was made in.
+                  moves.flush();
+                  setDirection(next);
+                }}
                 showServices={showServices}
                 onShowServicesChange={setShowServices}
                 onFitted={() => setFits((n) => n + 1)}
+                onTidy={tidy}
+                tidyDisabled={!canMove || layout.positions.length === 0}
+                onUndo={NO_UNDO}
+                undoDisabled
+                undoLabel="Nothing to undo"
               />
               <div className="absolute inset-0">
-                <ReactFlow<MapFlowNode, LinkFlowEdge>
-                  nodes={flowNodes}
-                  edges={flowEdges}
-                  nodeTypes={NODE_TYPES}
-                  edgeTypes={EDGE_TYPES}
-                  // Also what gives the cards pointer events: React Flow turns them off on a node that is neither selectable nor clickable.
-                  onNodeClick={(_event, node) => {
-                    if (node.type === "section") clearOnCanvas();
-                    else activate(node.data.box);
-                  }}
-                  onEdgeClick={(_event, edge) => {
-                    if (link.step === "off") openEdge(edge.id);
-                  }}
-                  onEdgesChange={onEdgesChange}
-                  onPaneClick={clearOnCanvas}
-                  nodesDraggable={false}
-                  nodesConnectable={false}
-                  nodesFocusable={false}
-                  edgesFocusable
-                  deleteKeyCode={null}
-                  selectionKeyCode={null}
-                  multiSelectionKeyCode={null}
-                  fitView
-                  fitViewOptions={FIRST_FIT}
-                  // Low enough for a fit to show a 200-job map whole; zoom in, pan or use the minimap from there.
-                  minZoom={0.1}
-                  maxZoom={1.75}
-                  colorMode="light"
-                  // React Flow asks that only Pro subscribers hide its attribution; it sits between the legend and the minimap.
-                  attributionPosition="bottom-center"
-                  ariaLabelConfig={ARIA_LABELS}
-                  aria-label="Dependency map"
-                >
-                  <Background variant={BackgroundVariant.Dots} gap={16} size={1.1} color="var(--input)" bgColor="var(--muted)" />
-                  <MapMinimap panelOpen={panelOpen} />
-                  <ViewKeeper
-                    layoutKey={layoutKey}
-                    chain={panelOpen ? [selected.id, ...(chain?.downstream.jobs ?? []).map(jobNodeId)] : null}
-                    upstream={chain ? [...chain.upstream.nodes] : []}
-                    fits={fits}
-                  />
-                  <Panel position="bottom-left" className="m-3">
-                    <MapLegend />
-                  </Panel>
-                  {/* Adding a link clears the selection, so the banner takes the panel's corner, below the toolbar on a narrow canvas. */}
-                  {link.step !== "off" ? (
-                    <Panel position="top-right" className="m-3 @max-3xl:mt-14">
-                      <LinkBanner
-                        mode={link}
-                        containerRef={bannerRef}
-                        onCancel={() => {
-                          setLink({ step: "off" });
-                          addLinkRef.current?.focus();
-                        }}
-                      />
+                {/* Until the direction's saved spots are in, card skeletons: no box shows in a spot it is about to leave. The toolbar stays. */}
+                {layout.status === "loading" ? (
+                  <SkeletonCards />
+                ) : (
+                  <ReactFlow<MapFlowNode, LinkFlowEdge>
+                    nodes={flowNodes}
+                    edges={flowEdges}
+                    nodeTypes={NODE_TYPES}
+                    edgeTypes={EDGE_TYPES}
+                    // Also what gives the cards pointer events: React Flow turns them off on a node that is neither selectable nor clickable.
+                    onNodeClick={(_event, node) => {
+                      if (node.type === "section") clearOnCanvas();
+                      else activate(node.data.box);
+                    }}
+                    onEdgeClick={(_event, edge) => {
+                      if (link.step === "off") openEdge(edge.id);
+                    }}
+                    onEdgesChange={onEdgesChange}
+                    onPaneClick={clearOnCanvas}
+                    // A drag draws its box where the pointer has it, and saves the spot when it ends; it never saves a version.
+                    onNodesChange={(changes) => {
+                      for (const change of changes) if (change.type === "position" && change.position) moves.drag(change.id, change.position);
+                    }}
+                    onNodeDragStop={(_event, _node, dragged) => moves.drop(new Map(graph.nodes.map((n) => [n.id, n.position])), dragged)}
+                    // Off unless a box turns it on (toFlowNode): job and service boxes, once the saved spots are in; never the group frame.
+                    nodesDraggable={false}
+                    // A press that moves under 4 pixels is a click: it selects the box and moves nothing. The click distance lets
+                    // that click through; d3's drag would swallow the click after any movement otherwise.
+                    nodeDragThreshold={4}
+                    nodeClickDistance={4}
+                    nodesConnectable={false}
+                    nodesFocusable={false}
+                    edgesFocusable
+                    deleteKeyCode={null}
+                    selectionKeyCode={null}
+                    multiSelectionKeyCode={null}
+                    fitView
+                    fitViewOptions={FIRST_FIT}
+                    // Low enough for a fit to show a 200-job map whole; zoom in, pan or use the minimap from there.
+                    minZoom={0.1}
+                    maxZoom={1.75}
+                    colorMode="light"
+                    // React Flow asks that only Pro subscribers hide its attribution; it sits between the legend and the minimap.
+                    attributionPosition="bottom-center"
+                    ariaLabelConfig={ARIA_LABELS}
+                    aria-label="Dependency map"
+                  >
+                    <Background variant={BackgroundVariant.Dots} gap={16} size={1.1} color="var(--input)" bgColor="var(--muted)" />
+                    <MapMinimap panelOpen={panelOpen} />
+                    <ViewKeeper
+                      layoutKey={layoutKey}
+                      chain={panelOpen ? [selected.id, ...(chain?.downstream.jobs ?? []).map(jobNodeId)] : null}
+                      upstream={chain ? [...chain.upstream.nodes] : []}
+                      fits={fits}
+                    />
+                    <Panel position="bottom-left" className="m-3">
+                      <MapLegend />
                     </Panel>
-                  ) : null}
-                  <PanelSlot placement="over" panel={sidePanel} />
-                </ReactFlow>
+                    {/* Adding a link clears the selection, so the banner takes the panel's corner, below the toolbar where both don't fit. */}
+                    {link.step !== "off" ? (
+                      <Panel position="top-right" className="m-3 @max-5xl:mt-14">
+                        <LinkBanner
+                          mode={link}
+                          containerRef={bannerRef}
+                          onCancel={() => {
+                            setLink({ step: "off" });
+                            addLinkRef.current?.focus();
+                          }}
+                        />
+                      </Panel>
+                    ) : null}
+                    <PanelSlot placement="over" panel={sidePanel} />
+                  </ReactFlow>
+                )}
               </div>
               <LinkMenu link={menuLink} anchor={anchor} saving={saving} onRemove={(edgeId) => removeLink(edgeId, "menu")} onClose={closeMenu} />
             </div>
@@ -718,6 +807,18 @@ export function DependencyMapPage() {
           <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => void reload()}>
             Retry
           </Button>
+        </p>
+      ) : null}
+      {layout.problem && graph ? (
+        // The saved spots did not load (Retry asks again), or a move or a Tidy up was not saved.
+        <p role="status" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-destructive">
+          <CircleAlert className="size-3.5" aria-hidden="true" />
+          {layout.problem}
+          {layout.status === "failed" ? (
+            <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={layout.retry}>
+              Retry
+            </Button>
+          ) : null}
         </p>
       ) : null}
       {live.problem && graph ? (
@@ -787,11 +888,21 @@ export function DependencyMapPage() {
   );
 }
 
-/** The canvas while the job list loads: a dot grid with a few card skeletons. */
+/** The canvas while the job list loads: the toolbar's and a few cards' skeletons on the dot grid. */
 function CanvasSkeleton() {
   return (
-    <div className="relative min-h-[520px] flex-1 overflow-hidden rounded-lg border border-border bg-muted bg-[radial-gradient(var(--input)_1px,transparent_1.2px)] bg-size-[16px_16px]">
-      <Skeleton className="absolute top-3 left-3 h-9 w-80 rounded-full" />
+    <div className="relative min-h-[520px] flex-1 overflow-hidden rounded-lg border border-border bg-muted">
+      <SkeletonCards />
+      {/* As wide as the toolbar it stands for, so nothing shifts when the map comes in. */}
+      <Skeleton className="absolute top-3 left-3 h-9 w-[464px] rounded-full" />
+    </div>
+  );
+}
+
+/** A few cards' and the legend's skeletons on the dot grid: under a loading job list, and on the map while its saved spots load. */
+function SkeletonCards() {
+  return (
+    <div className="absolute inset-0 bg-[radial-gradient(var(--input)_1px,transparent_1.2px)] bg-size-[16px_16px]">
       <div className="absolute inset-0 flex items-center justify-center gap-24">
         <div className="flex flex-col gap-6">
           <Skeleton className="h-[68px] w-[248px] rounded-lg" />
@@ -858,8 +969,9 @@ function PanelSlot({ placement, panel }: PanelSlotProps) {
   if (panel === null || (placement === "under") !== panelGoesUnder(width)) return null;
   if (placement === "under") return panel("w-full");
   return (
-    // Down the right, over the minimap's corner when it needs the height; the frame lets clicks through around the panel.
-    <Panel position="top-right" className="pointer-events-none bottom-0 m-3 flex items-start">
+    // Down the right, over the minimap's corner when it needs the height, and below the toolbar where both don't fit
+    // side by side; the frame lets clicks through around the panel.
+    <Panel position="top-right" className="pointer-events-none bottom-0 m-3 flex items-start @max-4xl:mt-14">
       {panel(undefined)}
     </Panel>
   );
@@ -879,6 +991,7 @@ function sameView(a: Viewport, b: Viewport): boolean {
 }
 
 interface ViewKeeperProps {
+  /** Changes when the view should fit the layout again. */
   layoutKey: string;
   /** The selected box first, then the boxes its failure affects, while the side panel is open; else null. */
   chain: string[] | null;
@@ -890,10 +1003,10 @@ interface ViewKeeperProps {
 
 /**
  * Keeps the view sensible as the map changes:
- * - fits it again when the boxes change place (a save, the direction or the
- *   services switch) or the map's area changes size (an alert or a note above
- *   it, or the window), as if the side panel were closed: a fit never zooms
- *   for the panel;
+ * - fits it again when the layout key changes (boxes come or go, the
+ *   direction, Tidy up, the saved spots load; never a box someone moved) or
+ *   the map's area changes size (an alert or a note above it, or the window),
+ *   as if the side panel were closed: a fit never zooms for the panel;
  * - while the panel is open over the map, slides the map left at the same zoom
  *   so the selected box and what its failure affects clear the panel (its
  *   upstream path too, when all of it fits), never so far that the selected

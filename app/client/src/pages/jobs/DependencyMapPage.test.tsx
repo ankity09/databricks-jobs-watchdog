@@ -1,16 +1,39 @@
 // @vitest-environment jsdom
 import { TooltipProvider } from "@databricks/appkit-ui/react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { FitViewOptions } from "@xyflow/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { applyChange } from "../../../../shared/joblist/apply";
 import type { Change, JobListDocument, JobListState } from "../../../../shared/joblist/types";
+import type { LayoutPosition, MapDirection } from "../../../../shared/maplayout/types";
 import { RefreshProvider } from "../../hooks/useRefreshKey";
+import { buildGraph } from "../../lib/graph";
 import { type QueryAnswer, type QueryCall, json, mockFetch } from "../../test/analytics-mock";
 import { EXAMPLE_DOCUMENT } from "../../test/example-document";
 import { mockReactFlow } from "../../test/reactflow-mocks";
 import { DependencyMapPage } from "./DependencyMapPage";
+
+const flow = vi.hoisted(() => ({ fitView: vi.fn() }));
+
+// React Flow as it is, with every fitView the map asks for counted, so a test can tell whether the view was fitted again.
+vi.mock("@xyflow/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@xyflow/react")>();
+  return {
+    ...actual,
+    useReactFlow: () => {
+      const instance = actual.useReactFlow();
+      return {
+        ...instance,
+        fitView: (options?: FitViewOptions) => {
+          flow.fitView(options);
+          return instance.fitView(options);
+        },
+      };
+    },
+  };
+});
 
 const APP_CONFIG = { catalog: "main", schema: "watchdog", region: "us-east-2", appName: "watchdog-app", lakebaseProject: "jobs-watchdog" };
 const LIVE = [
@@ -31,7 +54,78 @@ const applies: SaveReply = (body, state) => {
   return json({ version: (state.version ?? 0) + 1, summary: applied.summary, document: applied.document }, 201);
 };
 
-interface MapOptions {
+/** A save of moved boxes, as the map sends it. */
+interface MovesBody {
+  direction: MapDirection;
+  moves: LayoutPosition[];
+}
+
+interface LayoutOptions {
+  /** Saved box positions, by direction. */
+  layout?: Partial<Record<MapDirection, LayoutPosition[]>>;
+  /** The saved positions do not load (503) until failLayout(false). */
+  layoutFails?: boolean;
+  /** The saved positions wait for releaseLayout() before they answer. */
+  layoutWaits?: boolean;
+  /** Every save of a move fails (503). */
+  movesFail?: boolean;
+}
+
+const NOT_READY = { error: "not_ready", message: "The map's database did not answer. Try again in a moment." };
+const LOAD_LINE = "Saved positions couldn't load, so the map shows the automatic layout. Moving boxes is off until they load.";
+
+/** The map layout routes, kept as the server keeps them: a move replaces a box's spot, and Tidy up clears the direction. */
+function layoutServer(options: LayoutOptions = {}) {
+  const saved = new Map<MapDirection, Map<string, LayoutPosition>>();
+  for (const direction of ["LR", "TB"] as const) {
+    const list = options.layout?.[direction];
+    if (list) saved.set(direction, new Map(list.map((position) => [position.nodeKey, position])));
+  }
+  const layoutSaves: MovesBody[] = [];
+  const resets: { direction: MapDirection }[] = [];
+  const waiting: Array<() => void> = [];
+  let loads = 0;
+  let fails = options.layoutFails ?? false;
+  const answer = (direction: MapDirection) => (fails ? json(NOT_READY, 503) : json({ direction, positions: [...(saved.get(direction)?.values() ?? [])] }));
+  return {
+    layoutSaves,
+    resets,
+    layoutLoads: () => loads,
+    failLayout: (fail: boolean) => {
+      fails = fail;
+    },
+    releaseLayout: () => {
+      for (const release of waiting.splice(0)) release();
+    },
+    handle(url: string, init: RequestInit | undefined): Response | Promise<Response> | null {
+      const read = /^\/api\/map-layout\?direction=(LR|TB)$/.exec(url);
+      if (read && (init?.method ?? "GET") === "GET") {
+        loads += 1;
+        const direction = read[1] === "TB" ? "TB" : "LR";
+        if (!options.layoutWaits) return answer(direction);
+        return new Promise<Response>((resolve) => waiting.push(() => resolve(answer(direction))));
+      }
+      if (url === "/api/map-layout/moves" && init?.method === "POST") {
+        const save = JSON.parse(typeof init.body === "string" ? init.body : "null") as MovesBody;
+        layoutSaves.push(save);
+        if (options.movesFail) return json(NOT_READY, 503);
+        const spots = saved.get(save.direction) ?? new Map<string, LayoutPosition>();
+        for (const move of save.moves) spots.set(move.nodeKey, move);
+        saved.set(save.direction, spots);
+        return new Response(null, { status: 204 });
+      }
+      if (url === "/api/map-layout/reset" && init?.method === "POST") {
+        const reset = JSON.parse(typeof init.body === "string" ? init.body : "null") as { direction: MapDirection };
+        resets.push(reset);
+        saved.delete(reset.direction);
+        return new Response(null, { status: 204 });
+      }
+      return null;
+    },
+  };
+}
+
+interface MapOptions extends LayoutOptions {
   /** Answers for analytics queries other than live status; null for no rows. */
   queries?: (call: QueryCall) => QueryAnswer | null;
   /** The live status answer, when it is not the LIVE rows. */
@@ -49,9 +143,12 @@ function renderMap(document: JobListDocument = EXAMPLE_DOCUMENT, reply: SaveRepl
   const saves: SaveBody[] = [];
   let loads = 0;
   let loadsFail = false;
+  const layout = layoutServer(options);
   mockFetch(
     (call) => (call.key === "job_live_status" ? (options.live?.() ?? { rows: LIVE }) : (options.queries?.(call) ?? { rows: [] })),
     (url, init) => {
+      const answered = layout.handle(url, init);
+      if (answered) return answered;
       if (url.startsWith("/api/app-config")) return json(APP_CONFIG);
       if (url === "/api/job-list" && (init?.method ?? "GET") === "GET") {
         loads += 1;
@@ -70,19 +167,26 @@ function renderMap(document: JobListDocument = EXAMPLE_DOCUMENT, reply: SaveRepl
       return null;
     },
   );
-  const view = render(
+  const page = () => (
     <MemoryRouter>
       <RefreshProvider>
         <TooltipProvider>
           <DependencyMapPage />
         </TooltipProvider>
       </RefreshProvider>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  const view = render(page());
   return {
     ...view,
+    ...layout,
     saves,
     loads: () => loads,
+    /** Opens the page again, as a reload does: the same server, a new map. */
+    reload: () => {
+      view.unmount();
+      return render(page());
+    },
     failLoads: (fail: boolean) => {
       loadsFail = fail;
     },
@@ -115,6 +219,66 @@ function cornerOf(container: HTMLElement, id: string): { x: number; y: number } 
   if (!wrapper) throw new Error(`no box ${id}`);
   const [x, y] = numbersIn(wrapper.style.transform);
   return { x, y };
+}
+
+/** A box's wrapper on the canvas, which React Flow drags. */
+function nodeOf(container: HTMLElement, id: string): HTMLElement {
+  const wrapper = container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`);
+  if (!wrapper) throw new Error(`no box ${id}`);
+  return wrapper;
+}
+
+/**
+ * A mouse event on an element, with the window as its view: d3's drag listens
+ * for the move and the release there. jsdom refuses this test's window as a
+ * view in the event's options, so it is set on the event itself.
+ */
+function mouse(type: "mouseDown" | "mouseMove" | "mouseUp", element: Element, clientX: number, clientY: number) {
+  const event = createEvent[type](element, { clientX, clientY });
+  Object.defineProperty(event, "view", { value: window });
+  fireEvent(element, event);
+}
+
+/**
+ * Drags a box with the mouse, as d3's drag reads it: press on the card, a
+ * move that starts the drag (past React Flow's threshold), a move by (dx, dy)
+ * from the press, and release. React Flow takes up the box at the first move,
+ * so the box moves by half of (dx, dy) on screen.
+ */
+function dragBox(container: HTMLElement, id: string, dx: number, dy: number) {
+  const card = nodeOf(container, id).querySelector("button");
+  const canvas = container.querySelector<HTMLElement>(".react-flow");
+  if (!card || !canvas) throw new Error(`no card ${id}`);
+  // React Flow pans the view while a drag nears the canvas's edge, and jsdom's canvas has no size: give it one, with the
+  // pointer well inside it.
+  const size = vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    left: 0,
+    top: 0,
+    right: 1600,
+    bottom: 1200,
+    width: 1600,
+    height: 1200,
+    toJSON: () => ({}),
+  });
+  mouse("mouseDown", card, 800, 600);
+  mouse("mouseMove", card, 800 + dx / 2, 600 + dy / 2);
+  mouse("mouseMove", card, 800 + dx, 600 + dy);
+  mouse("mouseUp", card, 800 + dx, 600 + dy);
+  size.mockRestore();
+}
+
+/** Where the automatic layout puts a box of the example job list, left to right. */
+function automaticSpot(id: string): { x: number; y: number } {
+  const spot = buildGraph(EXAMPLE_DOCUMENT, new Map(), { direction: "LR" }).nodes.find((n) => n.id === id)?.position;
+  if (!spot) throw new Error(`no box ${id}`);
+  return spot;
+}
+
+/** Lets React Flow and the map's view keeper run their next frames. */
+function frames(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 50));
 }
 
 /** The value next to a label in the side panel's details. */
@@ -447,9 +611,9 @@ describe("DependencyMapPage", () => {
     const fitted = boxesOnScreen(container).zoom;
     fireEvent.click(screen.getByRole("button", { name: "orders_ingest (Unknown, switched off)" }));
     const panel = await screen.findByRole("region", { name: "orders_ingest" });
-    // Remove a link in the panel: the save moves the boxes, so the map refits while the panel is open.
-    await user.click(within(panel).getByRole("button", { name: "Remove the link: orders_enrich depends on orders_ingest (job link)" }));
-    await waitFor(() => expect(screen.queryByRole("button", { name: "orders_enrich depends on orders_ingest (job link)" })).toBeNull());
+    // Remove kafka's only link in the panel: kafka leaves the map, so the map refits while the panel is open.
+    await user.click(within(panel).getByRole("button", { name: "Remove the link: orders_ingest depends on kafka (service link)" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "kafka (service)" })).toBeNull());
     await waitFor(() => expect(boxesOnScreen(container).zoom).not.toBe(fitted));
     // The new layout's own fit, as with the panel closed: the space under the panel still counts.
     const shown = boxesOnScreen(container);
@@ -866,9 +1030,12 @@ describe("DependencyMapPage", () => {
   it("offers Retry when the job list does not load", async () => {
     const user = userEvent.setup();
     let fail = true;
+    const layout = layoutServer();
     mockFetch(
       () => ({ rows: [] }),
-      (url) => {
+      (url, init) => {
+        const answered = layout.handle(url, init);
+        if (answered) return answered;
         if (url.startsWith("/api/app-config")) return json(APP_CONFIG);
         if (url === "/api/job-list") {
           return fail
@@ -976,5 +1143,206 @@ describe("DependencyMapPage", () => {
     await user.click(within(line).getByRole("button", { name: "Retry" }));
     expect(await box("watchdog_demo_fails (Failed)")).toBeInTheDocument();
     expect(screen.queryByText("Live status is not available.")).toBeNull();
+  });
+
+  it("a drag saves one move per moved box and never calls saveChange", async () => {
+    const { container, saves, layoutSaves } = renderMap();
+    await box("orders_ingest (Unknown, switched off)");
+    const start = cornerOf(container, "job:orders_ingest");
+    dragBox(container, "job:orders_ingest", 120, 80);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    const dropped = cornerOf(container, "job:orders_ingest");
+    expect(dropped).not.toEqual(start);
+    // The spot saved is where the box was dropped.
+    expect(layoutSaves[0]).toEqual({ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", ...dropped }] });
+
+    // A second box: a save of its own, with only that box in it.
+    dragBox(container, "service:kafka", -60, 40);
+    await waitFor(() => expect(layoutSaves).toHaveLength(2));
+    expect(layoutSaves[1]).toEqual({ direction: "LR", moves: [{ nodeKey: "service:kafka", ...cornerOf(container, "service:kafka") }] });
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(dropped);
+    expect(saves).toEqual([]);
+  });
+
+  it("a press under 4 px opens the panel and saves nothing", async () => {
+    const { container, saves, layoutSaves } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    // The box can be dragged, yet a press that wobbles a few pixels is still a click.
+    expect(nodeOf(container, "job:orders_ingest")).toHaveClass("draggable");
+    const start = cornerOf(container, "job:orders_ingest");
+    mouse("mouseDown", ingest, 300, 300);
+    mouse("mouseMove", ingest, 303, 302);
+    mouse("mouseUp", ingest, 303, 302);
+    fireEvent.click(ingest, { clientX: 303, clientY: 302 });
+    expect(await screen.findByRole("region", { name: "orders_ingest" })).toBeInTheDocument();
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(start);
+    await frames();
+    expect(layoutSaves).toEqual([]);
+    expect(saves).toEqual([]);
+  });
+
+  it("arrow keys move the selected box and save once after 600 ms", async () => {
+    const { container, saves, layoutSaves } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    fireEvent.click(ingest);
+    await screen.findByRole("region", { name: "orders_ingest" });
+    const start = cornerOf(container, "job:orders_ingest");
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    fireEvent.keyDown(ingest, { key: "ArrowRight" });
+    fireEvent.keyDown(ingest, { key: "ArrowRight" });
+    // Shift moves 50 pixels.
+    fireEvent.keyDown(ingest, { key: "ArrowDown", shiftKey: true });
+    fireEvent.keyDown(ingest, { key: "ArrowLeft" });
+    const moved = { x: start.x + 10, y: start.y + 50 };
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(moved);
+    act(() => {
+      vi.advanceTimersByTime(599);
+    });
+    expect(layoutSaves).toEqual([]);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    vi.useRealTimers();
+
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    expect(layoutSaves[0]).toEqual({ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", ...moved }] });
+    await frames();
+    expect(layoutSaves).toHaveLength(1);
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(moved);
+    expect(saves).toEqual([]);
+  });
+
+  it("arrow keys in the side panel's inputs do not move the box", async () => {
+    const { container, layoutSaves } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    fireEvent.click(ingest);
+    const panel = await screen.findByRole("region", { name: "orders_ingest" });
+    const start = cornerOf(container, "job:orders_ingest");
+    // Things a person types in: a text box, a text area, a list and editable text.
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    const fields = [document.createElement("input"), document.createElement("textarea"), document.createElement("select"), editable];
+    panel.append(...fields);
+    for (const field of fields) {
+      fireEvent.keyDown(field, { key: "ArrowRight" });
+      fireEvent.keyDown(field, { key: "ArrowDown", shiftKey: true });
+    }
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(start);
+
+    // The same key on the box moves it.
+    fireEvent.keyDown(ingest, { key: "ArrowRight" });
+    expect(cornerOf(container, "job:orders_ingest")).toEqual({ x: start.x + 10, y: start.y });
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    for (const field of fields) field.remove();
+  });
+
+  it("a drag does not refit the view", async () => {
+    const { container, layoutSaves } = renderMap();
+    await box("orders_ingest (Unknown, switched off)");
+    resizeMap(container, 1400, 800);
+    await waitFor(() => expect(boxesOnScreen(container).zoom).toBeGreaterThan(0.4));
+    await frames();
+    flow.fitView.mockClear();
+    const view = container.querySelector<HTMLElement>(".react-flow__viewport")?.style.transform;
+
+    // Far enough that a fit of the new spots would change the view.
+    dragBox(container, "job:orders_ingest", 400, 300);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    await frames();
+    expect(flow.fitView).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLElement>(".react-flow__viewport")?.style.transform).toBe(view);
+  });
+
+  it("when positions fail to load, boxes cannot be dragged and Retry loads them", async () => {
+    const user = userEvent.setup();
+    const { container, layoutSaves, failLayout } = renderMap(EXAMPLE_DOCUMENT, applies, {
+      layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] },
+      layoutFails: true,
+    });
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    const line = (await screen.findByText(LOAD_LINE)).closest("[role='status']");
+    if (!(line instanceof HTMLElement)) throw new Error("no layout problem line");
+    // The automatic layout, with moving off: no arrow keys, no drag, no Tidy up.
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(automaticSpot("job:orders_ingest"));
+    expect(nodeOf(container, "job:orders_ingest")).not.toHaveClass("draggable");
+    fireEvent.click(ingest);
+    fireEvent.keyDown(ingest, { key: "ArrowRight" });
+    dragBox(container, "job:orders_ingest", 200, 100);
+    await frames();
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(automaticSpot("job:orders_ingest"));
+    expect(screen.getByRole("button", { name: "Tidy up" })).toHaveAttribute("aria-disabled", "true");
+
+    failLayout(false);
+    await user.click(within(line).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(cornerOf(container, "job:orders_ingest")).toEqual({ x: 2000, y: 1200 }));
+    expect(screen.queryByText(LOAD_LINE)).toBeNull();
+    expect(nodeOf(container, "job:orders_ingest")).toHaveClass("draggable");
+    expect(layoutSaves).toEqual([]);
+  });
+
+  it("Tidy up resets and lays the map out again", async () => {
+    const user = userEvent.setup();
+    const { container, resets } = renderMap(EXAMPLE_DOCUMENT, applies, { layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] } });
+    await box("orders_ingest (Unknown, switched off)");
+    expect(cornerOf(container, "job:orders_ingest")).toEqual({ x: 2000, y: 1200 });
+    await frames();
+    flow.fitView.mockClear();
+
+    const tidy = screen.getByRole("button", { name: "Tidy up" });
+    expect(tidy).not.toHaveAttribute("aria-disabled");
+    await user.click(tidy);
+    await waitFor(() => expect(cornerOf(container, "job:orders_ingest")).toEqual(automaticSpot("job:orders_ingest")));
+    expect(resets).toEqual([{ direction: "LR" }]);
+    // The view fits the automatic layout, and with nothing saved Tidy up is off.
+    await waitFor(() => expect(flow.fitView).toHaveBeenCalled());
+    expect(tidy).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("keeps a dragged box where it was dropped after a reload", async () => {
+    const { container, layoutSaves, reload } = renderMap();
+    await box("orders_ingest (Unknown, switched off)");
+    dragBox(container, "job:orders_ingest", 160, 120);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    const dropped = cornerOf(container, "job:orders_ingest");
+    expect(dropped).not.toEqual(automaticSpot("job:orders_ingest"));
+
+    const again = reload();
+    await box("orders_ingest (Unknown, switched off)");
+    expect(cornerOf(again.container, "job:orders_ingest")).toEqual(dropped);
+  });
+
+  it("puts a box back and says so when its move can't be saved", async () => {
+    const { container } = renderMap(EXAMPLE_DOCUMENT, applies, { movesFail: true });
+    await box("orders_ingest (Unknown, switched off)");
+    const start = cornerOf(container, "job:orders_ingest");
+    dragBox(container, "job:orders_ingest", 150, 90);
+    expect(await screen.findByText("That move couldn't be saved, so the box went back.")).toBeInTheDocument();
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(start);
+  });
+
+  it("takes a box out of the Not linked yet group once it is dragged", async () => {
+    const { container, layoutSaves } = renderMap();
+    await box("watchdog_demo_slow (Unknown)");
+    const group = () => container.querySelector<HTMLElement>(".react-flow__node-section");
+    expect(group()).toHaveTextContent("2 jobs");
+    dragBox(container, "job:watchdog_demo_slow", 0, -400);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    await waitFor(() => expect(group()).toHaveTextContent("1 job"));
+    expect(group()).not.toHaveTextContent("2 jobs");
+  });
+
+  it("shows card skeletons, not boxes, until the saved positions load", async () => {
+    const { container, releaseLayout } = renderMap(EXAMPLE_DOCUMENT, applies, {
+      layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] },
+      layoutWaits: true,
+    });
+    // The job list is in, so the toolbar is there; the boxes wait for their spots.
+    expect(await screen.findByRole("button", { name: "Tidy up" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.queryByRole("button", { name: "orders_ingest (Unknown, switched off)" })).toBeNull();
+    expect(container.querySelector(".react-flow")).toBeNull();
+    releaseLayout();
+    await box("orders_ingest (Unknown, switched off)");
+    expect(cornerOf(container, "job:orders_ingest")).toEqual({ x: 2000, y: 1200 });
   });
 });

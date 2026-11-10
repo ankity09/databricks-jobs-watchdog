@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { TooltipProvider } from "@databricks/appkit-ui/react";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { FitViewOptions } from "@xyflow/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { LayoutDirection } from "../../lib/graph";
 import { mockReactFlow } from "../../test/reactflow-mocks";
-import { MapToolbar } from "./MapToolbar";
+import { MapToolbar, type MapToolbarProps } from "./MapToolbar";
 
 const flow = vi.hoisted(() => ({
   zoomTo: vi.fn((_zoom: number, _options?: { duration?: number }) => Promise.resolve(true)),
@@ -28,10 +28,16 @@ function zoomsAsked(): number[] {
 
 const FIT: FitViewOptions = { padding: { top: "64px", right: "24px", bottom: "148px", left: "24px" }, maxZoom: 1.1 };
 
-function renderToolbar(direction: LayoutDirection = "LR", showServices = true) {
+/** The layout and undo controls, as the map passes them: by default no saved positions and nothing to undo. */
+type EditProps = Pick<MapToolbarProps, "tidyDisabled" | "undoDisabled" | "undoLabel">;
+const NOTHING_SAVED: EditProps = { tidyDisabled: true, undoDisabled: true, undoLabel: "Nothing to undo" };
+
+function renderToolbar(direction: LayoutDirection = "LR", showServices = true, edit: EditProps = NOTHING_SAVED) {
   const onDirectionChange = vi.fn();
   const onShowServicesChange = vi.fn();
-  render(
+  const onTidy = vi.fn();
+  const onUndo = vi.fn();
+  const toolbar = (props: EditProps) => (
     <TooltipProvider>
       <MapToolbar
         direction={direction}
@@ -39,10 +45,21 @@ function renderToolbar(direction: LayoutDirection = "LR", showServices = true) {
         showServices={showServices}
         onShowServicesChange={onShowServicesChange}
         fitOptions={FIT}
+        onTidy={onTidy}
+        onUndo={onUndo}
+        {...props}
       />
-    </TooltipProvider>,
+    </TooltipProvider>
   );
-  return { onDirectionChange, onShowServicesChange, toolbar: screen.getByRole("group", { name: "Map view" }) };
+  const view = render(toolbar(edit));
+  return {
+    onDirectionChange,
+    onShowServicesChange,
+    onTidy,
+    onUndo,
+    toolbar: screen.getByRole("group", { name: "Map view" }),
+    rerender: (props: EditProps) => view.rerender(toolbar(props)),
+  };
 }
 
 /** Makes prefers-reduced-motion match, as a person who asked for less motion would have it. */
@@ -159,5 +176,36 @@ describe("MapToolbar", () => {
     expect(services).toBeChecked();
     await user.click(services);
     expect(onShowServicesChange).toHaveBeenCalledWith(false);
+  });
+
+  it("Tidy up is disabled with no saved positions", async () => {
+    const user = userEvent.setup();
+    const { toolbar, onTidy, rerender } = renderToolbar();
+    const tidy = within(toolbar).getByRole("button", { name: "Tidy up" });
+    act(() => tidy.focus());
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Put the automatic layout back");
+    // Unavailable, but it keeps focus, as the zoom buttons do at their limits.
+    expect(tidy).toHaveAttribute("aria-disabled", "true");
+    await user.click(tidy);
+    expect(onTidy).not.toHaveBeenCalled();
+
+    rerender({ ...NOTHING_SAVED, tidyDisabled: false });
+    expect(tidy).not.toHaveAttribute("aria-disabled");
+    await user.click(tidy);
+    expect(onTidy).toHaveBeenCalledTimes(1);
+  });
+
+  it("names what Undo would undo, and does nothing when there is nothing to undo", async () => {
+    const user = userEvent.setup();
+    const { toolbar, onUndo, rerender } = renderToolbar();
+    const undo = within(toolbar).getByRole("button", { name: "Nothing to undo" });
+    expect(undo).toHaveTextContent("Undo");
+    expect(undo).toHaveAttribute("aria-disabled", "true");
+    await user.click(undo);
+    expect(onUndo).not.toHaveBeenCalled();
+
+    rerender({ tidyDisabled: true, undoDisabled: false, undoLabel: "Undo: move 2 boxes" });
+    await user.click(within(toolbar).getByRole("button", { name: "Undo: move 2 boxes" }));
+    expect(onUndo).toHaveBeenCalledTimes(1);
   });
 });
