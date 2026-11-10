@@ -30,6 +30,15 @@ describe("ensureSchema", () => {
     expect(client.release).toHaveBeenCalledTimes(1);
   });
 
+  it("creates the map layout table without an identity column, a sequence or an index", async () => {
+    const client = fakeClient();
+    await ensureSchema(fakePool(client));
+    const ddl = statements(client).find((s) => s.includes("watchdog_app.map_layout")) ?? "";
+    expect(ddl).toContain("CREATE TABLE IF NOT EXISTS watchdog_app.map_layout");
+    const table = ddl.slice(ddl.indexOf("watchdog_app.map_layout"));
+    expect(table).not.toMatch(/IDENTITY|SERIAL|CREATE INDEX/i);
+  });
+
   it("rolls back, drops the connection and rethrows when a statement fails", async () => {
     const client = fakeClient();
     const denied = Object.assign(new Error("permission denied for database"), { code: "42501" });

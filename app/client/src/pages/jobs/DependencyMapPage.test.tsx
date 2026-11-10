@@ -1,16 +1,39 @@
 // @vitest-environment jsdom
 import { TooltipProvider } from "@databricks/appkit-ui/react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { FitViewOptions } from "@xyflow/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { applyChange } from "../../../../shared/joblist/apply";
 import type { Change, JobListDocument, JobListState } from "../../../../shared/joblist/types";
+import type { LayoutPosition, MapDirection } from "../../../../shared/maplayout/types";
 import { RefreshProvider } from "../../hooks/useRefreshKey";
+import { buildGraph } from "../../lib/graph";
 import { type QueryAnswer, type QueryCall, json, mockFetch } from "../../test/analytics-mock";
 import { EXAMPLE_DOCUMENT } from "../../test/example-document";
 import { mockReactFlow } from "../../test/reactflow-mocks";
 import { DependencyMapPage } from "./DependencyMapPage";
+
+const flow = vi.hoisted(() => ({ fitView: vi.fn() }));
+
+// React Flow as it is, with every fitView the map asks for counted, so a test can tell whether the view was fitted again.
+vi.mock("@xyflow/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@xyflow/react")>();
+  return {
+    ...actual,
+    useReactFlow: () => {
+      const instance = actual.useReactFlow();
+      return {
+        ...instance,
+        fitView: (options?: FitViewOptions) => {
+          flow.fitView(options);
+          return instance.fitView(options);
+        },
+      };
+    },
+  };
+});
 
 const APP_CONFIG = { catalog: "main", schema: "watchdog", region: "us-east-2", appName: "watchdog-app", lakebaseProject: "jobs-watchdog" };
 const LIVE = [
@@ -31,7 +54,78 @@ const applies: SaveReply = (body, state) => {
   return json({ version: (state.version ?? 0) + 1, summary: applied.summary, document: applied.document }, 201);
 };
 
-interface MapOptions {
+/** A save of moved boxes, as the map sends it. */
+interface MovesBody {
+  direction: MapDirection;
+  moves: LayoutPosition[];
+}
+
+interface LayoutOptions {
+  /** Saved box positions, by direction. */
+  layout?: Partial<Record<MapDirection, LayoutPosition[]>>;
+  /** The saved positions do not load (503) until failLayout(false). */
+  layoutFails?: boolean;
+  /** The saved positions wait for releaseLayout() before they answer. */
+  layoutWaits?: boolean;
+  /** Every save of a move fails (503). */
+  movesFail?: boolean;
+}
+
+const NOT_READY = { error: "not_ready", message: "The map's database did not answer. Try again in a moment." };
+const LOAD_LINE = "Saved positions couldn't load, so the map shows the automatic layout. Moving boxes is off until they load.";
+
+/** The map layout routes, kept as the server keeps them: a move replaces a box's spot, and Tidy up clears the direction. */
+function layoutServer(options: LayoutOptions = {}) {
+  const saved = new Map<MapDirection, Map<string, LayoutPosition>>();
+  for (const direction of ["LR", "TB"] as const) {
+    const list = options.layout?.[direction];
+    if (list) saved.set(direction, new Map(list.map((position) => [position.nodeKey, position])));
+  }
+  const layoutSaves: MovesBody[] = [];
+  const resets: { direction: MapDirection }[] = [];
+  const waiting: Array<() => void> = [];
+  let loads = 0;
+  let fails = options.layoutFails ?? false;
+  const answer = (direction: MapDirection) => (fails ? json(NOT_READY, 503) : json({ direction, positions: [...(saved.get(direction)?.values() ?? [])] }));
+  return {
+    layoutSaves,
+    resets,
+    layoutLoads: () => loads,
+    failLayout: (fail: boolean) => {
+      fails = fail;
+    },
+    releaseLayout: () => {
+      for (const release of waiting.splice(0)) release();
+    },
+    handle(url: string, init: RequestInit | undefined): Response | Promise<Response> | null {
+      const read = /^\/api\/map-layout\?direction=(LR|TB)$/.exec(url);
+      if (read && (init?.method ?? "GET") === "GET") {
+        loads += 1;
+        const direction = read[1] === "TB" ? "TB" : "LR";
+        if (!options.layoutWaits) return answer(direction);
+        return new Promise<Response>((resolve) => waiting.push(() => resolve(answer(direction))));
+      }
+      if (url === "/api/map-layout/moves" && init?.method === "POST") {
+        const save = JSON.parse(typeof init.body === "string" ? init.body : "null") as MovesBody;
+        layoutSaves.push(save);
+        if (options.movesFail) return json(NOT_READY, 503);
+        const spots = saved.get(save.direction) ?? new Map<string, LayoutPosition>();
+        for (const move of save.moves) spots.set(move.nodeKey, move);
+        saved.set(save.direction, spots);
+        return new Response(null, { status: 204 });
+      }
+      if (url === "/api/map-layout/reset" && init?.method === "POST") {
+        const reset = JSON.parse(typeof init.body === "string" ? init.body : "null") as { direction: MapDirection };
+        resets.push(reset);
+        saved.delete(reset.direction);
+        return new Response(null, { status: 204 });
+      }
+      return null;
+    },
+  };
+}
+
+interface MapOptions extends LayoutOptions {
   /** Answers for analytics queries other than live status; null for no rows. */
   queries?: (call: QueryCall) => QueryAnswer | null;
   /** The live status answer, when it is not the LIVE rows. */
@@ -49,9 +143,12 @@ function renderMap(document: JobListDocument = EXAMPLE_DOCUMENT, reply: SaveRepl
   const saves: SaveBody[] = [];
   let loads = 0;
   let loadsFail = false;
+  const layout = layoutServer(options);
   mockFetch(
     (call) => (call.key === "job_live_status" ? (options.live?.() ?? { rows: LIVE }) : (options.queries?.(call) ?? { rows: [] })),
     (url, init) => {
+      const answered = layout.handle(url, init);
+      if (answered) return answered;
       if (url.startsWith("/api/app-config")) return json(APP_CONFIG);
       if (url === "/api/job-list" && (init?.method ?? "GET") === "GET") {
         loads += 1;
@@ -70,19 +167,26 @@ function renderMap(document: JobListDocument = EXAMPLE_DOCUMENT, reply: SaveRepl
       return null;
     },
   );
-  const view = render(
+  const page = () => (
     <MemoryRouter>
       <RefreshProvider>
         <TooltipProvider>
           <DependencyMapPage />
         </TooltipProvider>
       </RefreshProvider>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  const view = render(page());
   return {
     ...view,
+    ...layout,
     saves,
     loads: () => loads,
+    /** Opens the page again, as a reload does: the same server, a new map. */
+    reload: () => {
+      view.unmount();
+      return render(page());
+    },
     failLoads: (fail: boolean) => {
       loadsFail = fail;
     },
@@ -117,9 +221,103 @@ function cornerOf(container: HTMLElement, id: string): { x: number; y: number } 
   return { x, y };
 }
 
-/** The value next to a label in the side panel's details. */
-function detail(panel: HTMLElement, label: string): string {
-  return within(panel).getByText(label, { selector: "dt" }).nextElementSibling?.textContent ?? "";
+/** A box's wrapper on the canvas, which React Flow drags. */
+function nodeOf(container: HTMLElement, id: string): HTMLElement {
+  const wrapper = container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`);
+  if (!wrapper) throw new Error(`no box ${id}`);
+  return wrapper;
+}
+
+/**
+ * A mouse event on an element, with the window as its view: d3's drag listens
+ * for the move and the release there. jsdom refuses this test's window as a
+ * view in the event's options, so it is set on the event itself.
+ */
+function mouse(type: "mouseDown" | "mouseMove" | "mouseUp", element: Element, clientX: number, clientY: number) {
+  const event = createEvent[type](element, { clientX, clientY });
+  Object.defineProperty(event, "view", { value: window });
+  fireEvent(element, event);
+}
+
+/**
+ * Drags a box with the mouse, as d3's drag reads it: press on the card, a
+ * move that starts the drag (past React Flow's threshold), a move by (dx, dy)
+ * from the press, and release. React Flow takes up the box at the first move,
+ * so the box moves by half of (dx, dy) on screen.
+ */
+function dragBox(container: HTMLElement, id: string, dx: number, dy: number) {
+  const card = nodeOf(container, id).querySelector("button");
+  const canvas = container.querySelector<HTMLElement>(".react-flow");
+  if (!card || !canvas) throw new Error(`no card ${id}`);
+  // React Flow pans the view while a drag nears the canvas's edge, and jsdom's canvas has no size: give it one, with the
+  // pointer well inside it.
+  const size = vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    left: 0,
+    top: 0,
+    right: 1600,
+    bottom: 1200,
+    width: 1600,
+    height: 1200,
+    toJSON: () => ({}),
+  });
+  mouse("mouseDown", card, 800, 600);
+  mouse("mouseMove", card, 800 + dx / 2, 600 + dy / 2);
+  mouse("mouseMove", card, 800 + dx, 600 + dy);
+  mouse("mouseUp", card, 800 + dx, 600 + dy);
+  size.mockRestore();
+}
+
+/** A box's dot: "Link from <name>" where its links start, "Link to <name>" where they end. */
+function dot(name: string): HTMLElement {
+  return screen.getByRole("img", { name });
+}
+
+/**
+ * Drags a new link from a box's dot and drops it on `drop`: another box's dot,
+ * or its card. React Flow asks document.elementFromPoint what is under the
+ * pointer, which jsdom lacks, so here it answers `drop`. The canvas is put far
+ * from the boxes for the drag, so React Flow never snaps to a dot by distance
+ * and never pans the view.
+ */
+function dragLink(container: HTMLElement, from: Element, drop: Element) {
+  const canvas = container.querySelector<HTMLElement>(".react-flow");
+  if (!canvas) throw new Error("The map has not rendered.");
+  const far = 100_000;
+  const size = vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+    x: -far,
+    y: -far,
+    left: -far,
+    top: -far,
+    right: far,
+    bottom: far,
+    width: 2 * far,
+    height: 2 * far,
+    toJSON: () => ({}),
+  });
+  Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => drop });
+  try {
+    mouse("mouseDown", from, 400, 300);
+    mouse("mouseMove", drop, 500, 360);
+    mouse("mouseMove", drop, 600, 420);
+    mouse("mouseUp", drop, 600, 420);
+  } finally {
+    Reflect.deleteProperty(document, "elementFromPoint");
+    size.mockRestore();
+  }
+}
+
+/** Where the automatic layout puts a box of the example job list, left to right. */
+function automaticSpot(id: string): { x: number; y: number } {
+  const spot = buildGraph(EXAMPLE_DOCUMENT, new Map(), { direction: "LR" }).nodes.find((n) => n.id === id)?.position;
+  if (!spot) throw new Error(`no box ${id}`);
+  return spot;
+}
+
+/** Lets React Flow and the map's view keeper run their next frames. */
+function frames(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 50));
 }
 
 /** A section of the side panel, by its heading. */
@@ -196,7 +394,8 @@ describe("DependencyMapPage", () => {
   it("removes a link from the popover that opens on the link", async () => {
     const user = userEvent.setup();
     const { saves } = renderMap();
-    fireEvent.click(await box("orders_enrich depends on orders_ingest (job link)"));
+    (await box("orders_enrich depends on orders_ingest (job link)")).focus();
+    await user.keyboard("{Enter}");
     const popover = await screen.findByRole("dialog", { name: "orders_enrich depends on orders_ingest" });
     await user.click(within(popover).getByRole("button", { name: "Remove link" }));
     await waitFor(() => expect(saves).toHaveLength(1));
@@ -311,7 +510,8 @@ describe("DependencyMapPage", () => {
     const user = userEvent.setup();
     renderMap();
     // kafka has this one link, so its box goes too.
-    fireEvent.click(await box("orders_ingest depends on kafka (service link)"));
+    (await box("orders_ingest depends on kafka (service link)")).focus();
+    await user.keyboard("{Enter}");
     const menu = await screen.findByRole("dialog", { name: "orders_ingest depends on kafka" });
     await user.click(within(menu).getByRole("button", { name: "Remove link" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "kafka (service)" })).toBeNull());
@@ -326,6 +526,50 @@ describe("DependencyMapPage", () => {
     await user.click(within(panel).getByRole("button", { name: "Remove the link: orders_enrich depends on orders_ingest (job link)" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "orders_enrich depends on orders_ingest (job link)" })).toBeNull());
     await waitFor(() => expect(panel).toHaveFocus());
+  });
+
+  it("saves a job's settings from the side panel and says so", async () => {
+    const user = userEvent.setup();
+    const { saves } = renderMap();
+    fireEvent.click(await box("watchdog_demo_slow (Unknown)"));
+    const panel = screen.getByRole("region", { name: "watchdog_demo_slow" });
+    const owner = within(panel).getByRole("textbox", { name: "Owner" });
+    await user.type(owner, "data-team");
+    await user.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].change).toMatchObject({ kind: "upsert", target: { type: "job", name: "watchdog_demo_slow" }, value: { owner: "data-team" } });
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Saved version 4/);
+  });
+
+  it("a 409 from the side panel shows Reload", async () => {
+    const user = userEvent.setup();
+    const view = renderMap(EXAMPLE_DOCUMENT, () =>
+      json({ error: "conflict", message: "Someone else changed this since you opened it. Reload to see their change.", latestVersion: 4 }, 409),
+    );
+    fireEvent.click(await box("watchdog_demo_slow (Unknown)"));
+    const panel = screen.getByRole("region", { name: "watchdog_demo_slow" });
+    await user.type(within(panel).getByRole("textbox", { name: "Owner" }), "data-team");
+    await user.click(within(panel).getByRole("button", { name: "Save" }));
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("Someone else changed the job list since you opened it.")).toBeInTheDocument();
+    expect(within(alert).getByRole("button", { name: "Reload" })).toBeInTheDocument();
+    expect(view.saves).toHaveLength(1);
+  });
+
+  it("Remove from Watchdog deletes after the confirm and closes the panel", async () => {
+    const user = userEvent.setup();
+    const { saves } = renderMap();
+    fireEvent.click(await box("watchdog_demo_slow (Unknown)"));
+    const panel = screen.getByRole("region", { name: "watchdog_demo_slow" });
+    await user.click(within(panel).getByRole("button", { name: "Remove from Watchdog" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete watchdog_demo_slow?" });
+    expect(saves).toEqual([]);
+    await user.click(within(dialog).getByRole("button", { name: "Delete job" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].change).toEqual({ kind: "delete", target: { type: "job", name: "watchdog_demo_slow" } });
+    await waitFor(() => expect(screen.queryByRole("region", { name: "watchdog_demo_slow" })).toBeNull());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: "watchdog_demo_slow (Unknown)" })).toBeNull();
   });
 
   it("gives focus back to the box when its side panel closes, with the button or with Escape", async () => {
@@ -665,13 +909,12 @@ describe("DependencyMapPage", () => {
     expect(within(panel).getByRole("heading", { level: 2, name: "orders_ingest" })).toBeInTheDocument();
     expect(part(panel, "status")).toHaveTextContent("Unknown");
 
-    expect(detail(panel, "Owner")).toBe("ingestion-team");
-    expect(detail(panel, "Schedule")).toBe("Continuous");
-    expect(detail(panel, "Severity")).toBe("CRITICAL");
-    expect(detail(panel, "Max gap")).toBe("30 min");
-    expect(detail(panel, "Max runtime")).toBe("None");
-    expect(detail(panel, "Max retries")).toBe("3");
-    expect(detail(panel, "Enabled")).toBe("No");
+    expect(within(panel).getByRole("textbox", { name: "Owner" })).toHaveValue("ingestion-team");
+    expect(within(panel).getByRole("radio", { name: "Continuous" })).toBeChecked();
+    expect(within(panel).getByRole("combobox", { name: "Severity" })).toHaveTextContent("CRITICAL");
+    expect(within(panel).getByRole("textbox", { name: /Max gap/ })).toHaveValue("");
+    expect(within(panel).getByRole("textbox", { name: "Max retries" })).toHaveValue("3");
+    expect(within(panel).getByRole("switch", { name: "Monitored" })).not.toBeChecked();
 
     const dependsOn = panelSection(panel, "Depends on");
     expect(dependsOn).toHaveTextContent("kafka");
@@ -822,10 +1065,12 @@ describe("DependencyMapPage", () => {
     const { loads } = renderMap(EXAMPLE_DOCUMENT, () =>
       json({ error: "conflict", message: "Someone else changed this since you opened it. Reload to see their change.", latestVersion: 5 }, 409),
     );
+    // Removed with the × of the selected line, which stays when the save is refused.
     fireEvent.click(await box("orders_enrich depends on orders_ingest (job link)"));
-    await user.click(await screen.findByRole("button", { name: "Remove link" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove the link: orders_enrich depends on orders_ingest (job link)" }));
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText("Someone else changed the job list since you opened it.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "orders_enrich depends on orders_ingest (job link)" })).toBeInTheDocument();
     const before = loads();
     await user.click(within(alert).getByRole("button", { name: "Reload" }));
     await waitFor(() => expect(loads()).toBe(before + 1));
@@ -843,7 +1088,8 @@ describe("DependencyMapPage", () => {
         422,
       ),
     );
-    fireEvent.click(await box("orders_enrich depends on orders_ingest (job link)"));
+    (await box("orders_enrich depends on orders_ingest (job link)")).focus();
+    await user.keyboard("{Enter}");
     await user.click(await screen.findByRole("button", { name: "Remove link" }));
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText("The job list has a problem.")).toBeInTheDocument();
@@ -866,9 +1112,12 @@ describe("DependencyMapPage", () => {
   it("offers Retry when the job list does not load", async () => {
     const user = userEvent.setup();
     let fail = true;
+    const layout = layoutServer();
     mockFetch(
       () => ({ rows: [] }),
-      (url) => {
+      (url, init) => {
+        const answered = layout.handle(url, init);
+        if (answered) return answered;
         if (url.startsWith("/api/app-config")) return json(APP_CONFIG);
         if (url === "/api/job-list") {
           return fail
@@ -926,7 +1175,8 @@ describe("DependencyMapPage", () => {
     const { failLoads } = renderMap(EXAMPLE_DOCUMENT, () =>
       json({ error: "conflict", message: "Someone else changed this since you opened it. Reload to see their change.", latestVersion: 5 }, 409),
     );
-    fireEvent.click(await box("orders_enrich depends on orders_ingest (job link)"));
+    (await box("orders_enrich depends on orders_ingest (job link)")).focus();
+    await user.keyboard("{Enter}");
     await user.click(await screen.findByRole("button", { name: "Remove link" }));
     const alert = await screen.findByRole("alert");
     failLoads(true);
@@ -944,7 +1194,8 @@ describe("DependencyMapPage", () => {
     const { failLoads } = renderMap(EXAMPLE_DOCUMENT, () =>
       json({ error: "conflict", message: "Someone else changed this since you opened it. Reload to see their change.", latestVersion: 5 }, 409),
     );
-    fireEvent.click(await box("orders_enrich depends on orders_ingest (job link)"));
+    (await box("orders_enrich depends on orders_ingest (job link)")).focus();
+    await user.keyboard("{Enter}");
     await user.click(await screen.findByRole("button", { name: "Remove link" }));
     const conflict = await screen.findByRole("alert");
     failLoads(true);
@@ -976,5 +1227,860 @@ describe("DependencyMapPage", () => {
     await user.click(within(line).getByRole("button", { name: "Retry" }));
     expect(await box("watchdog_demo_fails (Failed)")).toBeInTheDocument();
     expect(screen.queryByText("Live status is not available.")).toBeNull();
+  });
+
+  it("a drag saves one move per moved box and never calls saveChange", async () => {
+    const { container, saves, layoutSaves } = renderMap();
+    await box("orders_ingest (Unknown, switched off)");
+    const start = cornerOf(container, "job:orders_ingest");
+    dragBox(container, "job:orders_ingest", 120, 80);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    const dropped = cornerOf(container, "job:orders_ingest");
+    expect(dropped).not.toEqual(start);
+    // The spot saved is where the box was dropped.
+    expect(layoutSaves[0]).toEqual({ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", ...dropped }] });
+
+    // A second box: a save of its own, with only that box in it.
+    dragBox(container, "service:kafka", -60, 40);
+    await waitFor(() => expect(layoutSaves).toHaveLength(2));
+    expect(layoutSaves[1]).toEqual({ direction: "LR", moves: [{ nodeKey: "service:kafka", ...cornerOf(container, "service:kafka") }] });
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(dropped);
+    expect(saves).toEqual([]);
+  });
+
+  it("a press under 4 px opens the panel and saves nothing", async () => {
+    const { container, saves, layoutSaves } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    // The box can be dragged, yet a press that wobbles a few pixels is still a click.
+    expect(nodeOf(container, "job:orders_ingest")).toHaveClass("draggable");
+    const start = cornerOf(container, "job:orders_ingest");
+    mouse("mouseDown", ingest, 300, 300);
+    mouse("mouseMove", ingest, 303, 302);
+    mouse("mouseUp", ingest, 303, 302);
+    fireEvent.click(ingest, { clientX: 303, clientY: 302 });
+    expect(await screen.findByRole("region", { name: "orders_ingest" })).toBeInTheDocument();
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(start);
+    await frames();
+    expect(layoutSaves).toEqual([]);
+    expect(saves).toEqual([]);
+  });
+
+  it("arrow keys move the selected box and save once after 600 ms", async () => {
+    const { container, saves, layoutSaves } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    fireEvent.click(ingest);
+    await screen.findByRole("region", { name: "orders_ingest" });
+    const start = cornerOf(container, "job:orders_ingest");
+
+    // Fake time: each wait also runs the promises it lets go, so a save that went out would be in layoutSaves.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const wait = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+    fireEvent.keyDown(ingest, { key: "ArrowRight" });
+    await wait(400);
+    fireEvent.keyDown(ingest, { key: "ArrowRight" });
+    await wait(400);
+    // 800 ms after the first key, but only 400 after the last: nothing is saved yet.
+    expect(layoutSaves).toEqual([]);
+    // Shift moves 50 pixels.
+    fireEvent.keyDown(ingest, { key: "ArrowDown", shiftKey: true });
+    fireEvent.keyDown(ingest, { key: "ArrowLeft" });
+    const moved = { x: start.x + 10, y: start.y + 50 };
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(moved);
+    await wait(599);
+    expect(layoutSaves).toEqual([]);
+    // 600 ms after the last key: one save, with where the keys left the box.
+    await wait(1);
+    expect(layoutSaves).toEqual([{ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", ...moved }] }]);
+    await wait(2000);
+    expect(layoutSaves).toHaveLength(1);
+    vi.useRealTimers();
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(moved);
+    expect(saves).toEqual([]);
+  });
+
+  it("arrow keys in the side panel's inputs do not move the box", async () => {
+    const { container, layoutSaves } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    fireEvent.click(ingest);
+    const panel = await screen.findByRole("region", { name: "orders_ingest" });
+    const start = cornerOf(container, "job:orders_ingest");
+    // Things a person types in: a text box, a text area, a list and editable text.
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    const fields = [document.createElement("input"), document.createElement("textarea"), document.createElement("select"), editable];
+    panel.append(...fields);
+    for (const field of fields) {
+      fireEvent.keyDown(field, { key: "ArrowRight" });
+      fireEvent.keyDown(field, { key: "ArrowDown", shiftKey: true });
+    }
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(start);
+
+    // The same key on the box moves it.
+    fireEvent.keyDown(ingest, { key: "ArrowRight" });
+    expect(cornerOf(container, "job:orders_ingest")).toEqual({ x: start.x + 10, y: start.y });
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    for (const field of fields) field.remove();
+  });
+
+  it("arrow keys on the side panel's buttons and on the toolbar do not move the box", async () => {
+    const { container, layoutSaves } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    fireEvent.click(ingest);
+    const panel = await screen.findByRole("region", { name: "orders_ingest" });
+    const start = cornerOf(container, "job:orders_ingest");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // ArrowDown on a panel button is left to the panel, which scrolls: the map does not take the key.
+    expect(fireEvent.keyDown(within(panel).getByRole("button", { name: "Edit job" }), { key: "ArrowDown" })).toBe(true);
+    const remove = within(panel).getByRole("button", { name: "Remove the link: orders_enrich depends on orders_ingest (job link)" });
+    expect(fireEvent.keyDown(remove, { key: "ArrowDown", shiftKey: true })).toBe(true);
+    // Shift and an arrow on the direction toggle, which the toggle leaves alone, and an arrow on a zoom button.
+    fireEvent.keyDown(screen.getByRole("radio", { name: "Left to right" }), { key: "ArrowRight", shiftKey: true });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Zoom in" }), { key: "ArrowUp" });
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    vi.useRealTimers();
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(start);
+    expect(layoutSaves).toEqual([]);
+  });
+
+  it("saves a key move still waiting under its own direction when the direction changes", async () => {
+    const { container, layoutSaves } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    fireEvent.click(ingest);
+    await screen.findByRole("region", { name: "orders_ingest" });
+    const start = cornerOf(container, "job:orders_ingest");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    fireEvent.keyDown(ingest, { key: "ArrowRight" });
+    // Top to bottom well before the 600 ms are up: the move is saved now, for left to right.
+    fireEvent.click(screen.getByRole("radio", { name: "Top to bottom" }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(layoutSaves).toEqual([{ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", x: start.x + 10, y: start.y }] }]);
+    // And only once: nothing more goes out after the wait, for either direction.
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    vi.useRealTimers();
+    expect(layoutSaves).toHaveLength(1);
+    await waitFor(() => expect(cornerOf(container, "job:orders_enrich").y).toBeGreaterThan(cornerOf(container, "job:orders_ingest").y + 68));
+  });
+
+  it("saves a key move still waiting when the page closes", async () => {
+    const { container, layoutSaves, unmount } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    fireEvent.click(ingest);
+    await screen.findByRole("region", { name: "orders_ingest" });
+    const start = cornerOf(container, "job:orders_ingest");
+    fireEvent.keyDown(ingest, { key: "ArrowDown", shiftKey: true });
+    unmount();
+    // Saved as the page goes, well before the 600 ms wait would have saved it.
+    await waitFor(() => expect(layoutSaves).toEqual([{ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", x: start.x, y: start.y + 50 }] }]), {
+      timeout: 300,
+    });
+  });
+
+  it("a drag does not refit the view", async () => {
+    const { container, layoutSaves } = renderMap();
+    await box("orders_ingest (Unknown, switched off)");
+    resizeMap(container, 1400, 800);
+    await waitFor(() => expect(boxesOnScreen(container).zoom).toBeGreaterThan(0.4));
+    await frames();
+    flow.fitView.mockClear();
+    const view = container.querySelector<HTMLElement>(".react-flow__viewport")?.style.transform;
+
+    // Far enough that a fit of the new spots would change the view.
+    dragBox(container, "job:orders_ingest", 400, 300);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    await frames();
+    expect(flow.fitView).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLElement>(".react-flow__viewport")?.style.transform).toBe(view);
+  });
+
+  it("when positions fail to load, boxes cannot be dragged and Retry loads them", async () => {
+    const user = userEvent.setup();
+    const { container, layoutSaves, failLayout } = renderMap(EXAMPLE_DOCUMENT, applies, {
+      layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] },
+      layoutFails: true,
+    });
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    const line = (await screen.findByText(LOAD_LINE)).closest("[role='status']");
+    if (!(line instanceof HTMLElement)) throw new Error("no layout problem line");
+    // The automatic layout, with moving off: no arrow keys, no drag, no Tidy up.
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(automaticSpot("job:orders_ingest"));
+    expect(nodeOf(container, "job:orders_ingest")).not.toHaveClass("draggable");
+    fireEvent.click(ingest);
+    fireEvent.keyDown(ingest, { key: "ArrowRight" });
+    dragBox(container, "job:orders_ingest", 200, 100);
+    await frames();
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(automaticSpot("job:orders_ingest"));
+    expect(screen.getByRole("button", { name: "Tidy up" })).toHaveAttribute("aria-disabled", "true");
+
+    failLayout(false);
+    await user.click(within(line).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(cornerOf(container, "job:orders_ingest")).toEqual({ x: 2000, y: 1200 }));
+    expect(screen.queryByText(LOAD_LINE)).toBeNull();
+    expect(nodeOf(container, "job:orders_ingest")).toHaveClass("draggable");
+    expect(layoutSaves).toEqual([]);
+  });
+
+  it("Tidy up resets and lays the map out again", async () => {
+    const user = userEvent.setup();
+    const { container, resets } = renderMap(EXAMPLE_DOCUMENT, applies, { layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] } });
+    await box("orders_ingest (Unknown, switched off)");
+    expect(cornerOf(container, "job:orders_ingest")).toEqual({ x: 2000, y: 1200 });
+    await frames();
+    flow.fitView.mockClear();
+
+    const tidy = screen.getByRole("button", { name: "Tidy up" });
+    expect(tidy).not.toHaveAttribute("aria-disabled");
+    await user.click(tidy);
+    await waitFor(() => expect(cornerOf(container, "job:orders_ingest")).toEqual(automaticSpot("job:orders_ingest")));
+    expect(resets).toEqual([{ direction: "LR" }]);
+    // The view fits the automatic layout, and with nothing saved Tidy up is off.
+    await waitFor(() => expect(flow.fitView).toHaveBeenCalled());
+    expect(tidy).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("keeps a dragged box where it was dropped after a reload", async () => {
+    const { container, layoutSaves, reload } = renderMap();
+    await box("orders_ingest (Unknown, switched off)");
+    dragBox(container, "job:orders_ingest", 160, 120);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    const dropped = cornerOf(container, "job:orders_ingest");
+    expect(dropped).not.toEqual(automaticSpot("job:orders_ingest"));
+
+    const again = reload();
+    await box("orders_ingest (Unknown, switched off)");
+    expect(cornerOf(again.container, "job:orders_ingest")).toEqual(dropped);
+  });
+
+  it("puts a box back and says so when its move can't be saved", async () => {
+    const { container } = renderMap(EXAMPLE_DOCUMENT, applies, { movesFail: true });
+    await box("orders_ingest (Unknown, switched off)");
+    const start = cornerOf(container, "job:orders_ingest");
+    dragBox(container, "job:orders_ingest", 150, 90);
+    expect(await screen.findByText("That move couldn't be saved, so the box went back.")).toBeInTheDocument();
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(start);
+  });
+
+  it("takes a box out of the Not linked yet group once it is dragged", async () => {
+    const { container, layoutSaves } = renderMap();
+    await box("watchdog_demo_slow (Unknown)");
+    const group = () => container.querySelector<HTMLElement>(".react-flow__node-section");
+    expect(group()).toHaveTextContent("2 jobs");
+    dragBox(container, "job:watchdog_demo_slow", 0, -400);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    await waitFor(() => expect(group()).toHaveTextContent("1 job"));
+    expect(group()).not.toHaveTextContent("2 jobs");
+  });
+
+  it("shows card skeletons, not boxes, until the saved positions load", async () => {
+    const { container, releaseLayout } = renderMap(EXAMPLE_DOCUMENT, applies, {
+      layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] },
+      layoutWaits: true,
+    });
+    // The job list is in, so the toolbar is there; the boxes wait for their spots.
+    expect(await screen.findByRole("button", { name: "Tidy up" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.queryByRole("button", { name: "orders_ingest (Unknown, switched off)" })).toBeNull();
+    expect(container.querySelector(".react-flow")).toBeNull();
+    releaseLayout();
+    await box("orders_ingest (Unknown, switched off)");
+    expect(cornerOf(container, "job:orders_ingest")).toEqual({ x: 2000, y: 1200 });
+  });
+
+  it("dropping a link opens the New link card and Save link saves one dependency upsert", async () => {
+    const user = userEvent.setup();
+    const { container, saves } = renderMap();
+    const retries = await box("watchdog_demo_retries (Unknown)");
+    // From the dot where watchdog_demo_slow's links start, dropped on watchdog_demo_retries's card.
+    dragLink(container, dot("Link from watchdog_demo_slow"), retries);
+    const card = await screen.findByRole("dialog", { name: "New link" });
+    expect(card).toHaveAccessibleDescription("watchdog_demo_retries depends on watchdog_demo_slow.");
+    expect(within(card).getByRole("radio", { name: /^Job/ })).toBeChecked();
+    expect(saves).toEqual([]);
+
+    await user.click(within(card).getByRole("button", { name: "Save link" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toEqual({
+      baseVersion: 3,
+      change: {
+        kind: "upsert",
+        target: { type: "dependency", key: "watchdog_demo_retries->watchdog_demo_slow:job" },
+        value: { job_name: "watchdog_demo_retries", depends_on: "watchdog_demo_slow", dependency_type: "job" },
+      },
+    });
+    // The line is drawn and the card goes.
+    expect(await box("watchdog_demo_retries depends on watchdog_demo_slow (job link)")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New link" })).toBeNull());
+    expect(saves).toHaveLength(1);
+  });
+
+  it("saves a dragged link the right way round, from either dot and with a service", async () => {
+    const user = userEvent.setup();
+    const { container, saves } = renderMap();
+    const slow = await box("watchdog_demo_slow (Unknown)");
+    // From the dot where watchdog_demo_retries's links end, dropped on watchdog_demo_slow: watchdog_demo_retries depends on it.
+    dragLink(container, dot("Link to watchdog_demo_retries"), slow);
+    let card = await screen.findByRole("dialog", { name: "New link" });
+    expect(card).toHaveAccessibleDescription("watchdog_demo_retries depends on watchdog_demo_slow.");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New link" })).toBeNull());
+
+    // From a job to a service: the job needs the service, and there is no type to choose.
+    dragLink(container, dot("Link from watchdog_demo_slow"), screen.getByRole("button", { name: "kafka (service)" }));
+    card = await screen.findByRole("dialog", { name: "New link" });
+    expect(card).toHaveAccessibleDescription("watchdog_demo_slow depends on kafka.");
+    expect(within(card).queryByRole("radio")).toBeNull();
+    await user.click(within(card).getByRole("button", { name: "Save link" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].change).toEqual({
+      kind: "upsert",
+      target: { type: "dependency", key: "watchdog_demo_slow->kafka:service" },
+      value: { job_name: "watchdog_demo_slow", depends_on: "kafka", dependency_type: "service" },
+    });
+  });
+
+  it("a refused drop shows the reason and saves nothing", async () => {
+    const user = userEvent.setup();
+    const { container, saves } = renderMap();
+    const enrich = await box("orders_enrich (Unknown, switched off)");
+    // orders_enrich already depends on orders_ingest.
+    dragLink(container, dot("Link from orders_ingest"), enrich);
+    let card = await screen.findByRole("dialog", { name: "New link" });
+    expect(card).toHaveAccessibleDescription("These two are already linked.");
+    // Only Close: nothing to choose, nothing to save.
+    expect(within(card).getAllByRole("button").map((button) => button.textContent)).toEqual(["Close"]);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New link" })).toBeNull());
+
+    // Two services, dropped dot on dot.
+    dragLink(container, dot("Link from kafka"), dot("Link to config_api"));
+    card = await screen.findByRole("dialog", { name: "New link" });
+    expect(card).toHaveAccessibleDescription("Two services can't be linked.");
+    await user.click(within(card).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New link" })).toBeNull());
+    expect(saves).toEqual([]);
+  });
+
+  it("a drop on the box it started from opens nothing", async () => {
+    const { container, saves } = renderMap();
+    const slow = await box("watchdog_demo_slow (Unknown)");
+    dragLink(container, dot("Link from watchdog_demo_slow"), dot("Link to watchdog_demo_slow"));
+    dragLink(container, dot("Link from watchdog_demo_slow"), slow);
+    await frames();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(saves).toEqual([]);
+  });
+
+  it("a 409 on a dragged link shows Reload and keeps the card open", async () => {
+    const user = userEvent.setup();
+    let refuse = true;
+    const view = renderMap(EXAMPLE_DOCUMENT, (body, state) => {
+      if (!refuse) return applies(body, state);
+      refuse = false;
+      return json({ error: "conflict", message: "Someone else changed this since you opened it. Reload to see their change.", latestVersion: 4 }, 409);
+    });
+    await box("watchdog_demo_retries (Unknown)");
+    // Someone else saves version 4 while the map shows version 3.
+    view.saveBehind({ ...EXAMPLE_DOCUMENT, defaults: { ...EXAMPLE_DOCUMENT.defaults, owner: "data-team" } });
+    dragLink(view.container, dot("Link from watchdog_demo_slow"), dot("Link to watchdog_demo_retries"));
+    const card = await screen.findByRole("dialog", { name: "New link" });
+    await user.click(within(card).getByRole("radio", { name: /Child job/ }));
+    await user.type(within(card).getByRole("textbox", { name: "Notes (optional)" }), "Its last task");
+    await user.click(within(card).getByRole("button", { name: "Save link" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("Someone else changed the job list since you opened it.")).toBeInTheDocument();
+    // The card stays with its choices, and the link is not drawn.
+    expect(screen.getByRole("dialog", { name: "New link" })).toBe(card);
+    expect(within(card).getByRole("radio", { name: /Child job/ })).toBeChecked();
+    expect(within(card).getByRole("textbox", { name: "Notes (optional)" })).toHaveValue("Its last task");
+    expect(screen.queryByRole("button", { name: /^watchdog_demo_retries depends on watchdog_demo_slow/ })).toBeNull();
+
+    // Reload leaves the card open, so the link saves from the newest version.
+    await user.click(within(alert).getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(screen.getByRole("dialog", { name: "New link" })).toBe(card);
+    await user.click(within(card).getByRole("button", { name: "Save link" }));
+    await waitFor(() => expect(view.saves).toHaveLength(2));
+    expect(view.saves.map((save) => save.baseVersion)).toEqual([3, 4]);
+    expect(view.saves[1].change).toEqual({
+      kind: "upsert",
+      target: { type: "dependency", key: "watchdog_demo_retries->watchdog_demo_slow:child_job" },
+      value: { job_name: "watchdog_demo_retries", depends_on: "watchdog_demo_slow", dependency_type: "child_job", notes: "Its last task" },
+    });
+    expect(await box("watchdog_demo_retries depends on watchdog_demo_slow (child job link)")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New link" })).toBeNull());
+  });
+
+  it("a selected line shows × and × removes it", async () => {
+    const { saves } = renderMap();
+    const link = await box("orders_enrich depends on orders_ingest (job link)");
+    const remove = "Remove the link: orders_enrich depends on orders_ingest (job link)";
+    expect(screen.queryByRole("button", { name: remove })).toBeNull();
+    // A pointer click selects the line: it turns the accent and shows ×, and no menu opens.
+    fireEvent.click(link);
+    expect(await screen.findByRole("button", { name: remove })).toBeInTheDocument();
+    expect(line("orders_enrich depends on orders_ingest (job link)")).toHaveClass("stroke-primary");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Escape lets the line go.
+    fireEvent.keyDown(link, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("button", { name: remove })).toBeNull());
+
+    fireEvent.click(link);
+    fireEvent.click(await screen.findByRole("button", { name: remove }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toEqual({ baseVersion: 3, change: { kind: "delete", target: { type: "dependency", key: "orders_enrich->orders_ingest:job" } } });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "orders_enrich depends on orders_ingest (job link)" })).toBeNull());
+    expect(screen.queryByRole("button", { name: remove })).toBeNull();
+  });
+
+  it("Delete removes the selected line, and never a box", async () => {
+    const { container, saves } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    const boxes = () => container.querySelectorAll(".react-flow__node-job, .react-flow__node-service").length;
+    const count = boxes();
+    // A selected box: Delete and Backspace do nothing.
+    fireEvent.click(ingest);
+    const panel = await screen.findByRole("region", { name: "orders_ingest" });
+    fireEvent.keyDown(ingest, { key: "Delete" });
+    fireEvent.keyDown(ingest, { key: "Backspace" });
+    await frames();
+    expect(saves).toEqual([]);
+    expect(boxes()).toBe(count);
+
+    // A selected line: not from a field a person types in, then Delete on the line removes it.
+    const fails = screen.getByRole("button", { name: "watchdog_demo_succeeds depends on watchdog_demo_fails (job link)" });
+    fireEvent.click(fails);
+    const field = document.createElement("input");
+    panel.append(field);
+    fireEvent.keyDown(field, { key: "Delete" });
+    fireEvent.keyDown(field, { key: "Backspace" });
+    field.remove();
+    await frames();
+    expect(saves).toEqual([]);
+    fireEvent.keyDown(fails, { key: "Delete" });
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].change).toEqual({ kind: "delete", target: { type: "dependency", key: "watchdog_demo_succeeds->watchdog_demo_fails:job" } });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "watchdog_demo_succeeds depends on watchdog_demo_fails (job link)" })).toBeNull());
+
+    // Backspace does the same.
+    const report = screen.getByRole("button", { name: "daily_revenue_report depends on orders_enrich (job link)" });
+    fireEvent.click(report);
+    fireEvent.keyDown(report, { key: "Backspace" });
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1].change).toEqual({ kind: "delete", target: { type: "dependency", key: "daily_revenue_report->orders_enrich:job" } });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "daily_revenue_report depends on orders_enrich (job link)" })).toBeNull());
+    // Every box is still on the map, and the selected one still selected.
+    expect(boxes()).toBe(count);
+    expect(screen.getByRole("button", { name: "orders_ingest (Unknown, switched off)" })).toHaveAttribute("data-highlight", "selected");
+  });
+
+  it("Enter on a focused line still opens the link menu", async () => {
+    const user = userEvent.setup();
+    renderMap();
+    const link = await box("orders_enrich depends on orders_ingest (job link)");
+    const remove = "Remove the link: orders_enrich depends on orders_ingest (job link)";
+    // Selected with a pointer first: Enter still opens the menu, which takes the place of the ×.
+    fireEvent.click(link);
+    await screen.findByRole("button", { name: remove });
+    link.focus();
+    await user.keyboard("{Enter}");
+    const menu = await screen.findByRole("dialog", { name: "orders_enrich depends on orders_ingest" });
+    expect(within(menu).getByRole("button", { name: "Remove link" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: remove })).toBeNull();
+  });
+
+  it("Delete removes no line after Tab takes focus from the selected line to another", async () => {
+    const user = userEvent.setup();
+    const { saves } = renderMap();
+    const first = await box("orders_enrich depends on orders_ingest (job link)");
+    const remove = "Remove the link: orders_enrich depends on orders_ingest (job link)";
+    fireEvent.click(first);
+    expect(await screen.findByRole("button", { name: remove })).toBeInTheDocument();
+    expect(first).toHaveFocus();
+    // Tab takes focus, and its ring, to the next line: the first line lets go of its ×.
+    await user.tab();
+    const next = screen.getByRole("button", { name: "daily_revenue_report depends on orders_enrich (job link)" });
+    expect(next).toHaveFocus();
+    await waitFor(() => expect(screen.queryByRole("button", { name: remove })).toBeNull());
+    // Delete and Backspace on the focused line remove neither line.
+    await user.keyboard("{Delete}");
+    await user.keyboard("{Backspace}");
+    await frames();
+    expect(saves).toEqual([]);
+    expect(first).toBeInTheDocument();
+    expect(next).toBeInTheDocument();
+  });
+
+  it("Delete on a box leaves the selected line alone", async () => {
+    const { saves } = renderMap();
+    const link = await box("orders_enrich depends on orders_ingest (job link)");
+    fireEvent.click(link);
+    await screen.findByRole("button", { name: "Remove the link: orders_enrich depends on orders_ingest (job link)" });
+    // Focus goes on to a box, as Tab does past the line's ×: the line keeps its ×, and Delete on the box removes nothing.
+    const ingest = screen.getByRole("button", { name: "orders_ingest (Unknown, switched off)" });
+    ingest.focus();
+    fireEvent.keyDown(ingest, { key: "Delete" });
+    fireEvent.keyDown(ingest, { key: "Backspace" });
+    await frames();
+    expect(saves).toEqual([]);
+    expect(link).toBeInTheDocument();
+  });
+
+  it("Undo after a drag puts the box back", async () => {
+    const user = userEvent.setup();
+    const { container, saves, layoutSaves, resets } = renderMap();
+    await box("watchdog_demo_slow (Unknown)");
+    const group = () => container.querySelector<HTMLElement>(".react-flow__node-section");
+    const tidy = screen.getByRole("button", { name: "Tidy up" });
+    const undo = screen.getByRole("button", { name: "Nothing to undo" });
+    expect(group()).toHaveTextContent("2 jobs");
+    expect(tidy).toHaveAttribute("aria-disabled", "true");
+    expect(undo).toHaveAttribute("aria-disabled", "true");
+    const start = cornerOf(container, "job:watchdog_demo_slow");
+    // Out of the Not linked yet group: the box's first saved spot.
+    dragBox(container, "job:watchdog_demo_slow", 0, -400);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    await waitFor(() => expect(group()).toHaveTextContent("1 job"));
+    expect(tidy).not.toHaveAttribute("aria-disabled");
+    // Undo names what it takes back.
+    expect(undo).toHaveAccessibleName("Undo: move 1 box");
+    expect(undo).not.toHaveAttribute("aria-disabled");
+
+    await user.click(undo);
+    // The box had no saved spot: Undo clears the direction and saves back the spots from before, none here. The box is
+    // back in the automatic layout, in its group, and with nothing saved Tidy up is off again.
+    await waitFor(() => expect(resets).toEqual([{ direction: "LR" }]));
+    await waitFor(() => expect(cornerOf(container, "job:watchdog_demo_slow")).toEqual(start));
+    expect(group()).toHaveTextContent("2 jobs");
+    await waitFor(() => expect(tidy).toHaveAttribute("aria-disabled", "true"));
+    expect(layoutSaves).toHaveLength(1);
+    // The undo's own saves are not an action: nothing is left to undo, and another press saves nothing.
+    await waitFor(() => expect(undo).toHaveAccessibleName("Nothing to undo"));
+    expect(undo).toHaveAttribute("aria-disabled", "true");
+    await user.click(undo);
+    await frames();
+    expect(resets).toHaveLength(1);
+    expect(layoutSaves).toHaveLength(1);
+    expect(saves).toEqual([]);
+  });
+
+  it("Undo of a box's first move keeps the other boxes' saved spots", async () => {
+    const { container, layoutSaves, resets, reload } = renderMap(EXAMPLE_DOCUMENT, applies, {
+      layout: { LR: [{ nodeKey: "service:kafka", x: 900, y: 900 }] },
+    });
+    await box("watchdog_demo_slow (Unknown)");
+    const start = cornerOf(container, "job:watchdog_demo_slow");
+    dragBox(container, "job:watchdog_demo_slow", 0, -400);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Undo: move 1 box" }));
+    // The direction is cleared, then the spots from before the move are saved again: kafka's.
+    await waitFor(() => expect(layoutSaves).toHaveLength(2));
+    expect(resets).toEqual([{ direction: "LR" }]);
+    expect(layoutSaves[1]).toEqual({ direction: "LR", moves: [{ nodeKey: "service:kafka", x: 900, y: 900 }] });
+    await waitFor(() => expect(cornerOf(container, "job:watchdog_demo_slow")).toEqual(start));
+    expect(cornerOf(container, "service:kafka")).toEqual({ x: 900, y: 900 });
+    // What the server keeps: kafka where it was put, and the box in the automatic layout.
+    const again = reload();
+    await box("watchdog_demo_slow (Unknown)");
+    expect(cornerOf(again.container, "service:kafka")).toEqual({ x: 900, y: 900 });
+    expect(cornerOf(again.container, "job:watchdog_demo_slow")).toEqual(start);
+  });
+
+  it("Ctrl+Z from an element outside the page saves nothing", async () => {
+    const { container, layoutSaves } = renderMap(EXAMPLE_DOCUMENT, applies, { layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] } });
+    await box("orders_ingest (Unknown, switched off)");
+    dragBox(container, "job:orders_ingest", 120, 80);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    // A link in the left nav, outside the page.
+    const nav = document.createElement("a");
+    nav.href = "/jobs";
+    nav.textContent = "Job list";
+    document.body.append(nav);
+    nav.focus();
+    fireEvent.keyDown(nav, { key: "z", ctrlKey: true });
+    fireEvent.keyDown(nav, { key: "z", metaKey: true });
+    await frames();
+    nav.remove();
+    expect(layoutSaves).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Undo: move 1 box" })).toBeInTheDocument();
+    // With nothing focused the key goes to the body, which counts as the page: Undo runs.
+    fireEvent.keyDown(document.body, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(layoutSaves).toHaveLength(2));
+    expect(layoutSaves[1]).toEqual({ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] });
+  });
+
+  it("Undo after a dragged link saves one delete change", async () => {
+    const user = userEvent.setup();
+    const { container, saves } = renderMap();
+    const retries = await box("watchdog_demo_retries (Unknown)");
+    dragLink(container, dot("Link from watchdog_demo_slow"), retries);
+    const card = await screen.findByRole("dialog", { name: "New link" });
+    await user.click(within(card).getByRole("button", { name: "Save link" }));
+    const link = await box("watchdog_demo_retries depends on watchdog_demo_slow (job link)");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New link" })).toBeNull());
+    expect(screen.getByRole("button", { name: "Undo: add the link" })).toBeInTheDocument();
+
+    // Ctrl+Z from the box the link was dropped on, which has focus.
+    await waitFor(() => expect(retries).toHaveFocus());
+    fireEvent.keyDown(retries, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1]).toEqual({
+      baseVersion: 4,
+      change: { kind: "delete", target: { type: "dependency", key: "watchdog_demo_retries->watchdog_demo_slow:job" } },
+    });
+    await waitFor(() => expect(link).not.toBeInTheDocument());
+    expect(await screen.findByText("Saved version 5: Removed link watchdog_demo_retries -> watchdog_demo_slow (job).")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Nothing to undo" })).toHaveAttribute("aria-disabled", "true");
+    await frames();
+    expect(saves).toHaveLength(2);
+  });
+
+  it("Undo after removing a link saves the link again", async () => {
+    const { saves } = renderMap();
+    const name = "daily_revenue_export depends on daily_revenue_report (child job link)";
+    fireEvent.click(await box(name));
+    fireEvent.click(await screen.findByRole("button", { name: `Remove the link: ${name}` }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole("button", { name })).toBeNull());
+    expect(screen.getByRole("button", { name: "Undo: remove the link" })).toBeInTheDocument();
+
+    // Cmd+Z from the box that has focus after the removal.
+    const report = screen.getByRole("button", { name: "daily_revenue_report (Unknown, switched off)" });
+    await waitFor(() => expect(report).toHaveFocus());
+    fireEvent.keyDown(report, { key: "z", metaKey: true });
+    await waitFor(() => expect(saves).toHaveLength(2));
+    // The link comes back as it was, with its type and notes, as a new version.
+    expect(saves[1]).toEqual({
+      baseVersion: 4,
+      change: {
+        kind: "upsert",
+        target: { type: "dependency", key: "daily_revenue_export->daily_revenue_report:child_job" },
+        value: {
+          job_name: "daily_revenue_export",
+          depends_on: "daily_revenue_report",
+          dependency_type: "child_job",
+          notes: "daily_revenue_report starts it as its last task.",
+        },
+      },
+    });
+    expect(await box(name)).toBeInTheDocument();
+    expect(await screen.findByText(/^Saved version 5: Linked daily_revenue_export to daily_revenue_report/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Nothing to undo" })).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("Ctrl+Z in an input does nothing", async () => {
+    const user = userEvent.setup();
+    const { container, layoutSaves } = renderMap(EXAMPLE_DOCUMENT, applies, { layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] } });
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    dragBox(container, "job:orders_ingest", 120, 80);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    const moved = cornerOf(container, "job:orders_ingest");
+    fireEvent.click(ingest);
+    const panel = await screen.findByRole("region", { name: "orders_ingest" });
+    const owner = within(panel).getByRole("textbox", { name: "Owner" });
+    await user.type(owner, "-ops");
+    // In a text field, Ctrl+Z and Cmd+Z are the field's own: the map saves nothing, and the box stays where it was dropped.
+    fireEvent.keyDown(owner, { key: "z", ctrlKey: true });
+    fireEvent.keyDown(owner, { key: "z", metaKey: true });
+    await frames();
+    expect(layoutSaves).toHaveLength(1);
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(moved);
+    expect(owner).toHaveValue("ingestion-team-ops");
+    expect(screen.getByRole("button", { name: "Undo: move 1 box" })).toBeInTheDocument();
+
+    // From the box, Ctrl+Z takes the move back.
+    fireEvent.keyDown(ingest, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(layoutSaves).toHaveLength(2));
+  });
+
+  it("Ctrl+Z waits while the New link card is open", async () => {
+    const { container, saves, layoutSaves } = renderMap(EXAMPLE_DOCUMENT, applies, { layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] } });
+    const retries = await box("watchdog_demo_retries (Unknown)");
+    dragBox(container, "job:orders_ingest", 120, 80);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    dragLink(container, dot("Link from watchdog_demo_slow"), retries);
+    const card = await screen.findByRole("dialog", { name: "New link" });
+    // From the card, and from the map outside it: Undo waits until the card closes.
+    fireEvent.keyDown(card, { key: "z", ctrlKey: true });
+    fireEvent.keyDown(retries, { key: "z", metaKey: true });
+    await frames();
+    expect(layoutSaves).toHaveLength(1);
+    expect(screen.getByRole("dialog", { name: "New link" })).toBe(card);
+
+    fireEvent.keyDown(card, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New link" })).toBeNull());
+    fireEvent.keyDown(retries, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(layoutSaves).toHaveLength(2));
+    expect(saves).toEqual([]);
+  });
+
+  it("Undo after Tidy up saves the spots from before again", async () => {
+    const user = userEvent.setup();
+    const { container, resets, layoutSaves } = renderMap(EXAMPLE_DOCUMENT, applies, {
+      layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] },
+    });
+    await box("orders_ingest (Unknown, switched off)");
+    await user.click(screen.getByRole("button", { name: "Tidy up" }));
+    await waitFor(() => expect(cornerOf(container, "job:orders_ingest")).toEqual(automaticSpot("job:orders_ingest")));
+    expect(resets).toEqual([{ direction: "LR" }]);
+    const undo = screen.getByRole("button", { name: "Undo: Tidy up" });
+    await frames();
+    flow.fitView.mockClear();
+
+    await user.click(undo);
+    await waitFor(() => expect(layoutSaves).toEqual([{ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] }]));
+    await waitFor(() => expect(cornerOf(container, "job:orders_ingest")).toEqual({ x: 2000, y: 1200 }));
+    // The view fits the spots it put back, as it does after a Tidy up.
+    await waitFor(() => expect(flow.fitView).toHaveBeenCalled());
+    expect(undo).toHaveAccessibleName("Nothing to undo");
+  });
+
+  it("Undo turns the map back to the direction a move was made in", async () => {
+    const user = userEvent.setup();
+    const { container, layoutSaves } = renderMap(EXAMPLE_DOCUMENT, applies, { layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] } });
+    await box("orders_ingest (Unknown, switched off)");
+    const start = cornerOf(container, "job:orders_ingest");
+    expect(start).toEqual({ x: 2000, y: 1200 });
+    dragBox(container, "job:orders_ingest", 120, 80);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    await user.click(screen.getByRole("radio", { name: "Top to bottom" }));
+    await waitFor(() => expect(cornerOf(container, "job:orders_enrich").y).toBeGreaterThan(cornerOf(container, "job:orders_ingest").y + 68));
+
+    // The move was made left to right: Undo turns the map back, then puts the box back there.
+    await user.click(screen.getByRole("button", { name: "Undo: move 1 box" }));
+    await waitFor(() => expect(layoutSaves).toHaveLength(2));
+    expect(layoutSaves[1]).toEqual({ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", ...start }] });
+    expect(screen.getByRole("radio", { name: "Left to right" })).toBeChecked();
+    await waitFor(() => expect(cornerOf(container, "job:orders_ingest")).toEqual(start));
+    expect(screen.getByRole("button", { name: "Nothing to undo" })).toBeInTheDocument();
+  });
+
+  it("an undo the rules refuse leaves the stack and says why", async () => {
+    const user = userEvent.setup();
+    const { container, saves, layoutSaves, resets } = renderMap();
+    await box("watchdog_demo_slow (Unknown)");
+    // An older action, which Undo reaches once the refused one is gone.
+    dragBox(container, "job:watchdog_demo_slow", 0, -400);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    const name = "orders_enrich depends on orders_ingest (job link)";
+    fireEvent.click(await box(name));
+    fireEvent.click(await screen.findByRole("button", { name: `Remove the link: ${name}` }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    // Removing orders_ingest from Watchdog, which is not an action Undo takes back.
+    fireEvent.click(screen.getByRole("button", { name: "orders_ingest (Unknown, switched off)" }));
+    await user.click(within(screen.getByRole("region", { name: "orders_ingest" })).getByRole("button", { name: "Remove from Watchdog" }));
+    await user.click(within(await screen.findByRole("alertdialog", { name: "Delete orders_ingest?" })).getByRole("button", { name: "Delete job" }));
+    await waitFor(() => expect(saves).toHaveLength(2));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "orders_ingest (Unknown, switched off)" })).toBeNull());
+
+    // The link would name a job that is gone: the rules refuse it, so nothing is saved and the action leaves the stack.
+    await user.click(screen.getByRole("button", { name: "Undo: remove the link" }));
+    expect(
+      await screen.findByText(
+        "That change can't be undone: dependency orders_enrich -> orders_ingest: orders_ingest is not a configured job (use dependency_type: service for services).",
+      ),
+    ).toBeInTheDocument();
+    await frames();
+    expect(saves).toHaveLength(2);
+    const undo = screen.getByRole("button", { name: "Undo: move 1 box" });
+
+    // The older move is in reach again, and its undo clears the line.
+    await user.click(undo);
+    await waitFor(() => expect(resets).toEqual([{ direction: "LR" }]));
+    await waitFor(() => expect(undo).toHaveAccessibleName("Nothing to undo"));
+    expect(screen.queryByText(/^That change can't be undone/)).toBeNull();
+  });
+
+  it("an undo the server's rules refuse leaves the stack and says why", async () => {
+    const user = userEvent.setup();
+    let refuse = false;
+    const { saves } = renderMap(EXAMPLE_DOCUMENT, (body, state) =>
+      refuse
+        ? json(
+            {
+              error: "invalid",
+              message: "The job list has a problem.",
+              issues: [{ path: "dependencies[orders_enrich->orders_ingest:job]", message: "a rule only the server checks" }],
+            },
+            422,
+          )
+        : applies(body, state),
+    );
+    const name = "orders_enrich depends on orders_ingest (job link)";
+    fireEvent.click(await box(name));
+    fireEvent.click(await screen.findByRole("button", { name: `Remove the link: ${name}` }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    refuse = true;
+    await user.click(screen.getByRole("button", { name: "Undo: remove the link" }));
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(await screen.findByText("That change can't be undone: a rule only the server checks.")).toBeInTheDocument();
+    // That line says it, not the rule alert as well, and the action is off the stack.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Nothing to undo" })).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("a conflict on an undo keeps it on the stack, so Undo can try again after Reload", async () => {
+    const user = userEvent.setup();
+    let conflict = false;
+    const view = renderMap(EXAMPLE_DOCUMENT, (body, state) => {
+      if (!conflict) return applies(body, state);
+      conflict = false;
+      return json({ error: "conflict", message: "Someone else changed this since you opened it. Reload to see their change.", latestVersion: 4 }, 409);
+    });
+    const name = "orders_enrich depends on orders_ingest (job link)";
+    fireEvent.click(await box(name));
+    fireEvent.click(await screen.findByRole("button", { name: `Remove the link: ${name}` }));
+    await waitFor(() => expect(view.saves).toHaveLength(1));
+    conflict = true;
+    await user.click(screen.getByRole("button", { name: "Undo: remove the link" }));
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("Someone else changed the job list since you opened it.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Undo: remove the link" })).toBeInTheDocument();
+
+    await user.click(within(alert).getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    await user.click(screen.getByRole("button", { name: "Undo: remove the link" }));
+    await waitFor(() => expect(view.saves).toHaveLength(3));
+    expect(view.saves.map((save) => save.baseVersion)).toEqual([3, 4, 4]);
+    expect(await box(name)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Nothing to undo" })).toBeInTheDocument();
+  });
+
+  it("Add job saves a new job and selects its box", async () => {
+    const user = userEvent.setup();
+    const picked = {
+      workspace_id: "1111111111111111",
+      workspace_name: "example-prod",
+      job_id: "345678901234567",
+      name: "Nightly Billing Rollup",
+      trigger_type: "CONTINUOUS",
+      paused: "false",
+      creator_user_name: "someone@example.com",
+      change_time: "2026-11-05T09:00:00.000Z",
+    };
+    const { saves } = renderMap(EXAMPLE_DOCUMENT, applies, { queries: (call) => (call.key === "region_jobs" ? { rows: [picked] } : null) });
+    await box("orders_ingest (Unknown, switched off)");
+    await user.click(screen.getByRole("button", { name: "Add job" }));
+    // The workspace picker, then the job form in create mode with the pick.
+    const picker = await screen.findByRole("dialog", { name: "Add from workspace" });
+    await user.type(within(picker).getByRole("searchbox", { name: "Search jobs by name" }), "billing");
+    await user.click(await within(picker).findByRole("button", { name: "Add Nightly Billing Rollup from example-prod" }));
+    const sheet = await screen.findByRole("dialog", { name: "Add job" });
+    expect(within(sheet).getByLabelText("Job name")).toHaveValue("nightly_billing_rollup");
+    const save = within(sheet).getByRole("button", { name: "Add job" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.click(save);
+
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toMatchObject({
+      baseVersion: 3,
+      change: { kind: "upsert", target: { type: "job", name: "nightly_billing_rollup" }, value: { job_name: "nightly_billing_rollup", job_ids: ["345678901234567"] } },
+    });
+    expect(await screen.findByText("Saved version 4: Added job nightly_billing_rollup.")).toBeInTheDocument();
+    // The new job's box is on the map, selected, with its side panel open, and it has focus.
+    const added = await box("nightly_billing_rollup (Unknown)");
+    await waitFor(() => expect(added).toHaveAttribute("data-highlight", "selected"));
+    expect(screen.getByRole("region", { name: "nightly_billing_rollup" })).toBeInTheDocument();
+    await waitFor(() => expect(added).toHaveFocus());
+    // Adding a job is not a map action Undo takes back.
+    expect(screen.getByRole("button", { name: "Nothing to undo" })).toHaveAttribute("aria-disabled", "true");
   });
 });

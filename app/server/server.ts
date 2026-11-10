@@ -4,6 +4,7 @@ import { genieConversations, registerCopilotNotSetUp, registerCopilotRoutes } fr
 import { schemaErrorLog, schemaGate } from "./db/schema";
 import { registerIdentityRoutes } from "./identity";
 import { registerJobListRoutes } from "./joblist/routes";
+import { registerMapLayoutRoutes } from "./maplayout/routes";
 import { scanNowJobs } from "./scan/jobs-plugin";
 import { registerScanRoutes } from "./scan/routes";
 
@@ -35,6 +36,7 @@ await createApp({
       registerIdentityRoutes(app);
       registerAppConfigRoute(app, appkit);
       registerJobListRoutes(app, { pool: appkit.lakebase.pool, ready: () => schema.ready() });
+      registerMapLayoutRoutes(app, { pool: appkit.lakebase.pool, ready: () => schema.ready() });
       if (genieSpaceId) registerCopilotRoutes(app, { conversations: genieConversations(appkit, genieSpaceId) });
       else registerCopilotNotSetUp(app);
       registerScanRoutes(app);

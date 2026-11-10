@@ -1,8 +1,18 @@
 import { Skeleton, Tooltip, TooltipContent, TooltipTrigger } from "@databricks/appkit-ui/react";
-import { BaseEdge, type EdgeProps, Handle, type NodeProps, Position, getSmoothStepPath } from "@xyflow/react";
-import { CircleHelp, Server } from "lucide-react";
+import {
+  BaseEdge,
+  type ConnectionLineComponentProps,
+  EdgeLabelRenderer,
+  type EdgeProps,
+  Handle,
+  type NodeProps,
+  Position,
+  getBezierPath,
+  getSmoothStepPath,
+} from "@xyflow/react";
+import { CircleHelp, Server, X } from "lucide-react";
 import type { ReactElement } from "react";
-import type { EdgeLine, LayoutDirection } from "../../lib/graph";
+import type { EdgeLine, GraphEdge, LayoutDirection } from "../../lib/graph";
 import { type Status, statusTone } from "../../lib/status";
 import { cn } from "../../lib/utils";
 import { TONE_CHIP } from "../monitoring/format";
@@ -16,6 +26,7 @@ import {
   LINE_DASH,
   LINE_FLOW,
   type LinkFlowEdge,
+  type MapFlowNode,
   type NodeHighlight,
   SCHEDULE_ICON,
   STATUS_LABEL,
@@ -23,6 +34,7 @@ import {
   type ServiceFlowNode,
   TONE_TILE,
   boxLabel,
+  linkLabel,
 } from "./mapModel";
 
 /** The card's frame for each highlight: border, ring and opacity. */
@@ -59,23 +71,63 @@ function portEmphasis(highlight: NodeHighlight): PortEmphasis {
   return highlight === "candidate" ? "strong" : "rest";
 }
 
-interface PortsProps {
-  direction: LayoutDirection;
-  highlight: NodeHighlight;
+/**
+ * When the ports show: always on a selected card; else on hover, while the
+ * card has focus, and on the port a link drag starts from or snaps to.
+ */
+function portVisibility(highlight: NodeHighlight): string {
+  if (highlight === "selected" || highlight === "source") return "opacity-100";
+  // The ports sit outside the card, so they fade with a faded card here.
+  const faded = highlight === "dimmed" || highlight === "unavailable";
+  return cn(
+    "opacity-0 group-focus-within:opacity-100 [&.connectingfrom]:opacity-100 [&.connectingto]:opacity-100",
+    faded ? "group-hover:opacity-35" : "group-hover:opacity-100",
+  );
 }
 
-/** The in and out ports: small circles at the middle of the left and right sides, or of the top and bottom. */
-function Ports({ direction, highlight }: PortsProps) {
+interface PortsProps {
+  /** The box's name, which names its ports. */
+  name: string;
+  direction: LayoutDirection;
+  highlight: NodeHighlight;
+  /** True when a link can be dragged from or to the ports. */
+  connectable: boolean;
+}
+
+/**
+ * The in and out ports: small circles at the middle of the left and right
+ * sides, or of the top and bottom. A link is dragged from a box's port to
+ * another box. The in port is named "Link to <name>", the out port "Link from
+ * <name>". They sit over the card's edge, with a little room around them, so a
+ * press on any part of a port starts a link.
+ */
+function Ports({ name, direction, highlight, connectable }: PortsProps) {
   const className = cn(
-    "size-2 min-h-0 min-w-0 rounded-full border-[1.5px] bg-card transition-[border-color,opacity] duration-150 motion-reduce:transition-none",
+    "z-10 size-2 min-h-0 min-w-0 rounded-full border-[1.5px] bg-card transition-[border-color,opacity] duration-150 motion-reduce:transition-none",
+    "before:absolute before:-inset-1.5 before:rounded-full before:content-['']",
     PORT[portEmphasis(highlight)],
-    // The ports sit outside the card, so they fade with it here.
-    (highlight === "dimmed" || highlight === "unavailable") && "opacity-35",
+    portVisibility(highlight),
   );
   return (
     <>
-      <Handle type="target" position={direction === "LR" ? Position.Left : Position.Top} isConnectable={false} className={className} />
-      <Handle type="source" position={direction === "LR" ? Position.Right : Position.Bottom} isConnectable={false} className={className} />
+      <Handle
+        id="in"
+        type="target"
+        position={direction === "LR" ? Position.Left : Position.Top}
+        isConnectable={connectable}
+        role="img"
+        aria-label={`Link to ${name}`}
+        className={className}
+      />
+      <Handle
+        id="out"
+        type="source"
+        position={direction === "LR" ? Position.Right : Position.Bottom}
+        isConnectable={connectable}
+        role="img"
+        aria-label={`Link from ${name}`}
+        className={className}
+      />
     </>
   );
 }
@@ -166,7 +218,7 @@ function CardTooltip({ name, meta, children }: CardTooltipProps) {
  * status chip at the right. A CRITICAL job has a marker on its tile; a job
  * switched off everywhere is dimmed, with an Off chip.
  */
-export function JobNode({ data }: NodeProps<JobFlowNode>) {
+export function JobNode({ data, isConnectable }: NodeProps<JobFlowNode>) {
   const { box, highlight, statusLoading, direction, facts } = data;
   const tone = box.listed ? statusTone(box.status) : "muted";
   const Icon = facts ? SCHEDULE_ICON[facts.schedule] : CircleHelp;
@@ -174,7 +226,7 @@ export function JobNode({ data }: NodeProps<JobFlowNode>) {
   if (facts) meta = facts.owner ? `${facts.owner} · ${SCHEDULE_LABEL[facts.schedule]}` : SCHEDULE_LABEL[facts.schedule];
   return (
     <>
-      <Ports direction={direction} highlight={highlight} />
+      <Ports name={box.name} direction={direction} highlight={highlight} connectable={isConnectable} />
       <CardTooltip name={box.name} meta={meta}>
         <button
           type="button"
@@ -223,11 +275,11 @@ export function JobNode({ data }: NodeProps<JobFlowNode>) {
 }
 
 /** A service: a narrower, rounder card in a neutral tone, with a service icon, its name and a "Service" caption. */
-export function ServiceNode({ data }: NodeProps<ServiceFlowNode>) {
+export function ServiceNode({ data, isConnectable }: NodeProps<ServiceFlowNode>) {
   const { box, highlight, direction } = data;
   return (
     <>
-      <Ports direction={direction} highlight={highlight} />
+      <Ports name={box.name} direction={direction} highlight={highlight} connectable={isConnectable} />
       <CardTooltip name={box.name} meta="Service">
         <button
           type="button"
@@ -305,6 +357,53 @@ function EdgeTag({ x, y, tone, dimmed }: EdgeTagProps) {
   );
 }
 
+interface RemoveButtonProps {
+  link: GraphEdge;
+  /** The middle of the line, on the canvas. */
+  x: number;
+  y: number;
+  saving: boolean;
+  onRemove: () => void;
+}
+
+/**
+ * The × at the middle of a selected line: it removes the link. Its z-index
+ * puts it over the selected line, whose layer React Flow raises (zIndex 1), so
+ * the line's wide hit area does not take the click.
+ */
+function RemoveButton({ link, x, y, saving, onRemove }: RemoveButtonProps) {
+  return (
+    <EdgeLabelRenderer>
+      <Tooltip delayDuration={300}>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={`Remove the link: ${linkLabel(link)}`}
+            disabled={saving}
+            // nodrag and nopan: pressing the × neither drags nor pans the map.
+            className={cn(
+              "nodrag nopan pointer-events-auto absolute top-0 left-0 z-10 grid size-5 cursor-pointer place-items-center rounded-full border border-primary bg-card text-primary",
+              "shadow-[0_1px_3px_rgb(27_49_57/0.15)] transition-colors duration-150 hover:bg-primary hover:text-primary-foreground motion-reduce:transition-none",
+              "outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring focus-visible:outline-solid",
+              "disabled:cursor-not-allowed disabled:opacity-50",
+            )}
+            // The line's middle moves with the boxes, so the × is placed where it is now.
+            style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)` }}
+            onClick={(event) => {
+              // The click stays with the ×: on the line it would select the line again.
+              event.stopPropagation();
+              onRemove();
+            }}
+          >
+            <X className="size-3" strokeWidth={2.5} aria-hidden="true" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="top">Remove link</TooltipContent>
+      </Tooltip>
+    </EdgeLabelRenderer>
+  );
+}
+
 /**
  * A link: a rounded orthogonal line with a closed arrowhead at the dependent
  * end. Job links are solid, child-job links dashed with a "child" label, and
@@ -312,13 +411,14 @@ function EdgeTag({ x, y, tone, dimmed }: EdgeTagProps) {
  * accent and flow; its upstream path turns dark neutral; the rest fade. A link
  * with keyboard focus turns the focus color and wider, even when faded: its
  * <g> is the "group" (the edge's className), and these classes beat React
- * Flow's own focus style, which sits in the components layer.
+ * Flow's own focus style, which sits in the components layer. A line selected
+ * with a pointer has a × at its middle, which removes it.
  */
 export function LinkEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, selected, interactionWidth }: EdgeProps<LinkFlowEdge>) {
   const [path, labelX, labelY] = getSmoothStepPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition, borderRadius: 12, offset: 18 });
   const highlight = data?.highlight ?? "none";
   const lineStyle = data?.link.line ?? "solid";
-  // `selected` is the link whose menu is open.
+  // `selected` is the line selected with a pointer, or the link whose menu is open.
   let tone: ArrowTone = lineStyle === "dotted" ? "light" : "neutral";
   if (selected === true || highlight === "downstream") tone = "accent";
   else if (highlight === "upstream") tone = "dark";
@@ -341,8 +441,15 @@ export function LinkEdge({ id, sourceX, sourceY, targetX, targetY, sourcePositio
         )}
       />
       {lineStyle === "dashed" ? <EdgeTag x={labelX} y={labelY} tone={tone} dimmed={highlight === "dimmed"} /> : null}
+      {data?.onRemove ? <RemoveButton link={data.link} x={labelX} y={labelY} saving={data.saving ?? false} onRemove={data.onRemove} /> : null}
     </>
   );
+}
+
+/** A link while it is dragged: a dashed line in the accent, from the port it started at to the pointer. */
+export function DraftLine({ fromX, fromY, toX, toY, fromPosition, toPosition }: ConnectionLineComponentProps<MapFlowNode>) {
+  const [path] = getBezierPath({ sourceX: fromX, sourceY: fromY, sourcePosition: fromPosition, targetX: toX, targetY: toY, targetPosition: toPosition });
+  return <path d={path} fill="none" className="stroke-primary [stroke-dasharray:6_4] [stroke-width:2]" />;
 }
 
 const ARROW_FILL: Record<ArrowTone, string> = {

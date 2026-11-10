@@ -4,7 +4,7 @@ import { withRetry } from "./retry";
 /**
  * The app's own Postgres schema. The deployed app's service principal creates
  * it on first start, so it owns it. Genie keeps the copilot's conversations, so
- * the only table is the job list's version history.
+ * the tables are the job list's version history and the map's box positions.
  *
  * After a plain teardown and a new deploy, the app has a new service principal
  * and the kept schema belongs to another role: the teardown removes the old
@@ -24,6 +24,14 @@ CREATE TABLE IF NOT EXISTS watchdog_app.job_list_versions (
   change_target  TEXT,
   summary        TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS watchdog_app.map_layout (
+  seq BIGINT PRIMARY KEY,
+  direction TEXT NOT NULL CHECK (direction IN ('LR', 'TB')),
+  kind TEXT NOT NULL CHECK (kind IN ('move', 'reset')),
+  node_key TEXT, x DOUBLE PRECISION, y DOUBLE PRECISION,
+  updated_by TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((kind = 'move' AND node_key IS NOT NULL AND x IS NOT NULL AND y IS NOT NULL)
+      OR (kind = 'reset' AND node_key IS NULL AND x IS NULL AND y IS NULL)));
 `;
 
 /** Any fixed number: two app instances starting at once create the schema one after the other. */
