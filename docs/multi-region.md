@@ -183,18 +183,21 @@ If notebook 11 says the schema belongs to another role (the old app's service pr
 ### Check the handover after a redeploy
 
 1. Read what the access job did: notebook 11's one line, in the job run (`databricks bundle run watchdog_app_access -t <target>` prints its link). Serverless retries a task after an internal error, so when the run shows more than one attempt, the line is in the last one. It says it gave the new service principal access, or that the app already has access or owns the schema, and whether it dropped AppKit's cache schema. If it says the schema belongs to another role, follow the paragraph above.
-2. Open the app's Job list. It should show the kept versions, not "The app has no access to its job list in Lakebase".
+2. Open the app's Job list. It should show the kept versions, not "The app has no access to its job list in Lakebase". Open the Dependency map too. It should not say "Saved positions couldn't load".
 3. In the Lakebase SQL editor on the branch, as the deploying identity, check the owners and the new app's rights. `<client ID>` is the new app's `service_principal_client_id` from `databricks apps get <app name>`:
 
    ```sql
    SELECT nspname, pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname IN ('watchdog_app', 'appkit');
+   SELECT tablename, tableowner FROM pg_tables WHERE schemaname = 'watchdog_app';
    SELECT has_schema_privilege('<client ID>', 'watchdog_app', 'USAGE') AS can_use,
           has_schema_privilege('<client ID>', 'watchdog_app', 'CREATE') AS can_create,
           has_table_privilege('<client ID>', 'watchdog_app.job_list_versions', 'SELECT') AS can_read,
-          has_table_privilege('<client ID>', 'watchdog_app.job_list_versions', 'INSERT') AS can_write;
+          has_table_privilege('<client ID>', 'watchdog_app.job_list_versions', 'INSERT') AS can_write,
+          has_table_privilege('<client ID>', 'watchdog_app.map_layout', 'SELECT') AS can_read_layout,
+          has_table_privilege('<client ID>', 'watchdog_app.map_layout', 'INSERT') AS can_write_layout;
    ```
 
-   All four should be true. The owner of `watchdog_app` should be the identity that ran the teardown (or the new app, if it created the schema), and `appkit` should be missing or owned by the client ID.
+   All six should be true. The owner of `watchdog_app` should be the identity that ran the teardown (or the new app, if it created the schema), and `appkit` should be missing or owned by the client ID. Both tables should belong to the schema's owner, or `map_layout` to the client ID when the new app created it. When the two `map_layout` columns are false and `map_layout` belongs to another identity, teardowns ran as two identities (see [the app's known gaps](app.md#known-gaps)): the access job cannot grant on a table that identity owns, but that identity can, with `GRANT SELECT, INSERT ON watchdog_app.map_layout TO "<client ID>"`.
 4. Restart the app once (`databricks bundle run watchdog_app -t <target>`). Its log should then have no `Migration step ... failed` line from AppKit's cache.
 
 If a check fails, the handover did not go as described here: keep step 1's line and step 3's owners for the report.

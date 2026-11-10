@@ -20,15 +20,15 @@ The map page shows the monitored jobs and the services they need as cards, and e
 - **Add.** Add job opens the workspace picker, then the job editor. Once the job saves, its card is selected.
 - **Remove.** Click a line, then its ×, or press Delete, to remove a link. Remove from Watchdog in the side panel removes a job after a confirm.
 - **Tidy up.** Puts back the automatic layout of the direction on screen, for everyone.
-- **Undo.** Takes back your own moves, Tidy ups and link changes on the map, newest first, up to 20. Ctrl+Z or Cmd+Z does the same, except in a text field. Undoing a link change saves a new version. Undo starts empty each time the page opens. Settings saves are not on it, because the change log can restore them.
+- **Undo.** Takes back your own moves, Tidy ups and link changes on the map, newest first, up to 20. Ctrl+Z or Cmd+Z does the same, except in a text field, in the side panel, while a dialog is open, and outside the map page. Undoing a link change saves a new version. Undo starts empty each time the page opens. Settings saves are not on the Undo stack.
 
 ## The copilot
 
 The copilot page asks the Genie space in plain language. Each answer is one card.
 
 - **Charts, numbers and tables.** Each query in an answer opens as a chart, a single number or a table. A chart never defaults to a pie. A person can switch the chart type, and pie and donut stay in the menu when the rows are parts of a whole. A list of categories where every row has the same number opens as a table, and so does an answer whose x values repeat, such as two jobs on each day. A steady daily series stays a chart.
-- **Table and CSV.** Every answer has a table of its rows, and a button that downloads them as a CSV file. Show SQL opens the query Genie ran, and who it ran as.
-- **Feedback.** Each finished answer has Good answer and Bad answer buttons. A click goes to Genie through `POST /api/copilot/feedback`, as the signed-in person. Clicking the pressed button again clears the rating. A reopened chat shows the rating Genie holds.
+- **Table and CSV.** A chart can switch to a table of its rows, and a single-number answer shows the number, with no table. Every answer with rows has a button that downloads them as a CSV file. When Genie returned only part of a result, a line under the table says so. Show SQL opens the query Genie ran, and who it ran as.
+- **Feedback.** Each finished answer has Good answer and Bad answer buttons. A click goes to Genie through `POST /api/copilot/feedback`, as the signed-in person. Clicking the pressed button again clears the rating. A reopened chat starts unrated, because AppKit 0.84.0 does not pass on the rating Genie holds.
 
 ## Run it locally
 

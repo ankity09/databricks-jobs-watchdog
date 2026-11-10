@@ -12,7 +12,7 @@ Browser (the person signed in)
   v
 watchdog-app (a Node server and a React page)
   |- Monitoring ------- SQL warehouse, as the person --> findings_latest, findings, config_loads
-  |- Jobs and deps ---- Lakebase, as the app ---------> watchdog_app.job_list_versions
+  |- Jobs and deps ---- Lakebase, as the app ---------> watchdog_app.job_list_versions, watchdog_app.map_layout
   |    '- job picker --- SQL warehouse, as the person --> system.lakeflow.jobs, system.access.workspaces_latest
   |- Copilot ---------- Genie agent, as the person ----> the six Watchdog tables
   '- Scan now --------- Jobs API, as the app ----------> starts watchdog_scan
@@ -53,7 +53,14 @@ This section edits the job list. It has four pages.
 
 - **Job list.** The jobs the Watchdog monitors, with their schedule type, limits, severity, owner, environments, an Enabled switch and live status. Add job, edit a job, switch it off or delete it in a side form; rule errors show next to the field as you type. Deleting a job also removes its dependency links, and the confirmation names them. Import YAML and Export YAML are here too.
 - **Add from workspace.** Searches the real jobs in the region and fills the form with the job's name, job ID and schedule type. The job picker lists up to 100 jobs whose name contains your text. While you type a name pattern in the form, it lists the real jobs the pattern matches (up to 50) and says when a pattern matches nothing. When a job has job IDs, the scan finds it by ID, so the preview says so.
-- **Dependency map.** Jobs and services as boxes and dependencies as arrows, colored by current status. To add a link, click Add link, pick two boxes and choose the type: `job`, `child_job` or `service`. Click a link to remove it. Add a service for a dependency that is not a job. [data-model.md](data-model.md#job_dependencies) explains the three types.
+- **Dependency map.** Jobs and services as cards and dependencies as arrows, colored by current status. Select a card to see what a failure there affects downstream and what it depends on upstream. A link or settings change saves a new version of the job list, as on the Job list; moving cards saves only the layout.
+  - **Move.** Drag a card, or select it and press the arrow keys. Shift moves it farther. Its spot is saved for everyone in `watchdog_app.map_layout`, and each direction (left to right, top to bottom) keeps its own layout.
+  - **Link.** Drag from a card's dot to another card, choose Job or Child job, and save the link. Add link does the same from the keyboard: pick two cards, then the type. Add service adds a service for a job that needs it. [data-model.md](data-model.md#job_dependencies) explains the three types: `job`, `child_job` and `service`.
+  - **Edit.** The side panel of a selected job edits its common settings: owner, severity, schedule type, the four limits and Monitored. Edit job opens the full job editor.
+  - **Add.** Add job opens the workspace picker, then the job editor. Once the job saves, its card is selected.
+  - **Remove.** Click a line, then its ×, or press Delete, to remove a link. Remove from Watchdog in the side panel removes a job after a confirm.
+  - **Tidy up.** Puts back the automatic layout of the direction on screen, for everyone.
+  - **Undo.** Takes back your own moves, Tidy ups and link changes on the map, newest first, up to 20. Ctrl+Z or Cmd+Z does the same, except in a text field, in the side panel, while a dialog is open, and outside the map page. Undoing a link change saves a new version. Settings saves are not on the Undo stack. Undo starts empty each time the page opens.
 - **Change log.** Every saved version, with who saved it, when, and a one-line summary. Open a version to see what it changed. The newest 50 load first; Load older versions shows more.
 - **Defaults and workspace labels.** The settings every job gets unless it sets its own, and the environment label of each workspace. These are the `defaults` and `workspaces` sections of the YAML file.
 
@@ -67,21 +74,21 @@ The app has two identities. The person signed in is the user. The app itself run
 
 | Who | What it does | What it needs |
 |---|---|---|
-| The person signed in | Every Monitoring query, the job picker and pattern preview, the config banner, the copilot's questions, and the list of that person's own copilot chats | `CAN USE` on the SQL warehouse; `SELECT` on the Watchdog schema; `SELECT` on `system.lakeflow.jobs` and `system.access.workspaces_latest`; `CAN RUN` on the copilot's Genie agent. [Who can use the app](multi-region.md#who-can-use-the-app) lists the grants. |
-| The app's service principal | Reads and writes the job list in Lakebase; reads the scan job's settings and its runs; starts `watchdog_scan` when someone clicks Scan now | The grants the bundle gives through the app's resources: Lakebase `CAN_CONNECT_AND_CREATE`, the scan job `CAN_MANAGE_RUN`, the warehouse `CAN_USE`, the Genie agent `CAN_RUN`. Nothing to do by hand. |
+| The person signed in | Every Monitoring query, the job picker and pattern preview, the config banner, the copilot's questions, the thumbs up or down sent to Genie on its answers, and the list of that person's own copilot chats | `CAN USE` on the SQL warehouse; `SELECT` on the Watchdog schema; `SELECT` on `system.lakeflow.jobs` and `system.access.workspaces_latest`; `CAN RUN` on the copilot's Genie agent. [Who can use the app](multi-region.md#who-can-use-the-app) lists the grants. |
+| The app's service principal | Reads and writes the job list and the map layout (`map_layout`) in Lakebase; reads the scan job's settings and its runs; starts `watchdog_scan` when someone clicks Scan now | The grants the bundle gives through the app's resources: Lakebase `CAN_CONNECT_AND_CREATE`, the scan job `CAN_MANAGE_RUN`, the warehouse `CAN_USE`, the Genie agent `CAN_RUN`. Nothing to do by hand. |
 | The scan job's identity (`watchdog_scan`) | When `scan.config_source` is `lakebase`, notebook 02 reads the newest saved version of the job list, with a short-lived database credential minted for it, over TLS that checks the server's certificate | Access to the app's Lakebase schema. The identity that deployed the bundle created the Lakebase project, so it has this. The job runs as that identity, in every target. |
 
 Things that follow from this table:
 
 - Because queries run as the person, two people can see different rows if their Unity Catalog grants differ. A person who cannot read a table gets a message that names it.
 - A scan started with Scan now still runs as the scan job's own identity, not as the app.
-- Saving the job list needs no grant for the person: the app's service principal writes it.
+- Saving the job list or moving a card on the map needs no grant for the person: the app's service principal writes both.
 - The copilot reads the job list as of the last scan load (the config tables), not your unsaved or unscanned edits.
 - There is no fallback for a workspace without user authorization. The app declares the scopes, and a workspace that does not allow them cannot deploy or start it. Running the queries as the service principal would show every user what the service principal can read, which defeats Unity Catalog's per-person access.
 
 ## What the app stores
 
-The app keeps one Postgres schema, `watchdog_app`, in the Lakebase project (`jobs-watchdog` by default), branch `production`, database `watchdog`. The app's service principal creates and owns it when the app first starts. It has one table:
+The app keeps one Postgres schema, `watchdog_app`, in the Lakebase project (`jobs-watchdog` by default), branch `production`, database `watchdog`. The app's service principal creates and owns it when the app first starts. It has two tables. The first is the job list's version history:
 
 ```sql
 CREATE TABLE watchdog_app.job_list_versions (
@@ -95,9 +102,31 @@ CREATE TABLE watchdog_app.job_list_versions (
 );
 ```
 
-The shape of `document` is described in [data-model.md](data-model.md#the-job-list-document). AppKit, the framework the app is built on, also keeps its query cache in a schema called `appkit` in the same database. It holds only cached query results.
+The shape of `document` is described in [data-model.md](data-model.md#the-job-list-document).
 
-The copilot's conversations are not stored in Lakebase. Genie keeps each person's conversations. The app stores nothing else.
+The second holds where people put the cards on the dependency map:
+
+```sql
+CREATE TABLE watchdog_app.map_layout (
+  seq         BIGINT PRIMARY KEY,                                -- 1, 2, 3 ..., given out under a lock
+  direction   TEXT NOT NULL CHECK (direction IN ('LR', 'TB')),   -- left to right, or top to bottom
+  kind        TEXT NOT NULL CHECK (kind IN ('move', 'reset')),   -- a reset is a Tidy up
+  node_key    TEXT,                                              -- job:<name> or service:<name>
+  x           DOUBLE PRECISION,                                  -- the card's spot
+  y           DOUBLE PRECISION,
+  updated_by  TEXT NOT NULL,                                     -- the signed-in person's email
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- A move names a card and its spot; a reset has none of the three.
+  CHECK ((kind = 'move' AND node_key IS NOT NULL AND x IS NOT NULL AND y IS NOT NULL)
+      OR (kind = 'reset' AND node_key IS NULL AND x IS NULL AND y IS NULL))
+);
+```
+
+`map_layout` only ever gets new rows. A move adds one row for each card moved, and Tidy up adds one `reset` row for its direction. A read takes the newest `move` row for each card, and ignores the rows older than that direction's newest `reset`. A card with no row keeps its automatic spot, and rows for cards that are no longer on the map are ignored. The rows are never updated or deleted because, after a teardown and a new deploy, the app's new service principal gets only `SELECT` and `INSERT` on the schema's tables (from the `watchdog_app_access` job), so an update or a delete would fail. For the same reason there is no sequence: the app gives out each `seq` under a lock. The table grows by one small row for each card moved. The layout is not versioned and is not in the change log; when two people move the same card, the last save wins.
+
+AppKit, the framework the app is built on, also keeps its query cache in a schema called `appkit` in the same database. It holds only cached query results.
+
+The copilot's conversations, and the thumbs up or down on its answers, are not stored in Lakebase. Genie keeps them.
 
 ## How job-list versions work
 
@@ -127,12 +156,17 @@ A banner on the Job list and the Dependency map tells you which job list the sca
 
 ## The copilot
 
-The copilot is a Genie agent that the bundle creates over the six Watchdog tables and the `findings_latest` view. People ask it questions in plain language, such as "What is failing right now?", "Which jobs missed their schedule?" or "What breaks if orders_ingest fails?". The Copilot page offers four starting questions.
+The copilot is a Genie agent that the bundle creates over the six Watchdog tables and the `findings_latest` view. People ask it questions in plain language, such as "What is failing right now?", "Which jobs missed their schedule?" or "What breaks if orders_ingest fails?".
+
+A new chat opens on a welcome view. It asks "What do you want to know?", says that answers come from the Watchdog tables and run as you, and offers four starter questions as cards, above the box where you type your own.
 
 What it does:
 
-- It writes a SQL query, runs it as the person asking, and answers in plain language: what failed, when, the likely cause, what it affects and the next step, with the run link when there is one.
-- Each answer can show the SQL it ran, who it ran as, and a small table of the rows. Each answer is marked "AI-generated. Check before acting."
+- It writes a SQL query, runs it as the person asking, and answers in plain language: what failed, when, the likely cause, what it affects and the next step, with the run link when there is one. Each answer is one card, with Genie's suggested follow-up questions as chips under it.
+- **Charts, numbers and tables.** Each query in an answer opens as a chart, a single number or a table. A chart never defaults to a pie: you can switch the chart type, and pie and donut stay in the menu when the rows are parts of a whole. A long list of categories (more than 50), a list of categories with the same number in every row, and an answer whose x values repeat (such as two jobs on each day) open as a table. A steady daily series stays a chart. A single number shows large, with no table. With reduced motion on, charts draw without animation.
+- **Table and CSV.** A chart can switch to the Table view of its rows, which shows up to 50 of them, with status words as the app's status labels; "Showing 50 of N rows" says when there are more. When Genie returned only part of a result, a line under the table says so. CSV downloads every row the app has, in a file named after the query's title.
+- **The SQL.** Show SQL opens the query Genie ran, and who it ran as. Each answer is marked "AI-generated. Check before acting."
+- **Feedback.** Each finished answer has Good answer and Bad answer buttons. A click sends the rating to Genie, as the person signed in, and a second click on the pressed button clears it. A reopened chat starts unrated (see [Known gaps](#known-gaps)).
 - Genie keeps each person's conversations. The navigation bar lists the person's recent chats (the latest 20). Opening one shows the answers and the SQL again.
 - The Ask the copilot button in a job's detail panel opens a chat that already names the job.
 
@@ -143,7 +177,7 @@ What it cannot do:
 - It answers from the Watchdog tables only. It does not read other tables.
 - Like any AI answer it can be wrong. Open the SQL and check it before you act.
 
-The agent's instructions, sample questions and example queries are in [`resources/watchdog_copilot.genie.yml`](../resources/watchdog_copilot.genie.yml). The sample questions are also the Copilot page's suggested questions, so change both together. The agent needs a Pro or Serverless SQL warehouse.
+The agent's instructions, sample questions and example queries are in [`resources/watchdog_copilot.genie.yml`](../resources/watchdog_copilot.genie.yml). The sample questions are also the welcome view's starter questions, so change both together. The agent needs a Pro or Serverless SQL warehouse.
 
 ## Known gaps
 
@@ -151,6 +185,9 @@ These are not built. Each is a choice for this release, not a hidden fault.
 
 - **The scans run as the deploying identity.** The job runs as the identity that deployed the bundle, and that identity reads the job list from Lakebase. A scan job that runs as a different service principal needs a Postgres role and a grant for that principal first. That setup is not provided, so keep the deploying identity as the scan identity.
 - **Lakebase access is per app, not per person.** The app's service principal reads and writes the job list. Anyone who can open the app can edit it. The app records who saved each version, but it does not limit who can save. Limit who can open the app with `app.users_group`.
+- **The map's layout is shared by everyone who can open it.** Anyone who can open the map can rearrange the layout everyone sees, and Tidy up resets it for everyone. The app records who moved each card (`updated_by`), but it does not limit who can move them, and Undo only takes back your own changes.
+- **A reopened chat starts unrated.** AppKit 0.84.0 does not pass on the rating Genie holds for an answer, so a reopened chat shows no thumbs pressed, even on answers you rated. A new click still sends the rating.
+- **Run every teardown as one identity.** A teardown gives what the app's role owned to the identity that runs it. After teardowns by two identities, the schema and `job_list_versions` can belong to one and `map_layout` to the other, and the access job, which runs as one identity, cannot grant on a table the other owns: the map then shows its automatic layout, and moving cards is off. Run every teardown as the identity that deployed, as [Remove one region](multi-region.md#remove-one-region) says, and [check the handover](multi-region.md#check-the-handover-after-a-redeploy) after a redeploy.
 - **User authorization is required.** There is no mode that runs the queries as the app's service principal.
 - **One install per workspace.** The app name and the Lakebase project ID must be unique in a workspace, and the dev and demo targets do not add a prefix to them.
 - **A change with no effect still writes a version.** Saving a form without changing anything from the API adds a version. The forms stop the common case, the server does not.
