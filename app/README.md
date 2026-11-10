@@ -10,6 +10,18 @@ A Databricks App, built with [AppKit](https://developers.databricks.com/docs/app
 - `config/queries/`: the SQL the analytics plugin runs. A `.obo.sql` file runs as the signed-in person.
 - `app.yaml`: the start command, and the app resources each environment variable comes from.
 
+## The dependency map
+
+The map page shows the monitored jobs and the services they need as cards, and each link as an arrow. A link or settings change saves a new version of the job list, as on the Job list page. Moving cards only saves the layout.
+
+- **Move.** Drag a card, or select it and press the arrow keys. Shift moves it farther. Its spot is saved for everyone, in `watchdog_app.map_layout`, and each direction keeps its own layout.
+- **Link.** Drag from a card's dot to another card, choose Job or Child job, and save the link. Add link does the same from the keyboard. Add service adds a service for a job that needs it.
+- **Edit.** Select a job's card to change its common settings in the side panel. Edit job opens the full job editor.
+- **Add.** Add job opens the workspace picker, then the job editor. Once the job saves, its card is selected.
+- **Remove.** Click a line, then its ×, or press Delete, to remove a link. Remove from Watchdog in the side panel removes a job after a confirm.
+- **Tidy up.** Puts back the automatic layout of the direction on screen, for everyone.
+- **Undo.** Takes back your own moves, Tidy ups and link changes on the map, newest first, up to 20. Ctrl+Z or Cmd+Z does the same, except in a text field. Undoing a link change saves a new version. Undo starts empty each time the page opens. Settings saves are not on it, because the change log can restore them.
+
 ## Run it locally
 
 You need Node.js 22 or later, npm, and the Databricks CLI signed in to the workspace.

@@ -31,7 +31,7 @@ import {
   useReactFlow,
   useStore,
 } from "@xyflow/react";
-import { CircleAlert, Link2, Network, RotateCw, Server, X } from "lucide-react";
+import { CircleAlert, Link2, Network, Plus, RotateCw, Server, X } from "lucide-react";
 import {
   type FocusEvent,
   type KeyboardEvent,
@@ -47,6 +47,7 @@ import {
 } from "react";
 import { Link } from "react-router";
 import type { Change, JobEntry, RuleIssue } from "../../../../shared/joblist/types";
+import type { LayoutPosition } from "../../../../shared/maplayout/types";
 import { type ReloadJobList, type SaveOutcome, useJobList } from "../../hooks/useJobList";
 import { useLiveStatus } from "../../hooks/useLiveStatus";
 import { useBoxMoves, useMapLayout } from "../../hooks/useMapLayout";
@@ -68,6 +69,7 @@ import { proposeLink } from "../../lib/linkRules";
 import type { EntryJobIds } from "../../lib/picker";
 import { statusTone } from "../../lib/status";
 import { cn } from "../../lib/utils";
+import { AddFromWorkspaceDialog } from "./AddFromWorkspaceDialog";
 import { AddLinkDialog, AddServiceDialog } from "./AddLinkDialog";
 import { ConfigBanner } from "./ConfigBanner";
 import { JobEditorSheet } from "./JobEditorSheet";
@@ -94,6 +96,7 @@ import {
 import { DeleteJobDialog } from "./DeleteJobDialog";
 import { MapSidePanel } from "./MapSidePanel";
 import { MapToolbar, type MapToolbarProps } from "./MapToolbar";
+import { useMapUndo } from "./mapUndo";
 import { NewLinkCard } from "./NewLinkCard";
 import { PatternMatches } from "./PatternMatches";
 import { QueryProblemLine } from "./QueryProblemLine";
@@ -124,12 +127,19 @@ const ARROWS = new Map([
 const KEY_STEP = 10;
 const KEY_STEP_SHIFT = 50;
 
-/** The map has no undo stack yet, so Undo stays off. */
-const NO_UNDO = () => undefined;
-
 /** Whether a key went to something a person types in: a text field, a list, or editable text. */
-function typingIn(target: EventTarget): boolean {
+function typingIn(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])") !== null;
+}
+
+/** Ctrl+Z, or Cmd+Z: Undo. Not with Shift, which is redo elsewhere, nor with Alt. */
+function isUndoKey(event: globalThis.KeyboardEvent): boolean {
+  return (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "z";
+}
+
+/** Whether a dialog, the job editor, the link menu or the New link card is open: Undo's keys wait until it closes. */
+function overlayOpen(): boolean {
+  return document.querySelector('[role="dialog"], [role="alertdialog"]') !== null;
 }
 
 /** The link a key or a focus went to, by its ID; null when it went to anything else. */
@@ -195,15 +205,21 @@ function edgeRect(container: HTMLElement | null, edgeId: string, fallback: DOMRe
 /**
  * Where focus goes when what had it goes away: a link (its menu closed), a box,
  * the side panel, or the map itself. Radix gives focus back only to a trigger,
- * and the map's menu and panel open without one.
+ * and the map's menu and panel open without one. "if-lost" moves focus only
+ * when it went with what was removed, such as a line an undo took away.
  */
-type FocusTarget = { kind: "link" | "box"; id: string } | { kind: "panel" } | { kind: "map" };
+type FocusTarget = { kind: "link" | "box"; id: string } | { kind: "panel" } | { kind: "map" } | { kind: "if-lost"; then: FocusTarget };
 
 function boxButton(container: HTMLElement | null, id: string): HTMLButtonElement | null {
   return mapElement(container, "node", id)?.querySelector("button") ?? null;
 }
 
 function focusOn(container: HTMLElement | null, panel: HTMLElement | null, target: FocusTarget): void {
+  if (target.kind === "if-lost") {
+    const active = document.activeElement;
+    if (active === null || active === document.body || !active.isConnected) focusOn(container, panel, target.then);
+    return;
+  }
   let element: HTMLElement | SVGElement | null = null;
   if (target.kind === "link") element = mapElement(container, "edge", target.id);
   else if (target.kind === "box") element = boxButton(container, target.id);
@@ -228,6 +244,14 @@ function focusAfterRemoving(graph: Graph, edgeId: string): FocusTarget {
 function staysWithout(graph: Graph, edgeId: string, nodeId: string): boolean {
   if (graph.nodes.some((n) => n.id === nodeId && n.kind === "job" && n.listed)) return true;
   return graph.edges.some((e) => e.id !== edgeId && (e.source === nodeId || e.target === nodeId));
+}
+
+/** Each moving box's spot before its move, for Undo: where the map draws it now, its saved spot or its automatic one. */
+function spotsOf(graph: Pick<Graph, "nodes"> | null, moves: LayoutPosition[]): LayoutPosition[] {
+  return moves.flatMap(({ nodeKey }) => {
+    const box = graph?.nodes.find((n) => n.id === nodeKey);
+    return box ? [{ nodeKey, x: box.position.x, y: box.position.y }] : [];
+  });
 }
 
 /** The selection's chain: what a failure there affects (downstream) and what it depends on (upstream). */
@@ -354,7 +378,9 @@ function patternPreview(pattern: string, exclude: string, jobIds: EntryJobIds): 
  * remove it. Every edit saves one change through useJobList, so conflicts and
  * rule errors come back as alerts. Dragging a card, or the arrow keys on a
  * selected one, moves it: its spot is saved for everyone (useMapLayout), never
- * as a version of the job list.
+ * as a version of the job list. Add job adds a job picked from the workspace,
+ * and Undo takes back the person's own moves, Tidy ups and link changes
+ * (useMapUndo).
  */
 export function DependencyMapPage() {
   const { state, loading, error, reload, save } = useJobList();
@@ -367,9 +393,8 @@ export function DependencyMapPage() {
   const [showServices, setShowServices] = useState(true);
   // The boxes' saved spots for this direction, shared by everyone; boxes move only once they are in.
   const layout = useMapLayout(direction);
-  const moves = useBoxMoves(layout.move);
   const canMove = layout.status === "ready";
-  // Counts the Tidy ups, after which the view fits the automatic layout.
+  // Counts the Tidy ups and their undos, after which the view fits the layout again.
   const [tidies, setTidies] = useState(0);
   // Laid out again only when the list, the statuses, the direction or the services switch change, never on a selection.
   const automatic = useMemo(
@@ -394,6 +419,9 @@ export function DependencyMapPage() {
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
   const [dropped, setDropped] = useState<DroppedLink | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  // Add job: the workspace picker is open, then the job editor with the picked job's draft.
+  const [picking, setPicking] = useState(false);
+  const [adding, setAdding] = useState<JobEntry | null>(null);
   // The job whose Remove from Watchdog is asking to confirm.
   const [removing, setRemoving] = useState<string | null>(null);
   // A job someone else deleted while its editor was open, for the line that says so.
@@ -412,6 +440,7 @@ export function DependencyMapPage() {
   // The card of the job being edited, kept when Edit job is pressed: focus goes there if the panel closed meanwhile.
   const editedCardRef = useRef<HTMLElement | null>(null);
   const bannerRef = useRef<HTMLDivElement>(null);
+  const addJobRef = useRef<HTMLButtonElement>(null);
   const addLinkRef = useRef<HTMLButtonElement>(null);
   const addServiceRef = useRef<HTMLButtonElement>(null);
   const anchor = useRef<Measurable>({ getBoundingClientRect: () => rect(0, 0) });
@@ -447,6 +476,8 @@ export function DependencyMapPage() {
   }
   // When the editor closes: Edit job, else the job's card (the panel closed meanwhile), else the map.
   const editorReturnFocus = useMemo<ReturnFocus>(() => [editRef, editedCardRef, mapRef], []);
+  // When Add job's picker or editor closes without a save: Add job, else the map. A save focuses the new job's box.
+  const addJobReturnFocus = useMemo<ReturnFocus>(() => [addJobRef, mapRef], []);
 
   // Moves focus on when a change takes away what had it.
   useEffect(() => {
@@ -479,6 +510,49 @@ export function DependencyMapPage() {
     [save],
   );
 
+  /**
+   * Saves the change an undo makes to the job list. A link it removes lets go of its ×, and when focus went with the
+   * line or a box, it moves to what stays, as after Remove link. Focus anywhere else stays put.
+   */
+  const saveUndoChange = async (change: Change): Promise<boolean> => {
+    const removed = change.kind === "delete" && change.target.type === "dependency" ? change.target.key : null;
+    const after = removed !== null && graph ? focusAfterRemoving(graph, removed) : null;
+    const saved = await runSave(change, version);
+    if (saved && removed !== null) {
+      setSelectedEdge((current) => (current === removed ? null : current));
+      if (after) setRefocus({ kind: "if-lost", then: after });
+    }
+    return saved;
+  };
+
+  // Undo: the person's own moves, Tidy ups and link changes on this map, this session.
+  const history = useMapUndo({
+    direction,
+    layout,
+    links: allEdges,
+    saving,
+    saveChange: saveUndoChange,
+    turn: setDirection,
+    onUndone: (action) => {
+      if (action.kind === "tidy") setTidies((n) => n + 1);
+    },
+  });
+  const recordAction = history.record;
+  // A drag or a key move is saved as a move Undo can take back, with each box's spot from before: where the map draws it.
+  const moves = useBoxMoves((positions) => history.move(positions, spotsOf(graph, positions)));
+
+  /** Undo: a key move still waiting for its save is dropped, and its box goes back; else the newest action is undone. */
+  const undo = () => {
+    if (moves.moving.size > 0) moves.cancel();
+    else history.undo();
+  };
+
+  /** Turns the map to the other direction; a key move still waiting is saved for the direction it was made in. */
+  const changeDirection = (next: LayoutDirection) => {
+    moves.flush();
+    setDirection(next);
+  };
+
   /** Saves the job editor's entry, the way the Job list does; the editor shows its own conflicts and issues. */
   const saveEntry = async (entry: JobEntry, baseVersion: number | null): Promise<SaveOutcome> => {
     const outcome = await save({ kind: "upsert", target: { type: "job", name: entry.job_name }, value: entry }, baseVersion);
@@ -502,26 +576,50 @@ export function DependencyMapPage() {
     return outcome;
   };
 
-  /** Saves a new link, from the New link card or the Add link dialog. True when the save worked. */
-  const addLink = (change: Change): Promise<boolean> => runSave(change, version);
+  /** Saves a job added from the map, the way the editor's edits save, then selects the new job's box and focuses it. */
+  const saveNewJob = async (entry: JobEntry, baseVersion: number | null): Promise<SaveOutcome> => {
+    const outcome = await saveEntry(entry, baseVersion);
+    if (outcome.ok) {
+      const id = jobNodeId(entry.job_name);
+      setLink({ step: "off" });
+      setMenuEdge(null);
+      setSelectedEdge(null);
+      setSelectedId(id);
+      setRefocus({ kind: "box", id });
+    }
+    return outcome;
+  };
 
   /**
-   * Removes a link, from its line (its × or Delete), its menu or the side panel, and moves focus to something that
-   * stays. True when the save worked.
+   * Saves a new link, from the New link card, the Add link dialog or the Add service dialog, as an action Undo can take
+   * back. True when the save worked.
+   */
+  const addLink = async (change: Change): Promise<boolean> => {
+    const saved = await runSave(change, version);
+    if (saved && change.target.type === "dependency") recordAction({ kind: "link-add", edgeKey: change.target.key });
+    return saved;
+  };
+
+  /**
+   * Removes a link, from its line (its × or Delete), its menu or the side panel, as an action Undo can take back, and
+   * moves focus to something that stays. True when the save worked.
    */
   const removeLink = useCallback(
     async (edgeId: string, from: "map" | "panel" = "map"): Promise<boolean> => {
       const panelStays = from === "panel" && graph !== null && selected !== null && staysWithout(graph, edgeId, selected.id);
       const after: FocusTarget = panelStays ? { kind: "panel" } : graph ? focusAfterRemoving(graph, edgeId) : { kind: "map" };
+      // Its fields, for Undo, which saves it again.
+      const edge = allEdges.find((e) => e.id === edgeId);
       const saved = await runSave(unlinkChange(edgeId), version);
       setMenuEdge(null);
       // The removed line lets go of its ×; a line still there after a failed save keeps it.
       if (saved) setSelectedEdge((current) => (current === edgeId ? null : current));
+      if (saved && edge) recordAction({ kind: "link-remove", edge });
       // When the save fails, the link is still there: focus goes back to where the removal started.
       setRefocus(saved ? after : from === "map" ? { kind: "link", id: edgeId } : { kind: "panel" });
       return saved;
     },
-    [graph, selected, runSave, version],
+    [graph, selected, allEdges, runSave, version, recordAction],
   );
 
   /** Opens a link's menu, which takes the place of the × of a line selected with a pointer. */
@@ -716,6 +814,19 @@ export function DependencyMapPage() {
     if (edgeId !== null) setSelectedEdge((current) => (current !== null && current !== edgeId ? null : current));
   };
 
+  // Ctrl+Z or Cmd+Z undoes from anywhere on the page, but not in a text field, which keeps its own undo, and not while
+  // a dialog, the job editor, the link menu or the New link card is open.
+  const onUndoKey = useEffectEvent((event: globalThis.KeyboardEvent) => {
+    if (!isUndoKey(event) || event.defaultPrevented || typingIn(event.target) || overlayOpen()) return;
+    event.preventDefault();
+    undo();
+  });
+  useEffect(() => {
+    const listener = (event: globalThis.KeyboardEvent) => onUndoKey(event);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
+
   const closeMenu = (returnFocus: boolean) => {
     if (returnFocus && menuEdge !== null) setRefocus({ kind: "link", id: menuEdge });
     setMenuEdge(null);
@@ -738,10 +849,10 @@ export function DependencyMapPage() {
     setDropped(null);
   };
 
-  /** Tidy up: the automatic layout again for this direction, for everyone, with the view fitted to it. */
+  /** Tidy up: the automatic layout again for this direction, for everyone, with the view fitted to it. Undo can take it back. */
   const tidy = () => {
     moves.cancel();
-    void layout.reset().then((done) => {
+    void history.tidy().then((done) => {
       if (done) setTidies((n) => n + 1);
     });
   };
@@ -750,6 +861,11 @@ export function DependencyMapPage() {
   const canLink = graph !== null && jobCount > 0 && graph.nodes.length >= 2;
   const headerActions = (
     <>
+      {/* The workspace picker, then the job editor with the picked job: as Add from workspace on the Job list. */}
+      <Button ref={addJobRef} variant="outline" size="sm" disabled={document === null || saving} onClick={() => setPicking(true)}>
+        <Plus aria-hidden="true" />
+        Add job
+      </Button>
       <Button
         ref={addLinkRef}
         variant={link.step === "off" ? "outline" : "default"}
@@ -859,19 +975,15 @@ export function DependencyMapPage() {
               <Toolbar
                 className="absolute top-3 left-3 z-10"
                 direction={direction}
-                onDirectionChange={(next) => {
-                  // A key move still waiting is saved for the direction it was made in.
-                  moves.flush();
-                  setDirection(next);
-                }}
+                onDirectionChange={changeDirection}
                 showServices={showServices}
                 onShowServicesChange={setShowServices}
                 onFitted={() => setFits((n) => n + 1)}
                 onTidy={tidy}
                 tidyDisabled={!canMove || layout.positions.length === 0}
-                onUndo={NO_UNDO}
-                undoDisabled
-                undoLabel="Nothing to undo"
+                onUndo={undo}
+                undoDisabled={history.disabled}
+                undoLabel={history.label}
               />
               <div className="absolute inset-0">
                 {/* Until the direction's saved spots are in, card skeletons: no box shows in a spot it is about to leave. The toolbar stays. */}
@@ -986,7 +1098,7 @@ export function DependencyMapPage() {
     <>
       <PageHeader
         title="Dependency map"
-        description="How the monitored jobs depend on each other and on services. Select a card to see what a failure there affects."
+        description="How the monitored jobs depend on each other and on services. Select a card to see what a failure there affects. Drag a card to move it, or drag from its dot to link it."
         actions={headerActions}
       />
       <ConfigBanner savedVersion={state ? state.version : undefined} />
@@ -1068,13 +1180,14 @@ export function DependencyMapPage() {
             saving={saving}
             returnFocus={[addServiceRef]}
             onSave={(change) =>
-              void runSave(change, version).then((saved) => {
+              void addLink(change).then((saved) => {
                 setServiceOpen(false);
                 // A new service shows on the map, even when the switch had hidden the services.
                 if (saved) setShowServices(true);
               })
             }
           />
+          <AddFromWorkspaceDialog open={picking} onOpenChange={setPicking} document={document} onPick={setAdding} returnFocus={addJobReturnFocus} />
         </>
       ) : null}
       {state && removing !== null ? (
@@ -1113,6 +1226,23 @@ export function DependencyMapPage() {
           renderPatternPreview={patternPreview}
           onReload={reload}
           returnFocus={editorReturnFocus}
+        />
+      ) : null}
+      {/* Add job's editor, opened by a pick in the workspace picker. A save selects the new job's box. */}
+      {state ? (
+        <JobEditorSheet
+          open={adding !== null}
+          onOpenChange={(open) => {
+            if (!open) setAdding(null);
+          }}
+          mode="create"
+          initial={adding ?? { job_name: "" }}
+          document={state.document}
+          version={state.version}
+          onSave={saveNewJob}
+          renderPatternPreview={patternPreview}
+          onReload={reload}
+          returnFocus={addJobReturnFocus}
         />
       ) : null}
     </>

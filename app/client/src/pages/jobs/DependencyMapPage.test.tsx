@@ -1723,4 +1723,217 @@ describe("DependencyMapPage", () => {
     expect(saves).toEqual([]);
     expect(link).toBeInTheDocument();
   });
+
+  it("Undo after a drag puts the box back", async () => {
+    const user = userEvent.setup();
+    const { container, saves, layoutSaves } = renderMap();
+    await box("orders_ingest (Unknown, switched off)");
+    const undo = screen.getByRole("button", { name: "Nothing to undo" });
+    expect(undo).toHaveAttribute("aria-disabled", "true");
+    const start = cornerOf(container, "job:orders_ingest");
+    dragBox(container, "job:orders_ingest", 120, 80);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    expect(cornerOf(container, "job:orders_ingest")).not.toEqual(start);
+    // Undo names what it takes back.
+    expect(undo).toHaveAccessibleName("Undo: move 1 box");
+    expect(undo).not.toHaveAttribute("aria-disabled");
+
+    await user.click(undo);
+    // The spot from before the move is saved again, and the box is back on it.
+    await waitFor(() => expect(layoutSaves).toHaveLength(2));
+    expect(layoutSaves[1]).toEqual({ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", ...start }] });
+    await waitFor(() => expect(cornerOf(container, "job:orders_ingest")).toEqual(start));
+    // The undo's own save is not an action: nothing is left to undo, and another press saves nothing.
+    await waitFor(() => expect(undo).toHaveAccessibleName("Nothing to undo"));
+    expect(undo).toHaveAttribute("aria-disabled", "true");
+    await user.click(undo);
+    await frames();
+    expect(layoutSaves).toHaveLength(2);
+    expect(saves).toEqual([]);
+  });
+
+  it("Undo after a dragged link saves one delete change", async () => {
+    const user = userEvent.setup();
+    const { container, saves } = renderMap();
+    const retries = await box("watchdog_demo_retries (Unknown)");
+    dragLink(container, dot("Link from watchdog_demo_slow"), retries);
+    const card = await screen.findByRole("dialog", { name: "New link" });
+    await user.click(within(card).getByRole("button", { name: "Save link" }));
+    const link = await box("watchdog_demo_retries depends on watchdog_demo_slow (job link)");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New link" })).toBeNull());
+    expect(screen.getByRole("button", { name: "Undo: add the link" })).toBeInTheDocument();
+
+    // Ctrl+Z from the box the link was dropped on, which has focus.
+    await waitFor(() => expect(retries).toHaveFocus());
+    fireEvent.keyDown(retries, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1]).toEqual({
+      baseVersion: 4,
+      change: { kind: "delete", target: { type: "dependency", key: "watchdog_demo_retries->watchdog_demo_slow:job" } },
+    });
+    await waitFor(() => expect(link).not.toBeInTheDocument());
+    expect(await screen.findByText("Saved version 5: Removed link watchdog_demo_retries -> watchdog_demo_slow (job).")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Nothing to undo" })).toHaveAttribute("aria-disabled", "true");
+    await frames();
+    expect(saves).toHaveLength(2);
+  });
+
+  it("Undo after removing a link saves the link again", async () => {
+    const { saves } = renderMap();
+    const name = "daily_revenue_export depends on daily_revenue_report (child job link)";
+    fireEvent.click(await box(name));
+    fireEvent.click(await screen.findByRole("button", { name: `Remove the link: ${name}` }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole("button", { name })).toBeNull());
+    expect(screen.getByRole("button", { name: "Undo: remove the link" })).toBeInTheDocument();
+
+    // Cmd+Z from the box that has focus after the removal.
+    const report = screen.getByRole("button", { name: "daily_revenue_report (Unknown, switched off)" });
+    await waitFor(() => expect(report).toHaveFocus());
+    fireEvent.keyDown(report, { key: "z", metaKey: true });
+    await waitFor(() => expect(saves).toHaveLength(2));
+    // The link comes back as it was, with its type and notes, as a new version.
+    expect(saves[1]).toEqual({
+      baseVersion: 4,
+      change: {
+        kind: "upsert",
+        target: { type: "dependency", key: "daily_revenue_export->daily_revenue_report:child_job" },
+        value: {
+          job_name: "daily_revenue_export",
+          depends_on: "daily_revenue_report",
+          dependency_type: "child_job",
+          notes: "daily_revenue_report starts it as its last task.",
+        },
+      },
+    });
+    expect(await box(name)).toBeInTheDocument();
+    expect(await screen.findByText(/^Saved version 5: Linked daily_revenue_export to daily_revenue_report/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Nothing to undo" })).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("Ctrl+Z in an input does nothing", async () => {
+    const user = userEvent.setup();
+    const { container, layoutSaves } = renderMap();
+    const ingest = await box("orders_ingest (Unknown, switched off)");
+    dragBox(container, "job:orders_ingest", 120, 80);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    const moved = cornerOf(container, "job:orders_ingest");
+    fireEvent.click(ingest);
+    const panel = await screen.findByRole("region", { name: "orders_ingest" });
+    const owner = within(panel).getByRole("textbox", { name: "Owner" });
+    await user.type(owner, "-ops");
+    // In a text field, Ctrl+Z and Cmd+Z are the field's own: the map saves nothing, and the box stays where it was dropped.
+    fireEvent.keyDown(owner, { key: "z", ctrlKey: true });
+    fireEvent.keyDown(owner, { key: "z", metaKey: true });
+    await frames();
+    expect(layoutSaves).toHaveLength(1);
+    expect(cornerOf(container, "job:orders_ingest")).toEqual(moved);
+    expect(owner).toHaveValue("ingestion-team-ops");
+    expect(screen.getByRole("button", { name: "Undo: move 1 box" })).toBeInTheDocument();
+
+    // From the box, Ctrl+Z takes the move back.
+    fireEvent.keyDown(ingest, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(layoutSaves).toHaveLength(2));
+  });
+
+  it("Ctrl+Z waits while the New link card is open", async () => {
+    const { container, saves, layoutSaves } = renderMap();
+    const retries = await box("watchdog_demo_retries (Unknown)");
+    dragBox(container, "job:orders_ingest", 120, 80);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    dragLink(container, dot("Link from watchdog_demo_slow"), retries);
+    const card = await screen.findByRole("dialog", { name: "New link" });
+    // From the card, and from the map outside it: Undo waits until the card closes.
+    fireEvent.keyDown(card, { key: "z", ctrlKey: true });
+    fireEvent.keyDown(retries, { key: "z", metaKey: true });
+    await frames();
+    expect(layoutSaves).toHaveLength(1);
+    expect(screen.getByRole("dialog", { name: "New link" })).toBe(card);
+
+    fireEvent.keyDown(card, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New link" })).toBeNull());
+    fireEvent.keyDown(retries, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(layoutSaves).toHaveLength(2));
+    expect(saves).toEqual([]);
+  });
+
+  it("Undo after Tidy up saves the spots from before again", async () => {
+    const user = userEvent.setup();
+    const { container, resets, layoutSaves } = renderMap(EXAMPLE_DOCUMENT, applies, {
+      layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] },
+    });
+    await box("orders_ingest (Unknown, switched off)");
+    await user.click(screen.getByRole("button", { name: "Tidy up" }));
+    await waitFor(() => expect(cornerOf(container, "job:orders_ingest")).toEqual(automaticSpot("job:orders_ingest")));
+    expect(resets).toEqual([{ direction: "LR" }]);
+    const undo = screen.getByRole("button", { name: "Undo: Tidy up" });
+    await frames();
+    flow.fitView.mockClear();
+
+    await user.click(undo);
+    await waitFor(() => expect(layoutSaves).toEqual([{ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] }]));
+    await waitFor(() => expect(cornerOf(container, "job:orders_ingest")).toEqual({ x: 2000, y: 1200 }));
+    // The view fits the spots it put back, as it does after a Tidy up.
+    await waitFor(() => expect(flow.fitView).toHaveBeenCalled());
+    expect(undo).toHaveAccessibleName("Nothing to undo");
+  });
+
+  it("Undo turns the map back to the direction a move was made in", async () => {
+    const user = userEvent.setup();
+    const { container, layoutSaves } = renderMap();
+    await box("orders_ingest (Unknown, switched off)");
+    const start = cornerOf(container, "job:orders_ingest");
+    dragBox(container, "job:orders_ingest", 120, 80);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    await user.click(screen.getByRole("radio", { name: "Top to bottom" }));
+    await waitFor(() => expect(cornerOf(container, "job:orders_enrich").y).toBeGreaterThan(cornerOf(container, "job:orders_ingest").y + 68));
+
+    // The move was made left to right: Undo turns the map back, then puts the box back there.
+    await user.click(screen.getByRole("button", { name: "Undo: move 1 box" }));
+    await waitFor(() => expect(layoutSaves).toHaveLength(2));
+    expect(layoutSaves[1]).toEqual({ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", ...start }] });
+    expect(screen.getByRole("radio", { name: "Left to right" })).toBeChecked();
+    await waitFor(() => expect(cornerOf(container, "job:orders_ingest")).toEqual(start));
+    expect(screen.getByRole("button", { name: "Nothing to undo" })).toBeInTheDocument();
+  });
+
+  it("Add job saves a new job and selects its box", async () => {
+    const user = userEvent.setup();
+    const picked = {
+      workspace_id: "1111111111111111",
+      workspace_name: "example-prod",
+      job_id: "345678901234567",
+      name: "Nightly Billing Rollup",
+      trigger_type: "CONTINUOUS",
+      paused: "false",
+      creator_user_name: "someone@example.com",
+      change_time: "2026-11-05T09:00:00.000Z",
+    };
+    const { saves } = renderMap(EXAMPLE_DOCUMENT, applies, { queries: (call) => (call.key === "region_jobs" ? { rows: [picked] } : null) });
+    await box("orders_ingest (Unknown, switched off)");
+    await user.click(screen.getByRole("button", { name: "Add job" }));
+    // The workspace picker, then the job form in create mode with the pick.
+    const picker = await screen.findByRole("dialog", { name: "Add from workspace" });
+    await user.type(within(picker).getByRole("searchbox", { name: "Search jobs by name" }), "billing");
+    await user.click(await within(picker).findByRole("button", { name: "Add Nightly Billing Rollup from example-prod" }));
+    const sheet = await screen.findByRole("dialog", { name: "Add job" });
+    expect(within(sheet).getByLabelText("Job name")).toHaveValue("nightly_billing_rollup");
+    const save = within(sheet).getByRole("button", { name: "Add job" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.click(save);
+
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toMatchObject({
+      baseVersion: 3,
+      change: { kind: "upsert", target: { type: "job", name: "nightly_billing_rollup" }, value: { job_name: "nightly_billing_rollup", job_ids: ["345678901234567"] } },
+    });
+    expect(await screen.findByText("Saved version 4: Added job nightly_billing_rollup.")).toBeInTheDocument();
+    // The new job's box is on the map, selected, with its side panel open, and it has focus.
+    const added = await box("nightly_billing_rollup (Unknown)");
+    await waitFor(() => expect(added).toHaveAttribute("data-highlight", "selected"));
+    expect(screen.getByRole("region", { name: "nightly_billing_rollup" })).toBeInTheDocument();
+    await waitFor(() => expect(added).toHaveFocus());
+    // Adding a job is not a map action Undo takes back.
+    expect(screen.getByRole("button", { name: "Nothing to undo" })).toHaveAttribute("aria-disabled", "true");
+  });
 });
