@@ -60,7 +60,7 @@ describe('chooseAnswerView', () => {
 
   it('a pie needs parts of a whole', () => {
     const negative = chooseAnswerView(parts(4, (i) => (i === 1 ? '-3' : '5')));
-    const many = chooseAnswerView(parts(9, () => '5'));
+    const many = chooseAnswerView(parts(9, (i) => String(i + 1)));
     for (const view of [negative, many]) {
       expect(view.kind).toBe('chart');
       if (view.kind !== 'chart') continue;
@@ -68,9 +68,25 @@ describe('chooseAnswerView', () => {
       expect(view.choices).not.toContain('pie');
       expect(view.choices).not.toContain('donut');
     }
-    const whole = chooseAnswerView(parts(4, () => '5'));
-    expect(whole.kind === 'chart' && whole.chartType).toBe('pie');
+    const whole = chooseAnswerView(parts(4, (i) => String(i + 2)));
+    expect(whole.kind === 'chart' && whole.choices).toContain('pie');
     expect(whole.kind === 'chart' && whole.choices).toContain('donut');
+  });
+
+  it("AppKit's pie becomes a bar by default, and pie stays in the menu", () => {
+    const view = chooseAnswerView(parts(4, (i) => String(i + 2)));
+    expect(view.kind).toBe('chart');
+    if (view.kind !== 'chart') return;
+    expect(view.chartType).toBe('bar');
+    expect(view.choices).toContain('pie');
+    expect(view.choices).toContain('donut');
+  });
+
+  it('every row with the same number opens as a table', () => {
+    const view = chooseAnswerView(parts(3, () => '1'));
+    expect(view.kind).toBe('table');
+    if (view.kind !== 'table') return;
+    expect(view.choices).toContain('bar');
   });
 
   it('60 categories open as a table', () => {

@@ -55,8 +55,15 @@ export function chooseAnswerView(statement: GenieStatementResponse | null): Answ
 
   if (xIsText && rows.length > TEXT_AXIS_MAX_ROWS) return { kind: 'table', choices };
 
+  // A list where every row has the same number has nothing to compare.
+  if (rows.length >= 2 && numeric.length === 1) {
+    const first = rows[0][numeric[0].name];
+    if (rows.every((row) => row[numeric[0].name] === first)) return { kind: 'table', choices };
+  }
+
   let chartType = inferred.chartType;
-  const unfit = (isPie(chartType) && !partsOfAWhole) || (xIsText && (chartType === 'line' || chartType === 'area'));
+  // A pie is never the default: it stays in the menu for a person to pick.
+  const unfit = isPie(chartType) || (xIsText && (chartType === 'line' || chartType === 'area'));
   if (unfit) {
     if (!choices.includes('bar')) return { kind: 'table', choices };
     chartType = 'bar';
