@@ -434,6 +434,8 @@ export function DependencyMapPage() {
   // Said politely when a box is selected, for people who select one from the keyboard; focus stays on the box.
   const [announcement, setAnnouncement] = useState("");
 
+  // The page's own content: Undo's keys count from there, not from the nav beside it.
+  const pageRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const editRef = useRef<HTMLButtonElement>(null);
@@ -490,46 +492,53 @@ export function DependencyMapPage() {
     return () => window.cancelAnimationFrame(frame);
   }, [refocus]);
 
-  /** Saves one change made on the map; `baseVersion` is the version on screen when it was made. */
-  const runSave = useCallback(
-    async (change: Change, baseVersion: number | null): Promise<boolean> => {
+  /**
+   * Saves one change made on the map; `baseVersion` is the version on screen when it was made. A refusal shows above
+   * the map: a conflict with Reload, the rule issues, or another failure. Undo says itself why the rules refused its
+   * change, so it passes `showIssues` false.
+   */
+  const saveOnMap = useCallback(
+    async (change: Change, baseVersion: number | null, showIssues = true): Promise<SaveOutcome> => {
       setSaving(true);
       setProblem(null);
       setNotice(null);
       const outcome = await save(change, baseVersion);
       setSaving(false);
-      if (outcome.ok) {
-        setNotice(`Saved version ${outcome.result.version}: ${outcome.result.summary}.`);
-        return true;
-      }
-      if (outcome.conflict) setProblem({ kind: "conflict" });
-      else if (outcome.issues.length > 0) setProblem({ kind: "invalid", message: outcome.message, issues: outcome.issues });
-      else setProblem({ kind: "failed", message: outcome.message });
-      return false;
+      if (outcome.ok) setNotice(`Saved version ${outcome.result.version}: ${outcome.result.summary}.`);
+      else if (outcome.conflict) setProblem({ kind: "conflict" });
+      else if (outcome.issues.length === 0) setProblem({ kind: "failed", message: outcome.message });
+      else if (showIssues) setProblem({ kind: "invalid", message: outcome.message, issues: outcome.issues });
+      return outcome;
     },
     [save],
+  );
+
+  /** Saves one change made on the map, as saveOnMap does. True when the save worked. */
+  const runSave = useCallback(
+    async (change: Change, baseVersion: number | null): Promise<boolean> => (await saveOnMap(change, baseVersion)).ok,
+    [saveOnMap],
   );
 
   /**
    * Saves the change an undo makes to the job list. A link it removes lets go of its ×, and when focus went with the
    * line or a box, it moves to what stays, as after Remove link. Focus anywhere else stays put.
    */
-  const saveUndoChange = async (change: Change): Promise<boolean> => {
+  const saveUndoChange = async (change: Change): Promise<SaveOutcome> => {
     const removed = change.kind === "delete" && change.target.type === "dependency" ? change.target.key : null;
     const after = removed !== null && graph ? focusAfterRemoving(graph, removed) : null;
-    const saved = await runSave(change, version);
-    if (saved && removed !== null) {
+    const outcome = await saveOnMap(change, version, false);
+    if (outcome.ok && removed !== null) {
       setSelectedEdge((current) => (current === removed ? null : current));
       if (after) setRefocus({ kind: "if-lost", then: after });
     }
-    return saved;
+    return outcome;
   };
 
   // Undo: the person's own moves, Tidy ups and link changes on this map, this session.
   const history = useMapUndo({
     direction,
     layout,
-    links: allEdges,
+    document,
     saving,
     saveChange: saveUndoChange,
     turn: setDirection,
@@ -814,10 +823,13 @@ export function DependencyMapPage() {
     if (edgeId !== null) setSelectedEdge((current) => (current !== null && current !== edgeId ? null : current));
   };
 
-  // Ctrl+Z or Cmd+Z undoes from anywhere on the page, but not in a text field, which keeps its own undo, and not while
-  // a dialog, the job editor, the link menu or the New link card is open.
+  // Ctrl+Z or Cmd+Z undoes from anywhere on the page, or with nothing focused; not from outside it, such as the nav,
+  // not in a text field, which keeps its own undo, and not while a dialog, the job editor, the link menu or the New
+  // link card is open.
   const onUndoKey = useEffectEvent((event: globalThis.KeyboardEvent) => {
     if (!isUndoKey(event) || event.defaultPrevented || typingIn(event.target) || overlayOpen()) return;
+    const onPage = event.target === window.document.body || (event.target instanceof Node && pageRef.current?.contains(event.target) === true);
+    if (!onPage) return;
     event.preventDefault();
     undo();
   });
@@ -1095,7 +1107,8 @@ export function DependencyMapPage() {
   }
 
   return (
-    <>
+    // The page's own content, for Undo's keys. `contents` leaves its children in the layout's column, as before.
+    <div ref={pageRef} className="contents">
       <PageHeader
         title="Dependency map"
         description="How the monitored jobs depend on each other and on services. Select a card to see what a failure there affects. Drag a card to move it, or drag from its dot to link it."
@@ -1141,6 +1154,13 @@ export function DependencyMapPage() {
               Retry
             </Button>
           ) : null}
+        </p>
+      ) : null}
+      {history.problem ? (
+        // An undo the rules refused: it left the stack, and this says why.
+        <p role="status" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-destructive">
+          <CircleAlert className="size-3.5" aria-hidden="true" />
+          {history.problem}
         </p>
       ) : null}
       {live.problem && graph ? (
@@ -1245,7 +1265,7 @@ export function DependencyMapPage() {
           returnFocus={addJobReturnFocus}
         />
       ) : null}
-    </>
+    </div>
   );
 }
 

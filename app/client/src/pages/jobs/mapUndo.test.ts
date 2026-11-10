@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { LayoutPosition } from "../../../../shared/maplayout/types";
 import { type GraphEdge, buildEdges } from "../../lib/graph";
 import { EXAMPLE_DOCUMENT } from "../../test/example-document";
-import { type MapAction, UNDO_LIMIT, pushAction, undoChange, undoLabel, undoneAlready } from "./mapUndo";
+import { type MapAction, UNDO_LIMIT, cannotUndo, pushAction, undoChange, undoLabel, undoneAlready } from "./mapUndo";
 
 const LINKS = buildEdges(EXAMPLE_DOCUMENT);
 
@@ -70,5 +70,10 @@ describe("mapUndo", () => {
     const without = LINKS.filter((edge) => edge.id !== "orders_enrich->orders_ingest:job" && edge.id !== "orders_ingest->kafka:service");
     expect(undoneAlready(added, without)).toBe(true);
     expect(undoneAlready(removed, without)).toBe(false);
+  });
+
+  it("says in one sentence why an undo can't be done", () => {
+    expect(cannotUndo("dependency a -> b: b is not a configured job")).toBe("That change can't be undone: dependency a -> b: b is not a configured job.");
+    expect(cannotUndo("The job is gone.")).toBe("That change can't be undone: The job is gone.");
   });
 });

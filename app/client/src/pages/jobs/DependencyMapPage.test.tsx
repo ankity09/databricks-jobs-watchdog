@@ -1726,30 +1726,85 @@ describe("DependencyMapPage", () => {
 
   it("Undo after a drag puts the box back", async () => {
     const user = userEvent.setup();
-    const { container, saves, layoutSaves } = renderMap();
-    await box("orders_ingest (Unknown, switched off)");
+    const { container, saves, layoutSaves, resets } = renderMap();
+    await box("watchdog_demo_slow (Unknown)");
+    const group = () => container.querySelector<HTMLElement>(".react-flow__node-section");
+    const tidy = screen.getByRole("button", { name: "Tidy up" });
     const undo = screen.getByRole("button", { name: "Nothing to undo" });
+    expect(group()).toHaveTextContent("2 jobs");
+    expect(tidy).toHaveAttribute("aria-disabled", "true");
     expect(undo).toHaveAttribute("aria-disabled", "true");
-    const start = cornerOf(container, "job:orders_ingest");
-    dragBox(container, "job:orders_ingest", 120, 80);
+    const start = cornerOf(container, "job:watchdog_demo_slow");
+    // Out of the Not linked yet group: the box's first saved spot.
+    dragBox(container, "job:watchdog_demo_slow", 0, -400);
     await waitFor(() => expect(layoutSaves).toHaveLength(1));
-    expect(cornerOf(container, "job:orders_ingest")).not.toEqual(start);
+    await waitFor(() => expect(group()).toHaveTextContent("1 job"));
+    expect(tidy).not.toHaveAttribute("aria-disabled");
     // Undo names what it takes back.
     expect(undo).toHaveAccessibleName("Undo: move 1 box");
     expect(undo).not.toHaveAttribute("aria-disabled");
 
     await user.click(undo);
-    // The spot from before the move is saved again, and the box is back on it.
-    await waitFor(() => expect(layoutSaves).toHaveLength(2));
-    expect(layoutSaves[1]).toEqual({ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", ...start }] });
-    await waitFor(() => expect(cornerOf(container, "job:orders_ingest")).toEqual(start));
-    // The undo's own save is not an action: nothing is left to undo, and another press saves nothing.
+    // The box had no saved spot: Undo clears the direction and saves back the spots from before, none here. The box is
+    // back in the automatic layout, in its group, and with nothing saved Tidy up is off again.
+    await waitFor(() => expect(resets).toEqual([{ direction: "LR" }]));
+    await waitFor(() => expect(cornerOf(container, "job:watchdog_demo_slow")).toEqual(start));
+    expect(group()).toHaveTextContent("2 jobs");
+    await waitFor(() => expect(tidy).toHaveAttribute("aria-disabled", "true"));
+    expect(layoutSaves).toHaveLength(1);
+    // The undo's own saves are not an action: nothing is left to undo, and another press saves nothing.
     await waitFor(() => expect(undo).toHaveAccessibleName("Nothing to undo"));
     expect(undo).toHaveAttribute("aria-disabled", "true");
     await user.click(undo);
     await frames();
-    expect(layoutSaves).toHaveLength(2);
+    expect(resets).toHaveLength(1);
+    expect(layoutSaves).toHaveLength(1);
     expect(saves).toEqual([]);
+  });
+
+  it("Undo of a box's first move keeps the other boxes' saved spots", async () => {
+    const { container, layoutSaves, resets, reload } = renderMap(EXAMPLE_DOCUMENT, applies, {
+      layout: { LR: [{ nodeKey: "service:kafka", x: 900, y: 900 }] },
+    });
+    await box("watchdog_demo_slow (Unknown)");
+    const start = cornerOf(container, "job:watchdog_demo_slow");
+    dragBox(container, "job:watchdog_demo_slow", 0, -400);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Undo: move 1 box" }));
+    // The direction is cleared, then the spots from before the move are saved again: kafka's.
+    await waitFor(() => expect(layoutSaves).toHaveLength(2));
+    expect(resets).toEqual([{ direction: "LR" }]);
+    expect(layoutSaves[1]).toEqual({ direction: "LR", moves: [{ nodeKey: "service:kafka", x: 900, y: 900 }] });
+    await waitFor(() => expect(cornerOf(container, "job:watchdog_demo_slow")).toEqual(start));
+    expect(cornerOf(container, "service:kafka")).toEqual({ x: 900, y: 900 });
+    // What the server keeps: kafka where it was put, and the box in the automatic layout.
+    const again = reload();
+    await box("watchdog_demo_slow (Unknown)");
+    expect(cornerOf(again.container, "service:kafka")).toEqual({ x: 900, y: 900 });
+    expect(cornerOf(again.container, "job:watchdog_demo_slow")).toEqual(start);
+  });
+
+  it("Ctrl+Z from an element outside the page saves nothing", async () => {
+    const { container, layoutSaves } = renderMap(EXAMPLE_DOCUMENT, applies, { layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] } });
+    await box("orders_ingest (Unknown, switched off)");
+    dragBox(container, "job:orders_ingest", 120, 80);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    // A link in the left nav, outside the page.
+    const nav = document.createElement("a");
+    nav.href = "/jobs";
+    nav.textContent = "Job list";
+    document.body.append(nav);
+    nav.focus();
+    fireEvent.keyDown(nav, { key: "z", ctrlKey: true });
+    fireEvent.keyDown(nav, { key: "z", metaKey: true });
+    await frames();
+    nav.remove();
+    expect(layoutSaves).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Undo: move 1 box" })).toBeInTheDocument();
+    // With nothing focused the key goes to the body, which counts as the page: Undo runs.
+    fireEvent.keyDown(document.body, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(layoutSaves).toHaveLength(2));
+    expect(layoutSaves[1]).toEqual({ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] });
   });
 
   it("Undo after a dragged link saves one delete change", async () => {
@@ -1813,7 +1868,7 @@ describe("DependencyMapPage", () => {
 
   it("Ctrl+Z in an input does nothing", async () => {
     const user = userEvent.setup();
-    const { container, layoutSaves } = renderMap();
+    const { container, layoutSaves } = renderMap(EXAMPLE_DOCUMENT, applies, { layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] } });
     const ingest = await box("orders_ingest (Unknown, switched off)");
     dragBox(container, "job:orders_ingest", 120, 80);
     await waitFor(() => expect(layoutSaves).toHaveLength(1));
@@ -1837,7 +1892,7 @@ describe("DependencyMapPage", () => {
   });
 
   it("Ctrl+Z waits while the New link card is open", async () => {
-    const { container, saves, layoutSaves } = renderMap();
+    const { container, saves, layoutSaves } = renderMap(EXAMPLE_DOCUMENT, applies, { layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] } });
     const retries = await box("watchdog_demo_retries (Unknown)");
     dragBox(container, "job:orders_ingest", 120, 80);
     await waitFor(() => expect(layoutSaves).toHaveLength(1));
@@ -1880,9 +1935,10 @@ describe("DependencyMapPage", () => {
 
   it("Undo turns the map back to the direction a move was made in", async () => {
     const user = userEvent.setup();
-    const { container, layoutSaves } = renderMap();
+    const { container, layoutSaves } = renderMap(EXAMPLE_DOCUMENT, applies, { layout: { LR: [{ nodeKey: "job:orders_ingest", x: 2000, y: 1200 }] } });
     await box("orders_ingest (Unknown, switched off)");
     const start = cornerOf(container, "job:orders_ingest");
+    expect(start).toEqual({ x: 2000, y: 1200 });
     dragBox(container, "job:orders_ingest", 120, 80);
     await waitFor(() => expect(layoutSaves).toHaveLength(1));
     await user.click(screen.getByRole("radio", { name: "Top to bottom" }));
@@ -1894,6 +1950,97 @@ describe("DependencyMapPage", () => {
     expect(layoutSaves[1]).toEqual({ direction: "LR", moves: [{ nodeKey: "job:orders_ingest", ...start }] });
     expect(screen.getByRole("radio", { name: "Left to right" })).toBeChecked();
     await waitFor(() => expect(cornerOf(container, "job:orders_ingest")).toEqual(start));
+    expect(screen.getByRole("button", { name: "Nothing to undo" })).toBeInTheDocument();
+  });
+
+  it("an undo the rules refuse leaves the stack and says why", async () => {
+    const user = userEvent.setup();
+    const { container, saves, layoutSaves, resets } = renderMap();
+    await box("watchdog_demo_slow (Unknown)");
+    // An older action, which Undo reaches once the refused one is gone.
+    dragBox(container, "job:watchdog_demo_slow", 0, -400);
+    await waitFor(() => expect(layoutSaves).toHaveLength(1));
+    const name = "orders_enrich depends on orders_ingest (job link)";
+    fireEvent.click(await box(name));
+    fireEvent.click(await screen.findByRole("button", { name: `Remove the link: ${name}` }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    // Removing orders_ingest from Watchdog, which is not an action Undo takes back.
+    fireEvent.click(screen.getByRole("button", { name: "orders_ingest (Unknown, switched off)" }));
+    await user.click(within(screen.getByRole("region", { name: "orders_ingest" })).getByRole("button", { name: "Remove from Watchdog" }));
+    await user.click(within(await screen.findByRole("alertdialog", { name: "Delete orders_ingest?" })).getByRole("button", { name: "Delete job" }));
+    await waitFor(() => expect(saves).toHaveLength(2));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "orders_ingest (Unknown, switched off)" })).toBeNull());
+
+    // The link would name a job that is gone: the rules refuse it, so nothing is saved and the action leaves the stack.
+    await user.click(screen.getByRole("button", { name: "Undo: remove the link" }));
+    expect(
+      await screen.findByText(
+        "That change can't be undone: dependency orders_enrich -> orders_ingest: orders_ingest is not a configured job (use dependency_type: service for services).",
+      ),
+    ).toBeInTheDocument();
+    await frames();
+    expect(saves).toHaveLength(2);
+    const undo = screen.getByRole("button", { name: "Undo: move 1 box" });
+
+    // The older move is in reach again, and its undo clears the line.
+    await user.click(undo);
+    await waitFor(() => expect(resets).toEqual([{ direction: "LR" }]));
+    await waitFor(() => expect(undo).toHaveAccessibleName("Nothing to undo"));
+    expect(screen.queryByText(/^That change can't be undone/)).toBeNull();
+  });
+
+  it("an undo the server's rules refuse leaves the stack and says why", async () => {
+    const user = userEvent.setup();
+    let refuse = false;
+    const { saves } = renderMap(EXAMPLE_DOCUMENT, (body, state) =>
+      refuse
+        ? json(
+            {
+              error: "invalid",
+              message: "The job list has a problem.",
+              issues: [{ path: "dependencies[orders_enrich->orders_ingest:job]", message: "a rule only the server checks" }],
+            },
+            422,
+          )
+        : applies(body, state),
+    );
+    const name = "orders_enrich depends on orders_ingest (job link)";
+    fireEvent.click(await box(name));
+    fireEvent.click(await screen.findByRole("button", { name: `Remove the link: ${name}` }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    refuse = true;
+    await user.click(screen.getByRole("button", { name: "Undo: remove the link" }));
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(await screen.findByText("That change can't be undone: a rule only the server checks.")).toBeInTheDocument();
+    // That line says it, not the rule alert as well, and the action is off the stack.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Nothing to undo" })).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("a conflict on an undo keeps it on the stack, so Undo can try again after Reload", async () => {
+    const user = userEvent.setup();
+    let conflict = false;
+    const view = renderMap(EXAMPLE_DOCUMENT, (body, state) => {
+      if (!conflict) return applies(body, state);
+      conflict = false;
+      return json({ error: "conflict", message: "Someone else changed this since you opened it. Reload to see their change.", latestVersion: 4 }, 409);
+    });
+    const name = "orders_enrich depends on orders_ingest (job link)";
+    fireEvent.click(await box(name));
+    fireEvent.click(await screen.findByRole("button", { name: `Remove the link: ${name}` }));
+    await waitFor(() => expect(view.saves).toHaveLength(1));
+    conflict = true;
+    await user.click(screen.getByRole("button", { name: "Undo: remove the link" }));
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("Someone else changed the job list since you opened it.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Undo: remove the link" })).toBeInTheDocument();
+
+    await user.click(within(alert).getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    await user.click(screen.getByRole("button", { name: "Undo: remove the link" }));
+    await waitFor(() => expect(view.saves).toHaveLength(3));
+    expect(view.saves.map((save) => save.baseVersion)).toEqual([3, 4, 4]);
+    expect(await box(name)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Nothing to undo" })).toBeInTheDocument();
   });
 
