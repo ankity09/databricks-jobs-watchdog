@@ -7,6 +7,7 @@ import { cn } from "../../lib/utils";
 import { SEVERITY_LABEL } from "./format";
 import type { IncidentsByJob, JobIncidents } from "./incidents";
 import { jobKey, jobLabel, workspaceLabel } from "./jobs";
+import { NewBadge } from "./NewBadge";
 import { StatusBadge } from "./StatusBadge";
 
 export interface JobStatusTableProps {
@@ -128,9 +129,7 @@ const JobRow = memo(function JobRow({ row, selected, onOpen, now, incidents }: J
           >
             {row.job_name}
           </button>
-          {incidents?.isNew ? (
-            <span className="shrink-0 rounded-[4px] border border-primary/30 bg-primary/[0.08] px-1.5 py-px text-[11px] leading-4 font-medium text-primary">New</span>
-          ) : null}
+          {incidents?.isNew ? <NewBadge /> : null}
           {row.parent_job ? (
             <span className="shrink-0 truncate text-xs text-muted-foreground">
               started by <span className="font-mono">{row.parent_job}</span>

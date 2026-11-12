@@ -22,6 +22,7 @@ import { categoryLabel, formatDuration, SEVERITY_LABEL, shortCodeVersion, source
 import type { IncidentsView } from "./incidents";
 import { IncidentsNote } from "./IncidentsNote";
 import { compareText, highestSeverity, jobKey, type JobRef, newestScan, sameJob } from "./jobs";
+import { NewBadge } from "./NewBadge";
 import { ProblemAlert } from "./ProblemAlert";
 import { useJobChecks } from "./queries";
 import { StatusBadge } from "./StatusBadge";
@@ -185,7 +186,7 @@ function OpenProblem({ incident }: { incident: IncidentRow }) {
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <StatusBadge status={incident.current_status} />
         <h4 className="font-mono text-[13px] font-medium">{incident.check_id}</h4>
-        {incident.is_new ? <span className="rounded-[4px] border border-primary/30 bg-primary/[0.08] px-1.5 py-px text-[11px] leading-4 font-medium text-primary">New</span> : null}
+        {incident.is_new ? <NewBadge /> : null}
         <span className="ml-auto text-xs text-muted-foreground">
           {`Open since ${formatUtc(incident.opened_at)}, ${incident.scans_seen} ${incident.scans_seen === 1 ? "scan" : "scans"}`}
         </span>

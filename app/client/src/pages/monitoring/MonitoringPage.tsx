@@ -10,13 +10,13 @@ import { PageHeader } from "../../layout/PageHeader";
 import type { JobStatusRow } from "../../lib/rows";
 import { formatUtc } from "../../lib/time";
 import { HistoryStrip } from "./HistoryStrip";
+import { incidentsView, newJobKeys } from "./incidents";
+import { IncidentsNote } from "./IncidentsNote";
 import { JobDetailSheet } from "./JobDetailSheet";
 import { JobFilters } from "./JobFilters";
 import { JobStatusTable } from "./JobStatusTable";
 import { compareText, countByStatus, filterJobs, filterOptions, jobKey, type JobFilterValue, type JobRef, newestScan, NO_FILTERS, sameJob, sortJobs } from "./jobs";
 import { ProblemAlert } from "./ProblemAlert";
-import { IncidentsNote } from "./IncidentsNote";
-import { incidentsView, newJobKeys } from "./incidents";
 import { useJobIncidents, useJobStatus } from "./queries";
 import { SummaryCounts } from "./SummaryCounts";
 

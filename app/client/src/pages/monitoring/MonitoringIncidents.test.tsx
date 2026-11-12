@@ -36,7 +36,9 @@ function rowOf(label: string): HTMLElement {
   return row;
 }
 
-const MISSING = { error: "Query execution failed", errorCode: "BAD_REQUEST" };
+const MISSING = { error: "[TABLE_OR_VIEW_NOT_FOUND] The table or view `main`.`watchdog`.`incidents` cannot be found.", errorCode: "BAD_REQUEST" };
+const NO_ACCESS = { error: "[INSUFFICIENT_PERMISSIONS] Insufficient privileges: User does not have SELECT on Table 'main.watchdog.incidents'.", errorCode: "BAD_REQUEST" };
+const UNKNOWN_CAUSE = { error: "Query execution failed", errorCode: "BAD_REQUEST" };
 
 describe("Monitoring with the incidents view", () => {
   beforeAll(installRadixPolyfills);
@@ -182,6 +184,22 @@ describe("Monitoring when the incidents view is missing", () => {
     expect(within(table()).queryByText(/Open since/)).toBeNull();
     expect(screen.getByRole("button", { name: /^Failed/ })).toHaveTextContent("4");
     expect(order()).toHaveLength(8);
+  });
+
+  it.each([
+    ["names the missing view when the error says the view was not found", MISSING, "11:20", /incidents view isn't there yet.*Notebook 01 or the next scheduled scan creates it/],
+    ["says to ask for SELECT when the error says no access", NO_ACCESS, "11:21", /You can't read the incidents view.*Ask for SELECT on it\./],
+    ["gives both possible causes when the error says nothing definite", UNKNOWN_CAUSE, "11:22", /incidents couldn't be read.*may not exist yet.*notebook 01.*may not have access/],
+  ])("%s", async (_name, answer, minute, text) => {
+    setClock(`2026-11-06T${minute}:00Z`);
+    mockApi({ queries: { job_status: STATUS_ROWS, job_incidents: answer } });
+    renderPage();
+    await screen.findByRole("table", { name: "Monitored jobs" });
+    const line = await screen.findByText(text);
+    expect(screen.getAllByText(text)).toHaveLength(1);
+    expect(line.tagName).toBe("P");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^New this scan/ })).toBeNull();
   });
 
   it("says the same in the panel, in place of the two lists", async () => {
