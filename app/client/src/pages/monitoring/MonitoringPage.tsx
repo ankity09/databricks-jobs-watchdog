@@ -13,9 +13,11 @@ import { HistoryStrip } from "./HistoryStrip";
 import { JobDetailSheet } from "./JobDetailSheet";
 import { JobFilters } from "./JobFilters";
 import { JobStatusTable } from "./JobStatusTable";
-import { countByStatus, filterJobs, filterOptions, jobKey, type JobFilterValue, type JobRef, newestScan, NO_FILTERS, sameJob, sortJobs } from "./jobs";
+import { compareText, countByStatus, filterJobs, filterOptions, jobKey, type JobFilterValue, type JobRef, newestScan, NO_FILTERS, sameJob, sortJobs } from "./jobs";
 import { ProblemAlert } from "./ProblemAlert";
-import { useJobStatus } from "./queries";
+import { IncidentsNote } from "./IncidentsNote";
+import { incidentsView, newJobKeys } from "./incidents";
+import { useJobIncidents, useJobStatus } from "./queries";
 import { SummaryCounts } from "./SummaryCounts";
 
 const SKELETON_ROWS = ["a", "b", "c", "d", "e", "f", "g", "h"];
@@ -89,6 +91,7 @@ export function MonitoringPage() {
   const now = useNow();
   const where = useWatchdogLocation();
   const status = useJobStatus(where);
+  const incidentRows = useJobIncidents(where);
   const [filters, setFilters] = useState<JobFilterValue>(NO_FILTERS);
   const [panelJob, setPanelJob] = useState<JobRef | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -99,8 +102,18 @@ export function MonitoringPage() {
   // Only the last-run filter reads the time. Without it the clock is a fixed date, so the minute tick leaves
   // `scoped` and `visible` alone and the history strip does not rebuild its cells.
   const filterNow = filters.lastRun === null ? NO_CLOCK : now;
-  const scoped = useMemo(() => filterJobs(sorted, { ...filters, status: null }, filterNow), [sorted, filters, filterNow]);
-  const visible = useMemo(() => (filters.status === null ? scoped : scoped.filter((row) => row.status === filters.status)), [scoped, filters.status]);
+  const incidents = useMemo(() => incidentsView(incidentRows), [incidentRows]);
+  const incidentsByJob = incidents.status === "ready" ? incidents.byJob : null;
+  // Keyed by its members as text, so a refresh that changes nothing leaves `newJobs` (and what reads it) alone.
+  const newKey = useMemo(() => (incidentsByJob === null ? "" : [...newJobKeys(incidentsByJob)].sort(compareText).join("\n")), [incidentsByJob]);
+  const newJobs = useMemo(() => new Set(newKey === "" ? [] : newKey.split("\n")), [newKey]);
+  const haveIncidents = incidentsByJob !== null;
+  // Without the incidents view there is no "New this scan" filter, so a filter set earlier does not hide every job.
+  const active = useMemo(() => (!haveIncidents && filters.onlyNew !== null ? { ...filters, onlyNew: null } : filters), [haveIncidents, filters]);
+  const scoped = useMemo(() => filterJobs(sorted, { ...active, status: null }, filterNow, newJobs), [sorted, active, filterNow, newJobs]);
+  // New this scan counts within every filter except the status and itself, so it says how many clicking it would show.
+  const newCount = useMemo(() => (!haveIncidents ? null : filterJobs(sorted, { ...active, status: null, onlyNew: true }, filterNow, newJobs).length), [haveIncidents, sorted, active, filterNow, newJobs]);
+  const visible = useMemo(() => (active.status === null ? scoped : scoped.filter((row) => row.status === active.status)), [scoped, active.status]);
   const counts = useMemo(() => countByStatus(scoped), [scoped]);
   const options = useMemo(() => filterOptions(sorted), [sorted]);
   const newest = useMemo(() => newestScan(sorted), [sorted]);
@@ -144,11 +157,19 @@ export function MonitoringPage() {
             </AlertDescription>
           </Alert>
         ) : null}
-        <SummaryCounts counts={counts} selected={filters.status} onSelect={(next) => setFilters((current) => ({ ...current, status: next }))} />
+        <SummaryCounts
+          counts={counts}
+          selected={filters.status}
+          onSelect={(next) => setFilters((current) => ({ ...current, status: next }))}
+          newCount={newCount}
+          newSelected={active.onlyNew !== null}
+          onSelectNew={(selected) => setFilters((current) => ({ ...current, onlyNew: selected ? true : null }))}
+        />
+        {incidents.status === "unavailable" ? <IncidentsNote reason={incidents.reason} /> : null}
         <div className="flex flex-col gap-3">
           <JobFilters options={options} value={filters} onChange={setFilters} shown={visible.length} total={sorted.length} />
           {visible.length > 0 ? (
-            <JobStatusTable rows={visible} selectedKey={panelOpen && panelJob ? jobKey(panelJob) : null} onOpen={openPanel} now={now} />
+            <JobStatusTable rows={visible} selectedKey={panelOpen && panelJob ? jobKey(panelJob) : null} onOpen={openPanel} now={now} incidents={incidentsByJob} />
           ) : (
             <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-[13px] text-muted-foreground">No jobs match these filters.</p>
           )}
@@ -192,6 +213,7 @@ export function MonitoringPage() {
         onOpenChange={setPanelOpen}
         focusBack={getFocusBack}
         rowStatus={panelStatus}
+        incidents={incidents}
       />
     </>
   );

@@ -555,6 +555,17 @@ def test_genie_matches_entities_only_on_job_name_owner_and_environment():
             "job_name", "owner", "environment"}
 
 
+def test_genie_reads_the_incidents_view_and_says_when_to_use_it():
+    space = genie_space()
+    columns = column_configs("incidents")
+    for name in ("is_new", "opened_at", "resolved_at", "scans_seen", "state"):
+        assert columns[name]["description"], name
+    instruction = "".join(space["instructions"]["text_instructions"][0]["content"])
+    assert "use incidents" in instruction and "is_new" in instruction and "OPEN" in instruction
+    examples = [e for e in space["instructions"]["example_question_sqls"] if "incidents" in "".join(e["sql"])]
+    assert any("is_new" in "".join(e["sql"]) and "'OPEN'" in "".join(e["sql"]) for e in examples)
+
+
 def test_genie_sample_questions_are_the_app_s_suggested_questions():
     prompts = (repo_root() / "app" / "client" / "src" / "pages" / "copilot" / "SuggestedPrompts.tsx").read_text()
     for sample in genie_space()["config"]["sample_questions"]:

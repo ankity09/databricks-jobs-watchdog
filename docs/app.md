@@ -36,12 +36,13 @@ The page refreshes its data every 5 minutes while the tab is visible, and once w
 
 ### Monitoring
 
-Monitoring shows the current status of every monitored job, from `findings_latest`.
+Monitoring shows the current status of every monitored job, from `findings_latest`, and what is new and how long it has been open, from `incidents`.
 
-- **Counts.** Four tiles show how many jobs are failed, warning, unknown and healthy. Clicking a tile filters the list to that status.
+- **Counts.** Four tiles show how many jobs are failed, warning, unknown and healthy. Clicking a tile filters the list to that status. A fifth tile, New this scan, counts the jobs with a problem that opened in the newest scan. Clicking it filters the list to those jobs.
+- **What is new and how long it has been open.** These come from the `incidents` view. A job with a new problem has a New badge. Under the status of a job with an open problem, the list says when its oldest open problem started and how many scans have seen it, for example `Open since 2026-11-05 10:05 UTC, 3 scans`. If the `incidents` view is not there yet (an older schema, before notebook 01 has run), Monitoring works without these and shows one line saying so. Notebook 01 or the next scheduled scan creates the view.
 - **The job list.** One row per job per workspace, with its status (the worst of its checks), severity, owner, environment, last run and failing checks. A job the Watchdog could not find shows as unknown, with the reason.
 - **Filters.** Environment, owner, severity, workspace, failing check and last run (in the last 24 hours, older, or none).
-- **The detail panel.** Click a row. The panel shows each check's latest result with its error text, the failed tasks, the code version, links to the run and to the CI pipeline, and the jobs a failure affects. An Ask the copilot button opens a chat about that job.
+- **The detail panel.** Click a row. The panel shows each check's latest result with its error text, the failed tasks, the code version, links to the run and to the CI pipeline, and the jobs a failure affects. Open problems lists the job's open incidents with the check, when it started, the scans that saw it, its status now, the error and the run link. Cleared in the last 24 hours lists the checks that recovered and when. An Ask the copilot button opens a chat about that job.
 - **The history strip.** For each job, its worst status in fixed time windows: 1-hour windows over 24 hours, 2-hour windows over 3 days (the default) and 4-hour windows over 7 days. A window with no scan shows as a gap, so a scan that stopped is visible. A window has no fixed link to your scan schedule: with a scan every 20 minutes, a 1-hour window holds three scans.
 - **Scan now.** The button in the navigation bar starts `watchdog_scan` once. It shows progress with a link to the run, and refreshes the page when the run ends. If a scan is already running, it says so and shows that run.
 
@@ -156,7 +157,7 @@ A banner on the Job list and the Dependency map tells you which job list the sca
 
 ## The copilot
 
-The copilot is a Genie agent that the bundle creates over five Watchdog tables (`findings`, `monitored_jobs`, `job_dependencies`, `monitored_workspaces` and `monitored_job_environments`) and the `findings_latest` view. People ask it questions in plain language, such as "What is failing right now?", "Which jobs missed their schedule?" or "What breaks if orders_ingest fails?".
+The copilot is a Genie agent that the bundle creates over five Watchdog tables (`findings`, `monitored_jobs`, `job_dependencies`, `monitored_workspaces` and `monitored_job_environments`) and the `findings_latest` and `incidents` views. It uses `incidents` for "what is new" and "how long has this job been failing". People ask it questions in plain language, such as "What is failing right now?", "Which jobs missed their schedule?" or "What breaks if orders_ingest fails?".
 
 A new chat opens on a welcome view. It asks "What do you want to know?", says that answers come from the Watchdog tables and run as you, and offers four starter questions as cards, above the box where you type your own.
 

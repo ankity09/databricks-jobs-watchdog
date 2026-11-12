@@ -10,6 +10,16 @@ A Databricks App, built with [AppKit](https://developers.databricks.com/docs/app
 - `config/queries/`: the SQL the analytics plugin runs. A `.obo.sql` file runs as the signed-in person.
 - `app.yaml`: the start command, and the app resources each environment variable comes from.
 
+## Monitoring
+
+Monitoring reads `findings_latest` for each job's status and counts. It also reads the `incidents` view (`config/queries/job_incidents.obo.sql`: every open incident, and those that cleared in the last 24 hours) for three things.
+
+- **New.** A job with an open incident that opened in the newest scan has a New badge. The New this scan tile counts those jobs and filters the list to them.
+- **Open since.** Under the status of a job with an open problem, the list shows when its oldest open problem started and how many scans saw it.
+- **The job panel.** Open problems and Cleared in the last 24 hours list the job's incidents.
+
+If the `incidents` view is missing, Monitoring works without these parts and shows one line saying so. Notebook 01 or the next scheduled scan creates the view.
+
 ## The dependency map
 
 The map page shows the monitored jobs and the services they need as cards, and each link as an arrow. A link or settings change saves a new version of the job list, as on the Job list page. Moving cards only saves the layout.
@@ -24,7 +34,7 @@ The map page shows the monitored jobs and the services they need as cards, and e
 
 ## The copilot
 
-The copilot page asks the Genie space in plain language. Each answer is one card.
+The copilot page asks the Genie space in plain language. Each answer is one card. The space reads the `incidents` view too, so it can answer what is new and how long a job has been failing.
 
 - **Charts, numbers and tables.** Each query in an answer opens as a chart, a single number or a table. A chart never defaults to a pie. A person can switch the chart type, and pie and donut stay in the menu when the rows are parts of a whole. A list of categories where every row has the same number opens as a table, and so does an answer whose x values repeat, such as two jobs on each day. A steady daily series stays a chart.
 - **Table and CSV.** A chart can switch to a table of its rows, and a single-number answer shows the number, with no table. Every answer with rows has a button that downloads them as a CSV file. When Genie returned only part of a result, a line under the table says so. Show SQL opens the query Genie ran, and who it ran as.

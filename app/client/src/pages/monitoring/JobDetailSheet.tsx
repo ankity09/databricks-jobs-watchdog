@@ -14,12 +14,14 @@ import { Link } from "react-router";
 import { useRefreshKey } from "../../hooks/useRefreshKey";
 import { useWatchdogLocation } from "../../hooks/useWatchdogRows";
 import { copilotLink } from "../../lib/copilot-link";
-import type { CheckRow } from "../../lib/rows";
+import type { CheckRow, IncidentRow } from "../../lib/rows";
 import { type Status, worstStatus } from "../../lib/status";
 import { formatUtc, formatUtcAfter, parseTime } from "../../lib/time";
 import { cn } from "../../lib/utils";
 import { categoryLabel, formatDuration, SEVERITY_LABEL, shortCodeVersion, sourceLabel, triggerLabel } from "./format";
-import { compareText, highestSeverity, newestScan, sameJob } from "./jobs";
+import type { IncidentsView } from "./incidents";
+import { IncidentsNote } from "./IncidentsNote";
+import { compareText, highestSeverity, jobKey, type JobRef, newestScan, sameJob } from "./jobs";
 import { ProblemAlert } from "./ProblemAlert";
 import { useJobChecks } from "./queries";
 import { StatusBadge } from "./StatusBadge";
@@ -35,6 +37,8 @@ export interface JobDetailSheetProps {
   focusBack?: () => HTMLElement | null;
   /** The job's status from its table row, shown (and sent to the copilot) until the checks load, or when they fail. */
   rowStatus?: Status | null;
+  /** The incidents view's answer, from the page. Without it the panel has no incident lists. */
+  incidents?: IncidentsView;
 }
 
 function ExternalLink({ href, children }: { href: string; children: ReactNode }) {
@@ -174,6 +178,76 @@ function HealthyCheck({ check }: { check: CheckRow }) {
   );
 }
 
+/** One open problem: the check, since when, how many scans, its status now, and what it found with the run link. */
+function OpenProblem({ incident }: { incident: IncidentRow }) {
+  return (
+    <li className="rounded-lg border border-border bg-card p-3 shadow-xs">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <StatusBadge status={incident.current_status} />
+        <h4 className="font-mono text-[13px] font-medium">{incident.check_id}</h4>
+        {incident.is_new ? <span className="rounded-[4px] border border-primary/30 bg-primary/[0.08] px-1.5 py-px text-[11px] leading-4 font-medium text-primary">New</span> : null}
+        <span className="ml-auto text-xs text-muted-foreground">
+          {`Open since ${formatUtc(incident.opened_at)}, ${incident.scans_seen} ${incident.scans_seen === 1 ? "scan" : "scans"}`}
+        </span>
+      </div>
+      {incident.error_summary ? (
+        <p className="mt-2 max-h-24 overflow-y-auto font-mono text-xs leading-5 break-words whitespace-pre-wrap text-foreground">{incident.error_summary}</p>
+      ) : null}
+      {incident.run_page_url ? (
+        <p className="mt-1.5">
+          <ExternalLink href={incident.run_page_url}>Run</ExternalLink>
+        </p>
+      ) : null}
+    </li>
+  );
+}
+
+/** The job's open problems, and the ones that cleared in the last 24 hours. */
+function IncidentLists({ job, view }: { job: JobRef; view: IncidentsView }) {
+  if (view.status === "unavailable") return <IncidentsNote reason={view.reason} className="mt-6 text-xs text-muted-foreground" />;
+  const mine = view.status === "ready" ? view.byJob.get(jobKey(job)) : undefined;
+  const loading = view.status === "loading";
+  return (
+    <>
+      <section aria-labelledby="open-problems-heading" className="mt-6">
+        <h2 id="open-problems-heading" className="text-sm font-semibold">
+          Open problems
+        </h2>
+        {loading ? (
+          <Skeleton className="motion-reduce:animate-none mt-2 h-20 rounded-lg" />
+        ) : mine && mine.open.length > 0 ? (
+          <ul className="mt-2 flex flex-col gap-2.5">
+            {mine.open.map((incident) => (
+              <OpenProblem key={incident.incident_id} incident={incident} />
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1.5 text-[13px] text-muted-foreground">No open problems for this job.</p>
+        )}
+      </section>
+      <section aria-labelledby="cleared-heading" className="mt-6">
+        <h2 id="cleared-heading" className="text-sm font-semibold">
+          Cleared in the last 24 hours
+        </h2>
+        {loading ? (
+          <Skeleton className="motion-reduce:animate-none mt-2 h-12 rounded-lg" />
+        ) : mine && mine.cleared.length > 0 ? (
+          <ul className="mt-2 divide-y divide-border rounded-lg border border-border px-3">
+            {mine.cleared.map((incident) => (
+              <li key={incident.incident_id} className="flex items-center gap-2 py-2">
+                <h3 className="font-mono text-[13px] font-medium">{incident.check_id}</h3>
+                <span className="ml-auto text-xs text-muted-foreground">{incident.resolved_at ? `Cleared ${formatUtc(incident.resolved_at)}` : "Cleared"}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1.5 text-[13px] text-muted-foreground">Nothing cleared in the last 24 hours.</p>
+        )}
+      </section>
+    </>
+  );
+}
+
 function SheetSkeleton() {
   return (
     <div className="flex flex-col gap-3" aria-hidden="true">
@@ -194,7 +268,7 @@ function SheetSkeleton() {
  * and Open run and Ask the copilot. Rows come from job_checks, kept to this
  * workspace and job ID (a job name can run in several workspaces).
  */
-export function JobDetailSheet({ job, workspaceId, jobId, open, onOpenChange, focusBack, rowStatus = null }: JobDetailSheetProps) {
+export function JobDetailSheet({ job, workspaceId, jobId, open, onOpenChange, focusBack, rowStatus = null, incidents }: JobDetailSheetProps) {
   const { bump } = useRefreshKey();
   const where = useWatchdogLocation();
   const checks = useJobChecks(where, job, open);
@@ -311,6 +385,8 @@ export function JobDetailSheet({ job, workspaceId, jobId, open, onOpenChange, fo
               </>
             )}
           </section>
+
+          {incidents && job !== null ? <IncidentLists job={{ job_name: job, workspace_id: workspaceId, job_id: jobId }} view={incidents} /> : null}
 
           {failed.length > 0 ? (
             <section aria-labelledby="affected-heading" className="mt-6">

@@ -139,3 +139,40 @@ export const ORDERS_INGEST_CHECKS = [
     affected_jobs: null,
   }),
 ];
+
+/** One row of job_incidents.obo.sql, as the query sends it (booleans and counts as text, times as ISO strings). */
+export function incidentRow(overrides: Record<string, unknown>): Record<string, unknown> {
+  return {
+    incident_id: "inc-1",
+    state: "OPEN",
+    source: "SYSTEM_TABLES",
+    check_id: "task_failures",
+    workspace_id: "2002",
+    workspace_name: "example-stage",
+    job_id: "21",
+    job_name: "orders_ingest",
+    severity: "WARNING",
+    opened_at: "2026-11-05T10:00:00.000Z",
+    scans_seen: "1",
+    current_status: "FAILED",
+    resolved_at: null,
+    error_summary: "load: ValueError: bad input in stage",
+    run_page_url: "https://workspace.example.com/jobs/21/runs/600",
+    is_new: "false",
+    ...overrides,
+  };
+}
+
+/**
+ * Incidents that go with STATUS_ROWS. The two orders_ingest incidents in the prod workspace are old (the older
+ * one has run 12 scans); the stage one and archive_cleanup's opened in the newest scan. Two incidents cleared today.
+ */
+export const INCIDENT_ROWS = [
+  incidentRow({ incident_id: "inc-a", workspace_id: "1001", workspace_name: "example-prod", job_id: "11", opened_at: "2026-11-05T08:05:00.000Z", scans_seen: "5", error_summary: "load: ValueError: bad input in prod" }),
+  incidentRow({ incident_id: "inc-b", workspace_id: "1001", workspace_name: "example-prod", job_id: "11", check_id: "last_run_result", opened_at: "2026-11-03T08:05:00.000Z", scans_seen: "12", error_summary: "Newest finished run ended FAILED." }),
+  incidentRow({ incident_id: "inc-c", is_new: "true" }),
+  incidentRow({ incident_id: "inc-d", job_name: "archive_cleanup", job_id: "23", check_id: "last_run_result", is_new: "true", error_summary: "Newest finished run ended FAILED.", run_page_url: null }),
+  incidentRow({ incident_id: "inc-e", job_name: "billing_export", workspace_id: "1001", workspace_name: "example-prod", job_id: "13", check_id: "schedule_gap", opened_at: "2026-11-04T10:00:00.000Z", scans_seen: "36", error_summary: "No run started in the last 48 hours.", run_page_url: null }),
+  incidentRow({ incident_id: "inc-f", state: "RESOLVED", check_id: "last_run_result", opened_at: "2026-11-05T08:00:00.000Z", scans_seen: "3", current_status: "HEALTHY", resolved_at: "2026-11-05T09:25:00.000Z" }),
+  incidentRow({ incident_id: "inc-g", state: "RESOLVED", job_name: "daily_revenue_report", workspace_id: "1001", workspace_name: "example-prod", job_id: "12", check_id: "long_runtime", opened_at: "2026-11-05T07:00:00.000Z", scans_seen: "2", current_status: "HEALTHY", resolved_at: "2026-11-05T09:45:00.000Z" }),
+];

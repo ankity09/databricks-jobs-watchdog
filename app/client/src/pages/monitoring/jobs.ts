@@ -88,16 +88,20 @@ export interface JobFilterValue {
   /** A check that fails (is not healthy) for the job. */
   check: string | null;
   lastRun: LastRunFilter | null;
+  /** Only the jobs with a new open incident (see incidents.ts). */
+  onlyNew: true | null;
 }
 
-export const NO_FILTERS: JobFilterValue = { status: null, environment: null, owner: null, severity: null, workspace: null, check: null, lastRun: null };
+const NO_JOBS: ReadonlySet<string> = new Set();
+
+export const NO_FILTERS: JobFilterValue = { status: null, environment: null, owner: null, severity: null, workspace: null, check: null, lastRun: null, onlyNew: null };
 
 export function hasFilters(filters: JobFilterValue): boolean {
   return Object.values(filters).some((value) => value !== null);
 }
 
-/** The rows that pass every filter that is set. `now` places each last run in its bucket. */
-export function filterJobs(rows: readonly JobStatusRow[], filters: JobFilterValue, now: Date): JobStatusRow[] {
+/** The rows that pass every filter that is set. `now` places each last run in its bucket; `newJobs` holds the keys of the jobs with a new open incident. */
+export function filterJobs(rows: readonly JobStatusRow[], filters: JobFilterValue, now: Date, newJobs: ReadonlySet<string> = NO_JOBS): JobStatusRow[] {
   return rows.filter(
     (row) =>
       (filters.status === null || row.status === filters.status) &&
@@ -106,7 +110,8 @@ export function filterJobs(rows: readonly JobStatusRow[], filters: JobFilterValu
       (filters.severity === null || row.severity === filters.severity) &&
       (filters.workspace === null || row.workspace_id === filters.workspace) &&
       (filters.check === null || row.failing_checks.includes(filters.check)) &&
-      (filters.lastRun === null || lastRunBucket(row, now) === filters.lastRun),
+      (filters.lastRun === null || lastRunBucket(row, now) === filters.lastRun) &&
+      (filters.onlyNew === null || newJobs.has(jobKey(row))),
   );
 }
 

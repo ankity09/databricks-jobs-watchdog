@@ -47,6 +47,18 @@ declare module "@databricks/appkit-ui/react" {
         };
         result: unknown;
       };
+    job_incidents: {
+        name: "job_incidents";
+        parameters: {
+          /** STRING - use sql.string() */
+          catalog: SQLStringMarker;
+          /** STRING - use sql.string() */
+          schema: SQLStringMarker;
+          /** INT - use sql.int() */
+          refresh: SQLNumberMarker;
+        };
+        result: unknown;
+      };
     job_live_status: {
         name: "job_live_status";
         parameters: {

@@ -113,6 +113,34 @@ export const FreshnessRow = z.object({
 });
 export type FreshnessRow = z.infer<typeof FreshnessRow>;
 
+/** A BOOLEAN column: the text "true" or "false" (AppKit sends every value as text). Anything else, such as null, is false. */
+const Flag = z.preprocess((value) => value === true || value === "true", z.boolean());
+
+/**
+ * One incident, from job_incidents.obo.sql: an OPEN one, or a RESOLVED one that cleared in the last 24 hours.
+ * `opened_at` is the time of the scan that first found the problem; `is_new` is true when that scan is its
+ * source's newest. The job columns match JobStatusRow's, so an incident belongs to the job with the same three.
+ */
+export const IncidentRow = z.object({
+  incident_id: z.string(),
+  state: z.enum(["OPEN", "RESOLVED"]),
+  source: z.string(),
+  check_id: z.string(),
+  job_name: z.string(),
+  workspace_id: NullableString,
+  workspace_name: NullableString,
+  job_id: NullableString,
+  severity: Severity,
+  opened_at: Time,
+  scans_seen: z.preprocess((value) => (typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value), z.number().int().nonnegative()),
+  current_status: Status,
+  resolved_at: Time.nullable(),
+  error_summary: Text,
+  run_page_url: NullableString,
+  is_new: Flag,
+});
+export type IncidentRow = z.infer<typeof IncidentRow>;
+
 /**
  * The rows that match `schema`, and how many did not. An answer that is not a
  * list counts as one bad row, so it is never taken for an empty result.

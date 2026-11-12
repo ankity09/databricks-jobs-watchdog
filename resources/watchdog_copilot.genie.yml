@@ -105,6 +105,74 @@ resources:
                   synonyms: ["state", "health", "result", "outcome"]
             - identifier: ${var.catalog}.${var.schema}.findings_latest
               column_configs: *finding_columns
+            - identifier: ${var.catalog}.${var.schema}.incidents
+              description:
+                - >-
+                  One row per problem: a FAILED or WARNING result for one check of one job, from the
+                  scan that found it until a HEALTHY result clears it. A problem that lasts is one row
+                  here, but a row in every scan in findings.
+              column_configs:
+                - column_name: current_status
+                  description:
+                    - >-
+                      The newest status of this check for this job: FAILED or WARNING while the
+                      problem lasts, UNKNOWN when the Watchdog cannot tell now (the incident stays
+                      open), HEALTHY once it is resolved.
+                - column_name: error_summary
+                  description:
+                    - >-
+                      What the check found in the incident's newest problem row. At most 1,000
+                      characters.
+                  synonyms: ["error", "error message", "reason", "details"]
+                - column_name: is_new
+                  description:
+                    - >-
+                      True when the incident opened in its source's newest scan, so it is new since
+                      the scan before. False for a problem that was already there.
+                  synonyms: ["new", "new problem", "just started", "since the last scan"]
+                - column_name: job_name
+                  enable_format_assistance: true
+                  enable_entity_matching: true
+                - column_name: opened_at
+                  description:
+                    - >-
+                      When the incident started: the time of the first scan that found the problem.
+                      Scans older than the retention period are deleted, so for a very old problem
+                      read it as "open since at least". Use it for how long a problem has been open.
+                  synonyms: ["started", "since", "first seen", "open since"]
+                - column_name: owner
+                  enable_format_assistance: true
+                  enable_entity_matching: true
+                - column_name: resolved_at
+                  description:
+                    - >-
+                      When the incident cleared: the time of the first scan with a HEALTHY result
+                      after it. Empty while the incident is not resolved.
+                  synonyms: ["cleared", "fixed", "recovered", "resolved"]
+                - column_name: scans_seen
+                  description:
+                    - >-
+                      How many scans found the problem, counted from when it opened.
+                  synonyms: ["number of scans", "how many times"]
+                - column_name: severity
+                  description:
+                    - >-
+                      How much the job matters: CRITICAL or WARNING, from the incident's newest
+                      problem row.
+                  synonyms: ["priority", "criticality", "importance"]
+                - column_name: state
+                  description:
+                    - >-
+                      OPEN: the problem is ongoing (the check is in its source's newest scan with
+                      no HEALTHY result since it opened). RESOLVED: a HEALTHY result cleared it.
+                      NOT_CHECKED: no HEALTHY result came, but the newest scan no longer has the
+                      check, for example because the job left the job list. Ongoing problems are
+                      the OPEN rows.
+                  synonyms: ["incident state", "open or resolved"]
+                - column_name: worst_status
+                  description:
+                    - >-
+                      FAILED if any scan of the incident was FAILED, else WARNING.
             - identifier: ${var.catalog}.${var.schema}.job_dependencies
               column_configs:
                 - column_name: dependency_type
@@ -161,6 +229,7 @@ resources:
                   - To count failing jobs, count jobs with a FAILED row; give jobs with only warnings as a second number.
                   - Questions about a period (the last 24 hours, a job's history) use findings, filtered on observed_at.
                   - One problem shows on several rows, one per check and source, so count jobs, not rows.
+                  - For "what is new" or "how long has X been failing", use incidents. Its OPEN rows are ongoing problems, and is_new means the problem opened in the newest scan. How long a problem has been open is the time since opened_at.
 
                   ## DATA QUALITY NOTES
                   - status is HEALTHY, WARNING, FAILED or UNKNOWN. severity (CRITICAL or WARNING) is set only on rows that are not healthy. failure_category says what kind of problem it is.
@@ -322,6 +391,16 @@ resources:
                   GROUP BY f.job_name, f.environment
                   HAVING scans_failed > 0 OR scans_warning > 0
                   ORDER BY scans_failed DESC, scans_warning DESC, f.job_name
+            - id: "c0000000000000000000000000000011"
+              question: ["Which problems are new in the latest scan?"]
+              usage_guidance: ["is_new is true for an OPEN incident that opened in its source's newest scan. For how long a problem has been open, use opened_at and scans_seen."]
+              sql:
+                - |
+                  SELECT i.job_name, i.workspace_name, i.environment, i.check_id, i.worst_status, i.severity,
+                    i.failure_category, i.error_summary, i.run_page_url, i.opened_at, i.scans_seen
+                  FROM ${var.catalog}.${var.schema}.incidents i
+                  WHERE i.state = 'OPEN' AND i.is_new
+                  ORDER BY i.worst_status, i.severity, i.job_name, i.check_id
         benchmarks:
           questions:
             - id: "d0000000000000000000000000000001"

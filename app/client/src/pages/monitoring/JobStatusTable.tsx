@@ -5,6 +5,7 @@ import type { JobStatusRow } from "../../lib/rows";
 import { formatAgo, formatUtc } from "../../lib/time";
 import { cn } from "../../lib/utils";
 import { SEVERITY_LABEL } from "./format";
+import type { IncidentsByJob, JobIncidents } from "./incidents";
 import { jobKey, jobLabel, workspaceLabel } from "./jobs";
 import { StatusBadge } from "./StatusBadge";
 
@@ -15,6 +16,8 @@ export interface JobStatusTableProps {
   /** Opens a job's detail panel. `focusBack` is the control to focus when the panel closes. */
   onOpen(this: void, row: JobStatusRow, focusBack: HTMLElement | null): void;
   now: Date;
+  /** The jobs' incidents, once the incidents view answers. Without it the table has no New badge and no "Open since" line. */
+  incidents?: IncidentsByJob | null;
 }
 
 /** Links inside a row open their own target, not the panel. */
@@ -82,14 +85,24 @@ function LastRun({ row, now }: { row: JobStatusRow; now: Date }) {
   );
 }
 
+/** "Open since <time>, <N> scans", from the job's oldest open incident. */
+function OpenSince({ incidents }: { incidents: JobIncidents }) {
+  const oldest = incidents.open[0];
+  if (!oldest) return null;
+  return (
+    <span className="mt-1 block text-[11px] leading-4 whitespace-normal text-muted-foreground">{`Open since ${formatUtc(oldest.opened_at)}, ${oldest.scans_seen} ${oldest.scans_seen === 1 ? "scan" : "scans"}`}</span>
+  );
+}
+
 interface JobRowProps {
   row: JobStatusRow;
   selected: boolean;
   onOpen: JobStatusTableProps["onOpen"];
   now: Date;
+  incidents: JobIncidents | null;
 }
 
-const JobRow = memo(function JobRow({ row, selected, onOpen, now }: JobRowProps) {
+const JobRow = memo(function JobRow({ row, selected, onOpen, now, incidents }: JobRowProps) {
   const notFound = row.workspace_id === null && row.workspace_name === null;
   const healthy = row.status === "HEALTHY";
   return (
@@ -100,6 +113,7 @@ const JobRow = memo(function JobRow({ row, selected, onOpen, now }: JobRowProps)
     >
       <TableCell className="pl-4">
         <StatusBadge status={row.status} />
+        {!healthy && incidents ? <OpenSince incidents={incidents} /> : null}
       </TableCell>
       <TableCell className="min-w-0">
         <span className="flex min-w-0 items-baseline gap-2">
@@ -114,6 +128,9 @@ const JobRow = memo(function JobRow({ row, selected, onOpen, now }: JobRowProps)
           >
             {row.job_name}
           </button>
+          {incidents?.isNew ? (
+            <span className="shrink-0 rounded-[4px] border border-primary/30 bg-primary/[0.08] px-1.5 py-px text-[11px] leading-4 font-medium text-primary">New</span>
+          ) : null}
           {row.parent_job ? (
             <span className="shrink-0 truncate text-xs text-muted-foreground">
               started by <span className="font-mono">{row.parent_job}</span>
@@ -157,13 +174,13 @@ const JobRow = memo(function JobRow({ row, selected, onOpen, now }: JobRowProps)
 });
 
 /** One row per job and workspace, worst first. Clicking a row, or its job name, opens the job's detail panel. */
-export function JobStatusTable({ rows, selectedKey, onOpen, now }: JobStatusTableProps) {
+export function JobStatusTable({ rows, selectedKey, onOpen, now, incidents = null }: JobStatusTableProps) {
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-card shadow-xs">
       <Table aria-label="Monitored jobs" className="min-w-[900px] table-fixed">
         <TableHeader className="bg-muted/60">
           <TableRow className="hover:bg-transparent">
-            <TableHead className="h-9 w-[104px] pl-4 text-xs font-medium text-muted-foreground">Status</TableHead>
+            <TableHead className="h-9 w-[150px] pl-4 text-xs font-medium text-muted-foreground">Status</TableHead>
             <TableHead className="h-9 text-xs font-medium text-muted-foreground">Job and reason</TableHead>
             <TableHead className="h-9 w-[14%] text-xs font-medium text-muted-foreground">Workspace</TableHead>
             <TableHead className="h-9 w-[12%] text-xs font-medium text-muted-foreground">Owner</TableHead>
@@ -175,7 +192,7 @@ export function JobStatusTable({ rows, selectedKey, onOpen, now }: JobStatusTabl
         <TableBody>
           {rows.map((row) => {
             const key = jobKey(row);
-            return <JobRow key={key} row={row} selected={key === selectedKey} onOpen={onOpen} now={now} />;
+            return <JobRow key={key} row={row} selected={key === selectedKey} onOpen={onOpen} now={now} incidents={incidents?.get(key) ?? null} />;
           })}
         </TableBody>
       </Table>

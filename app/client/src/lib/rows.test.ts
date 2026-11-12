@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CheckRow, FreshnessRow, HistoryRow, JobStatusRow, parseRows } from "./rows";
+import { CheckRow, FreshnessRow, HistoryRow, IncidentRow, JobStatusRow, parseRows } from "./rows";
 
 /** A job_status row as AppKit sends it: arrays as JSON text, times as ISO strings, NULL as null. */
 function statusRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -146,5 +146,40 @@ describe("parseRows", () => {
   it("treats an answer that is not a list as one bad row", () => {
     expect(parseRows(JobStatusRow, { rows: [] })).toEqual({ rows: [], bad: 1 });
     expect(parseRows(JobStatusRow, [])).toEqual({ rows: [], bad: 0 });
+  });
+});
+
+describe("IncidentRow", () => {
+  const row = {
+    incident_id: "inc-1",
+    state: "OPEN",
+    source: "JOBS_API",
+    check_id: "live_run_status",
+    workspace_id: "1001",
+    workspace_name: "example-prod",
+    job_id: "11",
+    job_name: "orders_ingest",
+    severity: "CRITICAL",
+    opened_at: "2026-11-05T10:00:00.000Z",
+    scans_seen: "4",
+    current_status: "FAILED",
+    resolved_at: null,
+    error_summary: "load: ValueError",
+    run_page_url: null,
+    is_new: "true",
+  };
+
+  it("reads the counts and flags as AppKit sends them, as text", () => {
+    const parsed = IncidentRow.parse(row);
+    expect(parsed.scans_seen).toBe(4);
+    expect(parsed.is_new).toBe(true);
+    expect(IncidentRow.parse({ ...row, is_new: "false" }).is_new).toBe(false);
+    expect(IncidentRow.parse({ ...row, is_new: null }).is_new).toBe(false);
+  });
+
+  it("keeps only the states the page shows and drops a row with a bad time", () => {
+    expect(IncidentRow.safeParse({ ...row, state: "NOT_CHECKED" }).success).toBe(false);
+    expect(IncidentRow.safeParse({ ...row, opened_at: "yesterday" }).success).toBe(false);
+    expect(IncidentRow.parse({ ...row, state: "RESOLVED", resolved_at: "2026-11-05T11:00:00.000Z", current_status: "HEALTHY" }).state).toBe("RESOLVED");
   });
 });

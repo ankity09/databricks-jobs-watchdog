@@ -2,7 +2,7 @@ import { sql } from "@databricks/appkit-ui/js";
 import { useAnalyticsQuery } from "@databricks/appkit-ui/react";
 import { useMemo } from "react";
 import { type QueryRows, useQueryRows, type WatchdogLocation } from "../../hooks/useWatchdogRows";
-import { CheckRow, HistoryRow, JobStatusRow } from "../../lib/rows";
+import { CheckRow, HistoryRow, IncidentRow, JobStatusRow } from "../../lib/rows";
 
 /** The Monitoring page's queries, run as the signed-in person (the .obo.sql files in config/queries). */
 
@@ -30,4 +30,13 @@ export function useJobHistory(where: WatchdogLocation, hours: number, bucketMinu
   const params = useMemo(() => ({ ...where.params, hours: sql.int(hours), bucket_minutes: sql.int(bucketMinutes) }), [where.params, hours, bucketMinutes]);
   const query = useAnalyticsQuery("job_history", params, { autoStart: where.ready });
   return useQueryRows(query, HistoryRow, where, `job_history:${hours}:${bucketMinutes}`);
+}
+
+/**
+ * The open incidents and those that cleared in the last 24 hours (job_incidents.obo.sql). The view it reads
+ * may not exist yet, so a failure here must not stop the page: see incidentsView.
+ */
+export function useJobIncidents(where: WatchdogLocation): QueryRows<IncidentRow> {
+  const query = useAnalyticsQuery("job_incidents", where.params, { autoStart: where.ready });
+  return useQueryRows(query, IncidentRow, where, "job_incidents");
 }
