@@ -169,7 +169,7 @@ def workspace_target(path, profile=""):
 
 
 def ensure_tables_steps(region):
-    """The Statement Execution API calls that create the Watchdog schema, tables and view when they are missing."""
+    """The Statement Execution API calls that create the Watchdog schema, tables and views when they are missing."""
     return _ensure_tables_steps(region)
 
 

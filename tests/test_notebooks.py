@@ -88,3 +88,24 @@ def test_notebook_02_keeps_the_original_error_when_recording_a_failed_load_fails
     text = (NOTEBOOKS / "02_load_config.py").read_text()
     handler = text[text.index("except Exception as err:"):text.index("record_config_load(spark, s.catalog, s.schema, ConfigLoad(now, scan_id, loaded.source")]
     assert "record_config_load_safely(" in handler and handler.rstrip().endswith("raise")
+
+
+@pytest.mark.parametrize("name, source", [("05_scan_system_tables.py", "SYSTEM_TABLES"),
+                                          ("06_scan_jobs_api.py", "JOBS_API")])
+def test_scans_print_what_they_wrote_and_how_their_problems_moved(name, source):
+    text = (NOTEBOOKS / name).read_text()
+    assert "from jobs_watchdog.incidents import scan_summary" in text
+    printed = f'print(scan_summary(spark, s.catalog, s.schema, "{source}", scan_id))'
+    assert text.count(printed) == 1
+    # after the merge, so the summary counts this scan's rows
+    merged = "write_findings(" if source == "JOBS_API" else "run_sql(spark, MERGE_SQL"
+    assert text.index(merged) < text.index(printed)
+    assert "Offered" not in text and "display(run_sql(spark, MERGE_SQL" not in text
+
+
+def test_validation_notebook_checks_open_incidents_against_the_newest_scans():
+    text = (NOTEBOOKS / "07_validate_phase_1.py").read_text()
+    assert ('incident_gaps = [row.asDict() for row in run_sql(spark, "sql/validate/43_open_incidents_match_latest.sql",'
+            ' **params).collect()]') in text
+    assert "results = phase_1_checks(tables, enabled_jobs, by_source, missing, duplicates, incident_gaps)" in text
+

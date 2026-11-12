@@ -18,7 +18,7 @@ Read these files before doing anything else:
 Ask for each value **one at a time**. Offer the default where there is one, and say why the value matters.
 
 1. **catalog** (required): the catalog that will hold the Watchdog schema. The operator needs `USE CATALOG` and `CREATE SCHEMA` on it, or, when the schema already exists, `USE CATALOG` on the catalog plus `USE SCHEMA`, `CREATE TABLE`, `SELECT` and `MODIFY` on the schema.
-2. **schema** (default `watchdog`): the schema for the six Watchdog tables and the `findings_latest` view.
+2. **schema** (default `watchdog`): the schema for the six Watchdog tables and the `findings_latest` and `incidents` views.
 3. **region** (required): the cloud region of this workspace's metastore, for example `us-east-2`. `SELECT current_metastore()` usually shows it in the form `<cloud>:<region>:<id>`. It is recorded on every finding. A Watchdog sees only the workspaces in its own region, so run one per region ([docs/multi-region.md](docs/multi-region.md) shows how to deploy several from one repo).
 4. **auth mode** (default `current_workspace`):
    - `current_workspace`: the Jobs API scan checks only this workspace, as the identity running the notebooks or the job.
@@ -69,7 +69,7 @@ Show the operator:
 
 1. the completed `accelerator.local.yaml`;
 2. the capability matrix from step 2;
-3. what step 5 will create: the schema `<catalog>.<schema>` with six tables and the view `findings_latest`. With the bundle path, also the `watchdog_phase_1` and `watchdog_app_access` jobs, the `watchdog_scan` and `watchdog_cleanup` jobs (created paused), the Watchdog app, its Lakebase project and the copilot's Genie agent, which the `app.users_group` group may use. With the demo target, four sample jobs as well. The dashboard is created only if the operator runs notebook 08.
+3. what step 5 will create: the schema `<catalog>.<schema>` with six tables and the views `findings_latest` and `incidents`. With the bundle path, also the `watchdog_phase_1` and `watchdog_app_access` jobs, the `watchdog_scan` and `watchdog_cleanup` jobs (created paused), the Watchdog app, its Lakebase project and the copilot's Genie agent, which the `app.users_group` group may use. With the demo target, four sample jobs as well. The dashboard is created only if the operator runs notebook 08.
 
 **Wait for the operator to approve.** Nothing has been created yet. If they change a value, update `accelerator.local.yaml` and show it again.
 
@@ -89,7 +89,7 @@ databricks bundle run watchdog_app -t dev --profile <profile>
 databricks bundle run watchdog_phase_1 -t dev --profile <profile>
 ```
 
-`scripts/ensure_tables.py` creates the schema, the tables and the view through the warehouse first: the bundle creates the copilot's Genie agent over them, and Genie refuses a schema that does not exist. `bundle run watchdog_app` deploys the app's code and starts it. Use `-t demo` instead of `-t dev` to add the four sample jobs. Run `watchdog_demo_succeeds`, `watchdog_demo_fails`, `watchdog_demo_slow` and `watchdog_demo_retries` once before `watchdog_phase_1`. `watchdog_demo_fails` reports an error on purpose.
+`scripts/ensure_tables.py` creates the schema, the tables and the views through the warehouse first: the bundle creates the copilot's Genie agent over them, and Genie refuses a schema that does not exist. `bundle run watchdog_app` deploys the app's code and starts it. Use `-t demo` instead of `-t dev` to add the four sample jobs. Run `watchdog_demo_succeeds`, `watchdog_demo_fails`, `watchdog_demo_slow` and `watchdog_demo_retries` once before `watchdog_phase_1`. `watchdog_demo_fails` reports an error on purpose.
 
 `watchdog_phase_1` checks access, creates or upgrades the tables and the view, and validates the setup, so run it before anything else. The scheduled scan `watchdog_scan` and the daily `watchdog_cleanup` job are deployed paused. Leave them paused until `watchdog_phase_1` has passed in this workspace. To turn it on, set `scan.schedule_status` to `UNPAUSED` in `accelerator.local.yaml`, run the `eval` line again, and deploy again. Each scheduled run then brings the tables up to date itself.
 
@@ -143,13 +143,14 @@ Until step 4, the scan keeps reading the YAML file, and the app says so in a ban
 
 ## Step 7. Verify
 
-Run `notebooks/07_validate_phase_1` with the same `catalog` and `schema`, and the `scan_id` from step 5 (or empty, to check each source's newest scan). Print its PASS and FAIL lines. All five should pass:
+Run `notebooks/07_validate_phase_1` with the same `catalog` and `schema`, and the `scan_id` from step 5 (or empty, to check each source's newest scan). Print its PASS and FAIL lines. All six should pass:
 
-1. the six tables and the `findings_latest` view exist (`monitored_jobs`, `job_dependencies`, `monitored_workspaces`, `monitored_job_environments`, `findings`, `config_loads`, `findings_latest`);
+1. the six tables and the two views exist (`monitored_jobs`, `job_dependencies`, `monitored_workspaces`, `monitored_job_environments`, `findings`, `config_loads`, `findings_latest`, `incidents`);
 2. the config has enabled jobs (switched on in at least one environment);
 3. both sources wrote findings;
 4. every enabled job has findings from each source;
-5. no findings key appears twice.
+5. no findings key appears twice;
+6. open incidents match the newest scans.
 
 Then show a sample of the results:
 
@@ -160,7 +161,7 @@ WHERE scan_id = '<scan_id>'
 ORDER BY status, job_name, check_id
 ```
 
-For the current status of every check, query `<catalog>.<schema>.findings_latest` with the same columns and no `scan_id` filter.
+For the current status of every check, query `<catalog>.<schema>.findings_latest` with the same columns and no `scan_id` filter. For each open problem, listed once with when it started, query `<catalog>.<schema>.incidents` with `WHERE state = 'OPEN'`.
 
 System tables run about an hour behind. A job created in the last hour shows `not_found` from the system tables while the Jobs API already reports it. Run notebook 05 again later to see it.
 
@@ -173,4 +174,4 @@ Point the operator at `teardown.sh`:
 ./teardown.sh -t demo --drop-schema --profile <profile>    # also the sample jobs and the Watchdog schema
 ```
 
-A plain teardown keeps the Lakebase project with the job list, and prints how to deploy again with it ([docs/multi-region.md](docs/multi-region.md#deploy-again-after-a-teardown)); `--drop-lakebase` deletes it, after the operator types its name, and Lakebase keeps the deleted project for 7 days (`databricks postgres undelete-project` brings it back; `delete-project --purge` deletes it for good). The schema is dropped only with `--drop-schema`, after the operator types its name. It drops the six tables and the `findings_latest` view. If the schema holds any other table, the script stops before changing anything. The script does not delete the dashboard from notebook 08: the operator moves it to the trash in the workspace. A service principal, secret scope and grants created for the Watchdog are not removed either; list them for the operator to remove by hand. Deleting the app deletes its own service principal, which leaves an empty home folder, `/Workspace/Users/<old client ID>`, that the operator can delete. If the script refuses, the [runbook's cleanup section](docs/phase-1-runbook.md#cleanup) has a manual fallback.
+A plain teardown keeps the Lakebase project with the job list, and prints how to deploy again with it ([docs/multi-region.md](docs/multi-region.md#deploy-again-after-a-teardown)); `--drop-lakebase` deletes it, after the operator types its name, and Lakebase keeps the deleted project for 7 days (`databricks postgres undelete-project` brings it back; `delete-project --purge` deletes it for good). The schema is dropped only with `--drop-schema`, after the operator types its name. It drops the six tables and the `findings_latest` and `incidents` views. If the schema holds any other table, the script stops before changing anything. The script does not delete the dashboard from notebook 08: the operator moves it to the trash in the workspace. A service principal, secret scope and grants created for the Watchdog are not removed either; list them for the operator to remove by hand. Deleting the app deletes its own service principal, which leaves an empty home folder, `/Workspace/Users/<old client ID>`, that the operator can delete. If the script refuses, the [runbook's cleanup section](docs/phase-1-runbook.md#cleanup) has a manual fallback.

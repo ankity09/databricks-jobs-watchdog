@@ -124,7 +124,7 @@ Running the script again is safe. The catalog must exist already.
 
 A single workspace deployed without a region file gets the same step from `python3 scripts/ensure_tables.py accelerator.local.yaml --profile <profile>`, before its first `bundle deploy`.
 
-To do it by hand instead, run the `sql/setup/*.sql` files in order in the SQL editor with the `catalog` and `schema` parameters, then create the view from `sql/views/`, replacing `{schema}` with the catalog and schema in backticks. Then deploy with `--skip-ensure-tables`.
+To do it by hand instead, run the `sql/setup/*.sql` files in order in the SQL editor with the `catalog` and `schema` parameters, then create each view from `sql/views/`, replacing `{schema}` with the catalog and schema in backticks. Then deploy with `--skip-ensure-tables`.
 
 ## What production mode needs
 

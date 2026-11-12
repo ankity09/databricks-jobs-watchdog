@@ -32,9 +32,9 @@
 # deleted project for 7 days: `databricks postgres undelete-project` brings it
 # back (Beta), and `databricks postgres delete-project --purge` deletes it for good.
 #
-# --drop-schema also drops <catalog>.<schema> with its tables and view
+# --drop-schema also drops <catalog>.<schema> with its tables and views
 # (monitored_jobs, job_dependencies, findings, monitored_workspaces,
-# monitored_job_environments, config_loads and findings_latest;
+# monitored_job_environments, config_loads, findings_latest and incidents;
 # jobs_watchdog.upgrade.watchdog_objects). The bundle does not own the
 # schema, because notebook 01 creates it, so it survives a plain teardown and
 # keeps your findings history. You type the schema name to confirm unless -y.
@@ -111,7 +111,7 @@ text = sys.stdin.read().strip()
 data = json.loads(text) if text else []
 tables = data.get("tables", []) if isinstance(data, dict) else (data or [])
 watchdog = {"monitored_jobs", "job_dependencies", "findings", "monitored_workspaces", "monitored_job_environments",
-            "config_loads", "findings_latest"}
+            "config_loads", "findings_latest", "incidents"}
 names = sorted({table.get("name", "") for table in tables} - watchdog)
 print(" ".join(names))
 ')"

@@ -43,9 +43,15 @@ Delivered in this release:
 - **Retention.** The daily `watchdog_cleanup` job (notebook 10) deletes `findings` scans older than `scan.retention_days` (30 by default), always keeping each source's newest scan.
 - **A shorter main path.** The read-only exploration notebooks moved to `notebooks/explore`, and `watchdog_phase_1` now runs 00, 01, 02, 05, 06 and 07.
 
-## Phase 2: incidents and more checks
+## Phase 1.4: one row per problem (built)
 
-- **Incidents.** An incident view on top of `findings` that changes only when a job's status changes: it opens an incident when a job turns unhealthy, escalates it when it stays that way or gets worse, and records the recovery when the job is healthy again. Alerts in Phase 3 fire on these changes instead of on every scan.
+- **The `incidents` view.** One row per problem with one check of one job, from the scan that found it until a HEALTHY row clears it: `OPEN`, `RESOLVED` or `NOT_CHECKED`, with when it opened and how many scans found it. Notebook 01 creates it. It reads `findings`, so it covers the rows already there.
+- **Plainer scan output.** Notebooks 05 and 06 print how many rows the scan holds, one per check, and how many problems are new, still open and resolved.
+- **A validation check.** Notebook 07 checks the open incidents against `findings_latest`.
+
+## Phase 2: escalation and more checks
+
+- **Escalation.** Escalate an incident in the `incidents` view (Phase 1.4) when it stays open or gets worse. Alerts in Phase 3 fire on these changes, and when an incident opens or is resolved, instead of on every scan.
 - **More checks:**
   - a stuck batch, or no new input, for continuous jobs;
   - a growing backlog over several scans;
@@ -53,7 +59,7 @@ Delivered in this release:
 
 ## Phase 3: alerts
 
-- **Databricks SQL alerts** on `findings` (or the Phase 2 incident view). An alert runs a query on a schedule and notifies a notification destination: Slack, email, Microsoft Teams, PagerDuty or a webhook. A workspace admin creates the destinations.
+- **Databricks SQL alerts** on `findings` (or the `incidents` view). An alert runs a query on a schedule and notifies a notification destination: Slack, email, Microsoft Teams, PagerDuty or a webhook. A workspace admin creates the destinations.
 - **Alert once on change, and again on recovery.** An alert fires when a job's status changes for a check, not on every scan, and again when the job recovers. This reads the history in `findings`, not only `findings_latest`.
 - **Severity routing.** CRITICAL findings page the on-call engineer; WARNING findings go to a chat channel, tagged with the job's `owner`.
 - **Routing by environment.** Route findings by the environment label, so production and lower-environment findings go to separate channels.
@@ -71,7 +77,7 @@ A Databricks App with a Lakebase project and a Genie copilot, deployed by the bu
 
 Moved to the backlog:
 
-- Incidents: what is open, since when, and who owns it (needs the Phase 2 incident view).
+- Incidents: what is open, since when, and who owns it, from the `incidents` view (Phase 1.4).
 - Acknowledgements and triage notes on a failure.
 - A restore button in the change log (the server already has the call).
 - Copilot actions, such as rerunning a job, and approvals for them.

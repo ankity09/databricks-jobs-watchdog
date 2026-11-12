@@ -60,12 +60,12 @@ This is the best source for live checks: a task that failed inside a run that is
 
 The `watchdog_scan` job runs every 20 minutes in UTC, and it starts paused. Each run has four tasks, in order:
 
-1. `create_tables` (notebook 01) creates what is missing, adds new columns after an upgrade, and makes the view `findings_latest` current. Tables and views that are already current are left alone.
+1. `create_tables` (notebook 01) creates what is missing, adds new columns after an upgrade, and makes the views `findings_latest` and `incidents` current. Tables and views that are already current are left alone.
 2. `load_config` (notebook 02) reloads your monitored-jobs list into the config tables, from the YAML file or, with `scan.config_source: lakebase`, from the newest version saved in the Watchdog app. It records the load in `config_loads`.
 3. `scan_system_tables` (notebook 05) writes the system table findings.
 4. `scan_jobs_api` (notebook 06) writes the Jobs API findings.
 
-Both scans run even if an earlier task failed (`run_if: ALL_DONE`), and each one checks the tables and the view before it writes. A bad config file therefore leaves the scans running on the config loaded last time, and the run shows as failed. Both scans use the run's ID as their `scan_id`, so one run is one scan across both sources. The job allows one run at a time, so runs never overlap.
+Both scans run even if an earlier task failed (`run_if: ALL_DONE`), and each one checks the tables and the views before it writes. A bad config file therefore leaves the scans running on the config loaded last time, and the run shows as failed. Both scans use the run's ID as their `scan_id`, so one run is one scan across both sources. The job allows one run at a time, so runs never overlap.
 
 Because every run brings the tables up to date, a deploy that adds columns needs no manual step. The identity that runs the job needs `CREATE TABLE` and `MODIFY` on the Watchdog schema for that step. Run `watchdog_phase_1` once before you unpause the schedule, to check access and validate the setup.
 
@@ -74,6 +74,8 @@ Because every run brings the tables up to date, a deploy that adds columns needs
 `findings` keeps every scan, so the table is the history. It is what change-only alerts and trends read.
 
 `findings_latest` shows only the newest scan from each source, so it is the current picture. A source's newest scan is the one that first wrote rows, so re-running an old `scan_id` never brings it back as the newest. The dashboard reads the view. The view and its rules are in [data-model.md](data-model.md#the-findings_latest-view).
+
+`incidents` lists each problem once: one check of one job from the scan that found it until a HEALTHY row clears it. Because every scan writes a row for every check, a problem that lasts is in every scan of `findings`; this view turns those rows into one row per problem, with its state and when it opened. Its rules are in [data-model.md](data-model.md#the-incidents-view).
 
 ## The dashboard and your own checks
 
