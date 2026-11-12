@@ -18,7 +18,9 @@ scripts/deploy_regions.py runs them.
 import configparser
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import yaml
@@ -26,7 +28,15 @@ import yaml
 from jobs_watchdog.bundle_vars import VARIABLES, bundle_variables
 from jobs_watchdog.config import ConfigError, load_accelerator
 from jobs_watchdog.sqlfiles import load_sql, repo_root
-from jobs_watchdog.upgrade import VIEW_TEMPLATES, render_view, view_names
+from jobs_watchdog.upgrade import (
+    TABLES,
+    VIEW_TEMPLATES,
+    add_columns_statement,
+    ddl_columns,
+    missing_columns,
+    render_view,
+    view_names,
+)
 
 TARGET = "production"
 STATEMENTS_API = "/api/2.0/sql/statements"
@@ -52,11 +62,16 @@ class Step:
 
     only_if_missing is a second command, a check: when it is set, argv runs only
     if the check finds no row.
+
+    follow_up makes argv a read. It gets the rows argv returned and gives back
+    the command to run next with a line that says what it does, or None when
+    there is nothing to do. It raises ValueError when the rows cannot be right.
     """
 
     label: str
     argv: list
     only_if_missing: list | None = None
+    follow_up: Callable[[list], tuple[list, str] | None] | None = None
 
 
 def _region_name(path):
@@ -155,6 +170,27 @@ def _statement(region, statement, parameters):
 # information_schema holds names in lower case, so a schema named Watchdog must still find its view
 _VIEW_EXISTS = ("SELECT 1 FROM IDENTIFIER(:catalog || '.information_schema.views') "
                 "WHERE table_schema = lower(:schema) AND table_name = lower(:view)")
+_TABLE_COLUMNS = ("SELECT column_name FROM IDENTIFIER(:catalog || '.information_schema.columns') "
+                  "WHERE table_schema = lower(:schema) AND table_name = lower(:table)")
+
+
+def add_missing_columns(region, table, relpath, rows):
+    """The ALTER TABLE that adds the columns a table lacks, as notebook 01 does, or None when it has them all.
+
+    rows are the table's columns, read from information_schema.columns, as the
+    statement API returns them. Returns (command, what it adds). The setup files
+    have just made sure the table exists, so no rows at all means this identity
+    cannot see it, and adding every column would be wrong.
+    """
+    if not rows:
+        raise ValueError(f"cannot see the columns of {region.catalog}.{region.schema}.{table} in "
+                         "information_schema: the identity needs SELECT and MODIFY on it")
+    missing = missing_columns([row[0] for row in rows], ddl_columns(relpath))
+    if not missing:
+        return None
+    base = [("catalog", region.catalog), ("schema", region.schema)]
+    return (_statement(region, add_columns_statement(table, missing), base),
+            "added " + ", ".join(column.name for column in missing))
 
 
 def workspace_target(path, profile=""):
@@ -169,7 +205,11 @@ def workspace_target(path, profile=""):
 
 
 def ensure_tables_steps(region):
-    """The Statement Execution API calls that create the Watchdog schema, tables and views when they are missing."""
+    """The Statement Execution API calls that make the Watchdog schema, tables and views ready for a deploy.
+
+    In notebook 01's order: the files in sql/setup create what is missing, then
+    each table gets the columns it lacks, then each missing view is created.
+    """
     return _ensure_tables_steps(region)
 
 
@@ -179,6 +219,14 @@ def _ensure_tables_steps(region):
     for path in sorted((repo_root() / "sql" / "setup").glob("*.sql")):
         relpath = str(path.relative_to(repo_root()))
         steps.append(Step(f"tables: {path.stem}", _statement(region, load_sql(relpath), base)))
+    for table, relpath in TABLES:
+        # a table from an older version gets its new columns before the views, which can name
+        # them (incidents names parent_job, which findings has only since Phase 1.3)
+        steps.append(Step(
+            f"tables: columns of {table}",
+            _statement(region, _TABLE_COLUMNS, base + [("table", table)]),
+            follow_up=partial(add_missing_columns, region, table, relpath),
+        ))
     for relpath, name in zip(VIEW_TEMPLATES, view_names()):
         # CREATE OR REPLACE VIEW moves a view's owner, so an existing view is left alone
         steps.append(Step(
@@ -192,9 +240,9 @@ def _ensure_tables_steps(region):
 def deploy_steps(region, validate_only, run_app, ensure_tables=True, app_access=True):
     """The commands for one region, in order.
 
-    validate, then (unless validate_only) the Watchdog tables and views a fresh
-    region lacks, which the copilot's Genie agent needs before the first
-    deploy, then bundle deploy, then bundle run watchdog_app, then the
+    validate, then (unless validate_only) the Watchdog tables, columns and
+    views the region lacks, which the copilot's Genie agent needs before the
+    first deploy, then bundle deploy, then bundle run watchdog_app, then the
     watchdog_app_access job: after a teardown and a new deploy, it gives the
     new app access to the job list the teardown kept (it changes nothing
     otherwise).

@@ -8,8 +8,8 @@ import sys
 import pytest
 
 from jobs_watchdog.sqlfiles import repo_root
-from jobs_watchdog.upgrade import view_names
-from tests.test_deploy_regions import FAKE_DATABRICKS
+from jobs_watchdog.upgrade import TABLES, ddl_columns, view_names
+from tests.test_deploy_regions import FAKE_DATABRICKS, statements, write_columns
 
 LOCAL = """
 target:
@@ -26,6 +26,7 @@ auth:
 def sandbox(tmp_path):
     for folder in ("scripts", "jobs_watchdog", "sql"):
         shutil.copytree(repo_root() / folder, tmp_path / folder, ignore=shutil.ignore_patterns("__pycache__"))
+    write_columns(tmp_path)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "databricks").write_text(FAKE_DATABRICKS)
@@ -47,10 +48,38 @@ def test_it_creates_every_setup_table_then_the_missing_view_on_the_file_s_wareho
     result, calls = run(sandbox, str(sandbox / "accelerator.local.yaml"), "--profile", "my-profile")
     assert result.returncode == 0, result.stdout + result.stderr
     setup = len(list((repo_root() / "sql" / "setup").glob("*.sql")))
-    assert len(calls) == setup + 2 * len(view_names())  # a check and a create per missing view
+    # a read per table (each already has every column, so no ALTER), and a check and a create per missing view
+    assert len(calls) == setup + len(TABLES) + 2 * len(view_names())
     assert all(call.startswith("api post /api/2.0/sql/statements") for call in calls)
     assert all('"warehouse_id": "wh123"' in call and "--profile my-profile" in call for call in calls)
     assert "bundle" not in " ".join(calls)
+    assert "tables: columns of findings: current" in result.stdout
+
+
+def test_a_findings_table_from_phase_1_2_gets_parent_job_before_the_incidents_view_is_created(sandbox):
+    # incidents names parent_job, which findings has only since Phase 1.3, so the view could not be created first
+    write_columns(sandbox, findings=[c.name for c in ddl_columns("sql/setup/04_create_findings.sql")
+                                     if c.name != "parent_job"])
+    result, calls = run(sandbox)
+    assert result.returncode == 0, result.stdout + result.stderr
+    sql = statements(calls)
+    alters = [statement for statement in sql if statement.startswith("ALTER TABLE")]
+    assert len(alters) == 1
+    assert alters[0].startswith("ALTER TABLE IDENTIFIER(:catalog || '.' || :schema || '.findings') "
+                                "ADD COLUMNS (parent_job STRING COMMENT ")
+    incidents = next(i for i, statement in enumerate(sql)
+                     if "CREATE OR REPLACE VIEW `main`.`watchdog`.incidents" in statement)
+    assert sql.index(alters[0]) < incidents
+    assert "tables: columns of findings: added parent_job" in result.stdout
+
+
+def test_a_table_whose_columns_cannot_be_read_stops_before_any_view(sandbox):
+    write_columns(sandbox, findings=[])
+    result, calls = run(sandbox)
+    assert result.returncode == 1
+    assert "cannot see the columns of main.watchdog.findings" in result.stderr
+    assert not any("CREATE OR REPLACE VIEW" in statement or statement.startswith("ALTER TABLE")
+                   for statement in statements(calls))
 
 
 def test_it_reads_accelerator_local_yaml_by_default(sandbox):

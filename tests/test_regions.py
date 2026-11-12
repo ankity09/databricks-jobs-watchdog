@@ -13,7 +13,7 @@ from jobs_watchdog.regions import (
     teardown_target,
 )
 from jobs_watchdog.sqlfiles import load_sql, repo_root
-from jobs_watchdog.upgrade import VIEW_TEMPLATES, render_view, view_names
+from jobs_watchdog.upgrade import TABLES, VIEW_TEMPLATES, add_columns_statement, ddl_columns, render_view, view_names
 
 REGION_FILE = """
 target:
@@ -215,7 +215,8 @@ def test_deploy_steps_validate_first_then_tables_then_deploy():
 
 def test_ensure_tables_runs_every_setup_file_in_sorted_order_with_named_parameters():
     steps = deploy_steps(region(), validate_only=False, run_app=False)
-    setup = [s for s in steps if s.label.startswith("tables: ") and not s.label.startswith("tables: view")]
+    setup = [s for s in steps
+             if s.label.startswith("tables: ") and not s.label.startswith(("tables: view", "tables: columns of "))]
     files = sorted((repo_root() / "sql" / "setup").glob("*.sql"))
     assert len(setup) == len(files)
     for step, path in zip(setup, files):
@@ -227,6 +228,50 @@ def test_ensure_tables_runs_every_setup_file_in_sorted_order_with_named_paramete
                                       {"name": "schema", "value": "watchdog", "type": "STRING"}]
         assert step.only_if_missing is None
         assert step.label.endswith(path.stem)
+
+
+def test_ensure_tables_upgrades_every_table_after_the_setup_files_and_before_the_views():
+    # as notebook 01 does: a view can name a column that only the newer table has
+    steps = deploy_steps(region(), validate_only=False, run_app=False)
+    tables = [s for s in steps if s.label.startswith("tables: ")]
+    kinds = ["view" if s.label.startswith("tables: view ") else "columns" if s.label.startswith("tables: columns of ")
+             else "setup" for s in tables]
+    assert kinds == sorted(kinds, key=["setup", "columns", "view"].index)
+    reads = [s for s in tables if s.label.startswith("tables: columns of ")]
+    assert [s.label for s in reads] == [f"tables: columns of {table}" for table, _ in TABLES]
+    for step, (table, _) in zip(reads, TABLES):
+        body = statement_body(step.argv)
+        assert "information_schema.columns" in body["statement"] and "lower(:table)" in body["statement"]
+        assert body["parameters"] == [{"name": "catalog", "value": "main", "type": "STRING"},
+                                      {"name": "schema", "value": "watchdog", "type": "STRING"},
+                                      {"name": "table", "value": table, "type": "STRING"}]
+        assert step.follow_up is not None and step.only_if_missing is None
+
+
+def test_a_findings_table_from_phase_1_2_gets_only_parent_job_added():
+    from jobs_watchdog.regions import add_missing_columns
+
+    relpath = dict(TABLES)["findings"]
+    declared = ddl_columns(relpath)
+    phase_1_2 = [[column.name] for column in declared if column.name != "parent_job"]
+    command, done = add_missing_columns(region(profile="my-profile"), "findings", relpath, phase_1_2)
+    body = statement_body(command)
+    assert body["statement"] == add_columns_statement("findings", [c for c in declared if c.name == "parent_job"])
+    assert body["parameters"] == [{"name": "catalog", "value": "main", "type": "STRING"},
+                                  {"name": "schema", "value": "watchdog", "type": "STRING"}]
+    assert body["warehouse_id"] == "abc123" and command[-2:] == ["--profile", "my-profile"]
+    assert done == "added parent_job"
+
+
+def test_a_current_table_needs_no_upgrade_and_an_unreadable_one_stops_the_step():
+    from jobs_watchdog.regions import add_missing_columns
+
+    relpath = dict(TABLES)["findings"]
+    # information_schema keeps column names as they were written, so the match ignores case
+    assert add_missing_columns(region(), "findings", relpath, [[c.name.upper()] for c in ddl_columns(relpath)]) is None
+    # the setup files made sure the table exists, so no columns means the identity cannot see it
+    with pytest.raises(ValueError, match=r"cannot see the columns of main\.watchdog\.findings"):
+        add_missing_columns(region(), "findings", relpath, [])
 
 
 def test_ensure_tables_creates_each_view_only_when_it_is_missing():

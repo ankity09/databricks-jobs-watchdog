@@ -89,9 +89,9 @@ databricks bundle run watchdog_app -t dev --profile <profile>
 databricks bundle run watchdog_phase_1 -t dev --profile <profile>
 ```
 
-`scripts/ensure_tables.py` creates the schema, the tables and the views through the warehouse first: the bundle creates the copilot's Genie agent over them, and Genie refuses a schema that does not exist. `bundle run watchdog_app` deploys the app's code and starts it. Use `-t demo` instead of `-t dev` to add the four sample jobs. Run `watchdog_demo_succeeds`, `watchdog_demo_fails`, `watchdog_demo_slow` and `watchdog_demo_retries` once before `watchdog_phase_1`. `watchdog_demo_fails` reports an error on purpose.
+`scripts/ensure_tables.py` creates the schema, the tables and the views through the warehouse first: the bundle creates the copilot's Genie agent over them, and Genie refuses a schema that does not exist. On a schema from an older version it first adds the columns its tables lack, as notebook 01 does. `bundle run watchdog_app` deploys the app's code and starts it. Use `-t demo` instead of `-t dev` to add the four sample jobs. Run `watchdog_demo_succeeds`, `watchdog_demo_fails`, `watchdog_demo_slow` and `watchdog_demo_retries` once before `watchdog_phase_1`. `watchdog_demo_fails` reports an error on purpose.
 
-`watchdog_phase_1` checks access, creates or upgrades the tables and the view, and validates the setup, so run it before anything else. The scheduled scan `watchdog_scan` and the daily `watchdog_cleanup` job are deployed paused. Leave them paused until `watchdog_phase_1` has passed in this workspace. To turn it on, set `scan.schedule_status` to `UNPAUSED` in `accelerator.local.yaml`, run the `eval` line again, and deploy again. Each scheduled run then brings the tables up to date itself.
+`watchdog_phase_1` checks access, creates or upgrades the tables and the views, and validates the setup, so run it before anything else. The scheduled scan `watchdog_scan` and the daily `watchdog_cleanup` job are deployed paused. Leave them paused until `watchdog_phase_1` has passed in this workspace. To turn it on, set `scan.schedule_status` to `UNPAUSED` in `accelerator.local.yaml`, run the `eval` line again, and deploy again. Each scheduled run then brings the tables up to date itself.
 
 Known degradations:
 

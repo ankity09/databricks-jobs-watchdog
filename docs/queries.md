@@ -51,10 +51,11 @@ Run in order by notebook 01. Every statement is `IF NOT EXISTS`, so re-running c
 | `04_create_findings.sql` | `catalog`, `schema` | Creates `findings`, the table both scans write. It has 30 columns. |
 | `05_create_monitored_workspaces.sql` | `catalog`, `schema` | Creates `monitored_workspaces`, the environment label for each workspace. |
 | `06_create_monitored_job_environments.sql` | `catalog`, `schema` | Creates `monitored_job_environments`, the settings each job changes in one environment. |
+| `07_create_config_loads.sql` | `catalog`, `schema` | Creates `config_loads`, one row each time notebook 02 loads the job list, with its source, version, job count and result. |
 
 ## sql/config
 
-Run by notebook 02, after it reads your monitored-jobs YAML file into four temp views.
+Run by notebook 02, after it reads your job list (the YAML file, or the newest version saved in the Watchdog app) into four temp views.
 
 | File | Parameters | What it does |
 |---|---|---|
@@ -62,8 +63,9 @@ Run by notebook 02, after it reads your monitored-jobs YAML file into four temp 
 | `02_load_job_dependencies.sql` | `catalog`, `schema` | Replaces every row of `job_dependencies` with the rows of `watchdog_config_dependencies`. |
 | `03_load_monitored_workspaces.sql` | `catalog`, `schema` | Replaces every row of `monitored_workspaces` with the rows of `watchdog_config_workspaces`. |
 | `04_load_monitored_job_environments.sql` | `catalog`, `schema` | Replaces every row of `monitored_job_environments` with the rows of `watchdog_config_environments` (one per job and environment label in the `environments` sections), stamping `loaded_at`. |
+| `05_record_config_load.sql` | `catalog`, `schema` | Adds the row in the temp view `watchdog_config_load` to `config_loads`. Notebook 02 runs it for every load, failed loads too. |
 
-All four use `INSERT OVERWRITE`, which keeps the table definition and column comments.
+01 to 04 use `INSERT OVERWRITE`, which keeps the table definition and column comments. 05 only adds a row.
 
 ## sql/views
 

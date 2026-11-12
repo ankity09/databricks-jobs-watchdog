@@ -84,7 +84,7 @@ Notebook `01_create_tables` creates these, and upgrades existing tables and the 
 With the bundle (`databricks.yml`):
 
 - `watchdog_phase_1`: an on-demand job (no schedule) that runs notebooks 00, 01, 02, 05, 06 and 07 as serverless tasks. Use it for setup and validation.
-- `watchdog_scan`: the scheduled scan. Every 20 minutes in UTC, it brings the tables and the view up to date (notebook 01), reloads your config (notebook 02), then runs both scans (notebooks 05 and 06). It is deployed paused.
+- `watchdog_scan`: the scheduled scan. Every 20 minutes in UTC, it brings the tables and the views up to date (notebook 01), reloads your config (notebook 02), then runs both scans (notebooks 05 and 06). It is deployed paused.
 - `watchdog_cleanup`: once a day at 03:30 UTC, it deletes findings scans older than `scan.retention_days` days (notebook 10), keeping each source's newest scan. It is paused and unpaused with the scan (`scan.schedule_status`).
 - With `-t demo`, four sample jobs as well: `watchdog_demo_succeeds`, `watchdog_demo_fails` (its `load` task fails on purpose), `watchdog_demo_slow` and `watchdog_demo_retries`. Their schedules are paused too.
 
@@ -125,7 +125,7 @@ The runbook's [First run, step by step](docs/phase-1-runbook.md#first-run-step-b
 | Notebook | Does |
 |---|---|
 | `00_check_access` | confirms system table and Jobs API access, and lists the workspaces this region covers; changes nothing |
-| `01_create_tables` | creates the schema, the tables and the view, and upgrades existing tables. **Run it after every pull.** |
+| `01_create_tables` | creates the schema, the tables and the views, and upgrades existing tables. **Run it after every pull.** |
 | `02_load_config` | loads your monitored-jobs file and shows which real jobs each entry matches |
 | `05_scan_system_tables` | writes the system table findings |
 | `06_scan_jobs_api` | writes the Jobs API findings |
@@ -238,7 +238,7 @@ docs/                  guides and diagrams
 
 - [The Watchdog app](docs/app.md): the sections, who each call runs as, the Lakebase table, job-list versions, the copilot, and the known gaps.
 - [Architecture](docs/architecture.md): both diagrams, explained, plus the scheduled scan and the region rule.
-- [Data model](docs/data-model.md): the tables, the view, and every findings column.
+- [Data model](docs/data-model.md): the tables, the views, and every findings column.
 - [Queries](docs/queries.md): every SQL file, what it answers and how to read it.
 - [Jobs API](docs/jobs-api.md): every Jobs API field the Watchdog reads.
 - [Phase 1 runbook](docs/phase-1-runbook.md): step by step, by role.

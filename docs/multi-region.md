@@ -113,18 +113,19 @@ The `production` target uses production mode. [What production mode needs](#what
 
 ## The first deploy of a fresh region
 
-The copilot is a Genie agent over the six Watchdog tables and views, and the bundle creates it. Genie refuses to create a space over a schema that does not exist. So a fresh region needs its tables before `bundle deploy`.
+The copilot is a Genie agent over five Watchdog tables (`findings`, `monitored_jobs`, `job_dependencies`, `monitored_workspaces` and `monitored_job_environments`) and the `findings_latest` view, and the bundle creates it. Genie refuses to create a space over a schema that does not exist. So a fresh region needs its tables before `bundle deploy`.
 
 The script does this for you. Before the deploy it runs, through the SQL Statement Execution API on the region's warehouse:
 
 1. every file in `sql/setup/`, in order. They create the schema and the six tables, and each is safe to run again.
-2. each view in `sql/views/`, only when the view does not exist yet. It checks `information_schema.views` first, because replacing a view moves its owner.
+2. for each table, a read of its columns from `information_schema.columns`, and an `ALTER TABLE ... ADD COLUMNS` for the columns a table from an older version lacks, as notebook 01 adds them. The views come after this step because a view can name a column that only the newer tables have: `incidents` names `parent_job`, which `findings` has had since Phase 1.3.
+3. each view in `sql/views/`, only when the view does not exist yet. It checks `information_schema.views` first, because replacing a view moves its owner.
 
 Running the script again is safe. The catalog must exist already.
 
 A single workspace deployed without a region file gets the same step from `python3 scripts/ensure_tables.py accelerator.local.yaml --profile <profile>`, before its first `bundle deploy`.
 
-To do it by hand instead, run the `sql/setup/*.sql` files in order in the SQL editor with the `catalog` and `schema` parameters, then create each view from `sql/views/`, replacing `{schema}` with the catalog and schema in backticks. Then deploy with `--skip-ensure-tables`.
+To do it by hand instead, run the `sql/setup/*.sql` files in order in the SQL editor with the `catalog` and `schema` parameters, then create each view from `sql/views/`, replacing `{schema}` with the catalog and schema in backticks. On a schema from an older version, run notebook 01 instead, which also adds the new columns. Then deploy with `--skip-ensure-tables`.
 
 ## What production mode needs
 

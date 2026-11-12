@@ -30,7 +30,7 @@ variables:
   catalog:
     description: Catalog that holds the Watchdog schema (required)
   schema:
-    description: Schema for the Watchdog tables and view
+    description: Schema for the Watchdog tables and views
     default: watchdog
   region:
     description: Cloud region of this metastore, recorded on every finding (required)

@@ -14,7 +14,7 @@ watchdog-app (a Node server and a React page)
   |- Monitoring ------- SQL warehouse, as the person --> findings_latest, findings, config_loads
   |- Jobs and deps ---- Lakebase, as the app ---------> watchdog_app.job_list_versions, watchdog_app.map_layout
   |    '- job picker --- SQL warehouse, as the person --> system.lakeflow.jobs, system.access.workspaces_latest
-  |- Copilot ---------- Genie agent, as the person ----> the six Watchdog tables
+  |- Copilot ---------- Genie agent, as the person ----> five Watchdog tables and findings_latest
   '- Scan now --------- Jobs API, as the app ----------> starts watchdog_scan
 
 watchdog_scan (the checks are the same as before)
@@ -156,7 +156,7 @@ A banner on the Job list and the Dependency map tells you which job list the sca
 
 ## The copilot
 
-The copilot is a Genie agent that the bundle creates over the six Watchdog tables and the `findings_latest` view. People ask it questions in plain language, such as "What is failing right now?", "Which jobs missed their schedule?" or "What breaks if orders_ingest fails?".
+The copilot is a Genie agent that the bundle creates over five Watchdog tables (`findings`, `monitored_jobs`, `job_dependencies`, `monitored_workspaces` and `monitored_job_environments`) and the `findings_latest` view. People ask it questions in plain language, such as "What is failing right now?", "Which jobs missed their schedule?" or "What breaks if orders_ingest fails?".
 
 A new chat opens on a welcome view. It asks "What do you want to know?", says that answers come from the Watchdog tables and run as you, and offers four starter questions as cards, above the box where you type your own.
 

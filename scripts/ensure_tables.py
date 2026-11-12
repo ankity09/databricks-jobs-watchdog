@@ -7,11 +7,13 @@ bundle deploy creates the copilot's Genie agent over the Watchdog tables, and
 Genie refuses a space over a schema that does not exist. So a fresh workspace
 needs the tables first. This runs, through the SQL Statement Execution API on
 target.warehouse_id, every file in sql/setup (each CREATE ... IF NOT EXISTS),
-then each view in sql/views that is missing, as scripts/deploy_regions.py
-does for each region. It is safe to run again. The catalog must exist, and the
-identity you sign in as needs USE CATALOG and CREATE SCHEMA on it, and CAN USE
-on the warehouse. With no path it reads accelerator.local.yaml when present,
-otherwise accelerator.yaml.
+then adds the columns a table from an older version lacks, as notebook 01
+does, then each view in sql/views that is missing, as scripts/deploy_regions.py
+does for each region. A view can name a column that only the newer tables have,
+so the columns come first. It is safe to run again. The catalog must exist, and
+the identity you sign in as needs USE CATALOG and CREATE SCHEMA on it, MODIFY
+on any older table it adds columns to, and CAN USE on the warehouse. With no
+path it reads accelerator.local.yaml when present, otherwise accelerator.yaml.
 """
 
 import argparse
@@ -49,6 +51,10 @@ def main(argv=None):
             return 1
         if result == "exists":
             print(f"{step.label}: exists, left as it is", flush=True)
+        elif result == "current":
+            print(f"{step.label}: current", flush=True)
+        elif detail:
+            print(f"{step.label}: {detail}", flush=True)
     print(f"{target.catalog}.{target.schema} has the Watchdog tables and views. Next: bundle deploy.")
     return 0
 

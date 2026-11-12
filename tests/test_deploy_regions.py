@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from jobs_watchdog.sqlfiles import repo_root
-from jobs_watchdog.upgrade import view_names
+from jobs_watchdog.upgrade import TABLES, ddl_columns, view_names
 
 TOKEN = "dapi" + "0123456789abcdef" * 2  # built here so no token-shaped literal sits in the file
 
@@ -27,7 +27,8 @@ deploy:
 # Logs each call (arguments plus the environment the script set), then answers.
 # FAKE_FAIL_HOST makes every bundle command fail for that host.
 # FAKE_VIEW_EXISTS=1 answers the view check with a row.
-# FAKE_STATE overrides the statement state (FAILED, or PENDING once, then SUCCEEDED).
+# A read of a table's columns gets the answer in columns/<table>.json next to FAKE_LOG (write_columns).
+# FAKE_STATE overrides the statement state (FAILED, or PENDING once, then the poll gives the answer).
 FAKE_DATABRICKS = """#!/usr/bin/env bash
 echo "$* | host=${DATABRICKS_HOST:-} profile_env=${DATABRICKS_CONFIG_PROFILE:-} catalog=${BUNDLE_VAR_catalog:-} warehouse=${BUNDLE_VAR_warehouse_id:-}" >> "$FAKE_LOG"
 if [[ "$1 $2" == "api post" ]]; then
@@ -35,23 +36,26 @@ if [[ "$1 $2" == "api post" ]]; then
     echo '{"statement_id":"s1","status":{"state":"FAILED","error":{"message":"PERMISSION_DENIED on the catalog"}}}'
     exit 0
   fi
+  table_parameter='"name": "table", "value": "([A-Za-z0-9_]+)"'
+  if [[ "$*" == *information_schema.columns* && "$*" =~ $table_parameter ]]; then
+    answer="$(cat "$(dirname "$FAKE_LOG")/columns/${BASH_REMATCH[1]}.json")"
+  elif [[ "$*" == *information_schema* && "${FAKE_VIEW_EXISTS:-}" == "1" ]]; then
+    answer='{"statement_id":"s1","status":{"state":"SUCCEEDED"},"result":{"data_array":[["1"]]}}'
+  elif [[ "$*" == *information_schema* ]]; then
+    answer='{"statement_id":"s1","status":{"state":"SUCCEEDED"},"manifest":{},"result":null}'
+  else
+    answer='{"statement_id":"s1","status":{"state":"SUCCEEDED"}}'
+  fi
   if [[ "${FAKE_STATE:-}" == "PENDING" ]]; then
+    printf '%s\\n' "$answer" > "$FAKE_LOG.answer"  # what the poll returns
     echo '{"statement_id":"s1","status":{"state":"PENDING"}}'
     exit 0
   fi
-  if [[ "$*" == *information_schema* ]]; then
-    if [[ "${FAKE_VIEW_EXISTS:-}" == "1" ]]; then
-      echo '{"statement_id":"s1","status":{"state":"SUCCEEDED"},"result":{"data_array":[["1"]]}}'
-    else
-      echo '{"statement_id":"s1","status":{"state":"SUCCEEDED"},"manifest":{},"result":null}'
-    fi
-    exit 0
-  fi
-  echo '{"statement_id":"s1","status":{"state":"SUCCEEDED"}}'
+  printf '%s\\n' "$answer"
   exit 0
 fi
 if [[ "$1 $2" == "api get" ]]; then
-  echo '{"statement_id":"s1","status":{"state":"SUCCEEDED"}}'
+  if [[ -f "$FAKE_LOG.answer" ]]; then cat "$FAKE_LOG.answer"; else echo '{"statement_id":"s1","status":{"state":"SUCCEEDED"}}'; fi
   exit 0
 fi
 # FAKE_APP_SP_<n> answers the n-th apps get: a client ID, or "missing"; unset, the answer is not JSON.
@@ -80,6 +84,7 @@ def sandbox(tmp_path):
     for folder in ("scripts", "jobs_watchdog", "sql"):
         shutil.copytree(repo_root() / folder, tmp_path / folder, ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copy2(repo_root() / "databricks.yml", tmp_path / "databricks.yml")  # the bundle's variable defaults
+    write_columns(tmp_path)
     regions = tmp_path / "regions"
     regions.mkdir()
     for name, region in (("lower", "us-east-2"), ("prod-eu", "eu-west-1"), ("prod-us", "us-east-1")):
@@ -91,6 +96,23 @@ def sandbox(tmp_path):
     for tool in ("databricks", "python3"):
         (bin_dir / tool).chmod(0o755)
     return tmp_path
+
+
+def write_columns(sandbox, **tables):
+    """The fake's answers to the column reads: each Watchdog table with its current columns, or the ones given."""
+    folder = sandbox / "columns"
+    folder.mkdir(exist_ok=True)
+    for table, relpath in TABLES:
+        columns = tables.get(table, [column.name for column in ddl_columns(relpath)])
+        answer = {"statement_id": "s1", "status": {"state": "SUCCEEDED"},
+                  "result": {"data_array": [[name] for name in columns]}}
+        (folder / f"{table}.json").write_text(json.dumps(answer))
+
+
+def statements(calls):
+    """The SQL of each statement API call, in order."""
+    posts = (call.split("--json ", 1)[1] for call in calls if call.startswith("api post"))
+    return [json.JSONDecoder().raw_decode(post)[0]["statement"] for post in posts]
 
 
 def run(sandbox, *args, **extra_env):
@@ -137,7 +159,9 @@ def test_a_full_deploy_creates_tables_then_deploys_then_runs_the_app(sandbox):
     first_deploy = kinds.index("bundle deploy")
     assert all(kind == "api post" for kind in kinds[1:first_deploy])
     setup = len(list((repo_root() / "sql" / "setup").glob("*.sql")))
-    assert len(middle) == setup + 2 * len(view_names())  # a check and a create per missing view
+    # a read per table (each already has every column, so no ALTER), and a check and a create per missing view
+    assert len(middle) == setup + len(TABLES) + 2 * len(view_names())
+    assert not any(statement.startswith("ALTER TABLE") for statement in statements(calls))
 
 
 def test_an_existing_view_is_not_replaced(sandbox):

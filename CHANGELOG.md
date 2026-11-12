@@ -2,7 +2,7 @@
 
 What changed, for people who already run the Watchdog. After every pull: restart Python on any open notebook, then run notebook 01 once. It creates any new table or view, adds any new columns to your existing tables (your rows stay) and brings the views up to date. If you deployed the jobs with the bundle, deploy it again right after the pull, so the jobs run the new code; each scheduled run of `watchdog_scan` then runs notebook 01 too. Since the Watchdog app, every deploy also needs the steps in the next section.
 
-## The Watchdog app (2026-11-05)
+## The Watchdog app (2026-11-11)
 
 ### What is new
 
@@ -10,7 +10,7 @@ What changed, for people who already run the Watchdog. After every pull: restart
 - **`scan.config_source`** (`yaml` by default, or `lakebase`) says where the scan reads the job list: the YAML file, or the newest version saved in the app. Notebook 02 has new input boxes for it (`config_source`, `lakebase_project_id`, `lakebase_branch`, `lakebase_database`), and the scan and `watchdog_phase_1` jobs pass them. The checks do not change.
 - **A new table, `config_loads`** (notebook 01 creates it): one row per load of the job list, with its source, version, job count and result. A failed load leaves the config tables as they were. No column was added to an existing table.
 - **New settings:** `target.warehouse_id` (required now: a Pro or Serverless SQL warehouse), `app.name` (`watchdog-app`), `app.lakebase_project_id` (`jobs-watchdog`) and `app.users_group` (default `users`), which gets `CAN USE` on the app and `CAN RUN` on the copilot's Genie agent. [docs/multi-region.md](docs/multi-region.md#who-can-use-the-app) lists the grants each user needs, and why the app needs user authorization.
-- **`scripts/ensure_tables.py`** creates the Watchdog schema, tables and views before a single workspace's first deploy, as `deploy_regions.py` does for each region: the Genie agent cannot be created over a schema that does not exist.
+- **`scripts/ensure_tables.py`** creates the Watchdog schema, tables and views before a single workspace's first deploy, as `deploy_regions.py` does for each region: the Genie agent cannot be created over a schema that does not exist. Before the views, both add the columns a table from an older version lacks, as notebook 01 does, because a view can name a newer column: `incidents` names `parent_job`.
 - **One Watchdog per region.** A `production` target in `databricks.yml` (production mode, deploying to the deploying identity's own folder), `scripts/deploy_regions.py` to validate and deploy once per region from region files (`config/regions`, `accelerator.<region>.yaml`; `--validate-only`, `--only`, `--no-app-run`, `--skip-ensure-tables` and `--skip-app-access` are options), and `ci/gitlab-ci.example.yml`. [docs/multi-region.md](docs/multi-region.md) explains it all.
 - **Teardown** now also removes the app and the Genie agent, and keeps the Lakebase project with the job list unless you pass `--drop-lakebase`. `teardown.sh -c <region file>` removes one region, sends every call to the file's `deploy.workspace_host`, names that workspace in its prompts, and refuses a shell host or profile that points elsewhere. The redeploy steps it prints carry the profile and the settings file it was given.
 - **After a teardown and a new deploy**, the new `watchdog_app_access` job (notebook 11) gives the app's new service principal access to the job list the teardown kept in Lakebase. `deploy_regions.py` runs it when the deploy gave the app a new service principal while the project was kept, and the teardown prints it with the bind commands. Until it runs, the app's job list says so. A full teardown and redeploy ran end to end on 2026-11-05: the app answered `no_access` until the job ran, then read and saved the kept list with no restart. See [Deploy again after a teardown](docs/multi-region.md#deploy-again-after-a-teardown).
@@ -24,11 +24,11 @@ What changed, for people who already run the Watchdog. After every pull: restart
 1. Pull (in the Git folder, click Pull), and restart Python on any open notebook.
 2. Check the prerequisites: Databricks Apps, Lakebase and Genie turned on in the workspace, user authorization for apps with the `sql` and `dashboards.genie` scopes allowed, and the Databricks CLI 1.23.0 or newer.
 3. Set `target.warehouse_id` in `accelerator.local.yaml` to a Pro or Serverless SQL warehouse you can use. Leave `scan.config_source` at `yaml` for now.
-4. Run `python3 scripts/ensure_tables.py accelerator.local.yaml --profile <profile>`. It creates `config_loads` and anything else missing, and changes nothing that exists.
+4. Run `python3 scripts/ensure_tables.py accelerator.local.yaml --profile <profile>`. It creates `config_loads` and anything else missing, and adds the columns an older table lacks. Your rows stay, and it leaves an existing view alone.
 5. Run the `eval "$(python3 scripts/bundle_vars.py --export accelerator.local.yaml)"` line, then `databricks bundle deploy -t <target> --profile <profile>`. This creates the app, the Lakebase project and the Genie agent, and updates the jobs.
 6. Run `databricks bundle run watchdog_app -t <target> --profile <profile>` to deploy the app's code and start it.
 7. Open the app, go to Job list, click Import YAML, choose your monitored-jobs file and confirm the preview. If a pattern in the file is now refused, the message says which job, which field and what to change.
-8. Set `scan.config_source: lakebase`, run the `eval` line again and deploy again. Run `watchdog_scan` once and check that notebook 07 prints only PASS lines. From now on, edit the job list in the app. Export YAML any time to keep a copy.
+8. Set `scan.config_source: lakebase`, run the `eval` line again and deploy again. Run `watchdog_phase_1` once and check that its last task, notebook 07, prints only PASS lines. From now on, edit the job list in the app. Export YAML any time to keep a copy.
 9. Give your users the grants in [Who can use the app](docs/multi-region.md#who-can-use-the-app).
 
 ## Phase 1.4 (2026-11-09)
@@ -74,8 +74,8 @@ A scan with no rows prints only the first line. Notebook 09, your own checks, st
 1. In the Git folder, click Pull. If Pull reports a conflict in a notebook you have only run, keep the incoming version: Databricks saves the serverless environment into a notebook when it runs it. If you edited a notebook yourself, such as notebook 09 for your own checks, copy your edits first, as the conflict row in [docs/git-folder-setup.md](docs/git-folder-setup.md#troubleshooting) says.
 2. If you deployed the jobs with the bundle, deploy it again right after the pull, so the jobs run the new code. From Phase 1.2, this also creates `watchdog_cleanup`, paused unless `scan.schedule_status` is UNPAUSED.
 3. Restart Python on any open notebook (detach and reattach).
-4. Run notebook 01 once. It prints `view incidents: created`. Your rows stay. Until you run it, the scans refuse to run: notebooks 05 and 06 stop with a message that says to run notebook 01.
-   - From Phase 1.2 it also adds the Phase 1.3 columns and prints `view findings_latest: replaced`; read the Phase 1.3 notes below for what they add. On compute where replacing a view does not keep its grants, that drops any grant made on `findings_latest` itself, so grant `SELECT` on it again. Grants on the schema are not affected.
+4. Run notebook 01 once. It prints `view incidents: created`, or `current` if `ensure_tables.py` already made it. Your rows stay. Until you run it, the scans refuse to run: notebooks 05 and 06 stop with a message that says to run notebook 01.
+   - From Phase 1.2 it also adds the Phase 1.3 columns, if `ensure_tables.py` has not already, and prints `view findings_latest: replaced`; read the Phase 1.3 notes below for what they add. On compute where replacing a view does not keep its grants, that drops any grant made on `findings_latest` itself, so grant `SELECT` on it again. Grants on the schema are not affected.
    - Grant `SELECT` on `incidents` to the readers who have `SELECT` on `findings_latest` itself. A grant on the schema already covers both views.
 5. Run notebooks 05 and 06, and check that notebook 07 prints six PASS lines.
 

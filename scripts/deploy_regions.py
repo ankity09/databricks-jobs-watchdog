@@ -10,8 +10,9 @@ deploy section; see docs/multi-region.md. For each region, in turn:
 
   1. databricks bundle validate --strict -t production
   2. the Watchdog tables and views, if a fresh region lacks them (the copilot's
-     Genie agent needs them before the first deploy); --skip-ensure-tables turns
-     this off
+     Genie agent needs them before the first deploy), with the columns an older
+     table lacks added first, as notebook 01 adds them; --skip-ensure-tables
+     turns this off
   3. databricks bundle deploy -t production
   4. databricks bundle run watchdog_app -t production; --no-app-run skips it
   5. databricks bundle run watchdog_app_access -t production, when the deploy
@@ -104,16 +105,36 @@ def _statement_result(argv, env, profile_args):
         return False, message, None
 
 
+def _rows(response):
+    return ((response.get("result") or {}).get("data_array")) or []
+
+
 def run_step(step, env):
-    """Returns (result, detail): result is ok, exists or FAILED."""
+    """Returns (result, detail): result is ok, exists, current or FAILED.
+
+    A step with a follow_up is current when its read finds nothing to do, and
+    ok with a detail that says what the follow-up did otherwise.
+    """
     profile_args = step.argv[-2:] if step.argv[-2:-1] == ["--profile"] else []
     if step.only_if_missing:
         ok, message, response = _statement_result(step.only_if_missing, env, profile_args)
         if not ok:
             return "FAILED", message
-        rows = ((response.get("result") or {}).get("data_array")) or []
-        if rows:
+        if _rows(response):
             return "exists", ""
+    if step.follow_up:
+        ok, message, response = _statement_result(step.argv, env, profile_args)
+        if not ok:
+            return "FAILED", message
+        try:
+            follow = step.follow_up(_rows(response))
+        except ValueError as err:
+            return "FAILED", str(err)
+        if follow is None:
+            return "current", ""
+        argv, done = follow
+        ok, message, _ = _statement_result(argv, env, profile_args)
+        return ("ok", done) if ok else ("FAILED", message)
     if step.argv[1:3] == ["api", "post"]:
         ok, message, _ = _statement_result(step.argv, env, profile_args)
         return ("ok", "") if ok else ("FAILED", message)
@@ -170,6 +191,8 @@ def deploy_region(region, args, results):
         if result == "FAILED":
             failed = True
             print(f"[{region.name}] {step.label} failed:\n{redact(detail, env)}", file=sys.stderr, flush=True)
+        elif detail:
+            print(f"[{region.name}] {step.label}: {detail}", flush=True)
     return not failed
 
 
