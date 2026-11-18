@@ -17,5 +17,6 @@ SELECT
   current_timestamp() AS loaded_at,
   job_name_exclude_regex,
   min_attempt_minutes,
-  job_ids
+  job_ids,
+  workspace_id
 FROM watchdog_config_jobs

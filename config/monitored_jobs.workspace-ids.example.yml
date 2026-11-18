@@ -1,0 +1,89 @@
+# Two workspaces in ONE Databricks account and cloud region.
+# All IDs are illustrative. Replace them before using this file.
+# Requires a Watchdog release that supports workspace_id directly on jobs.
+# Older files without job-level workspace_id remain supported by that release.
+#
+# A job's workspace_id enforces its scope. The optional workspaces section
+# supplies environment labels, not access grants. Logical job_name values
+# remain unique so dependencies name one unambiguous configured job.
+
+defaults:
+  severity: WARNING
+  owner: platform-team
+  job_name_exclude_regex: "_test(_|$)"
+
+workspaces:
+  - workspace_id: "1111111111111111"
+    environment: lower
+  - workspace_id: "2222222222222222"
+    environment: production
+
+jobs:
+  - job_name: orders_ingest_lower
+    workspace_id: "1111111111111111"
+    job_ids: ["101"]
+    schedule_type: continuous
+    max_gap_minutes: 30
+    max_retries: 3
+    min_attempt_minutes: 10
+
+  - job_name: orders_transform_lower
+    workspace_id: "1111111111111111"
+    job_ids: ["102"]
+    schedule_type: scheduled
+    max_gap_minutes: 90
+    max_runtime_minutes: 45
+
+  - job_name: orders_publish_lower
+    workspace_id: "1111111111111111"
+    job_ids: ["103"]
+    schedule_type: triggered
+    max_runtime_minutes: 30
+
+  - job_name: orders_ingest_production
+    workspace_id: "2222222222222222"
+    job_ids: ["201"]
+    schedule_type: continuous
+    max_gap_minutes: 30
+    max_retries: 3
+    min_attempt_minutes: 10
+    severity: CRITICAL
+
+  - job_name: orders_transform_production
+    workspace_id: "2222222222222222"
+    job_ids: ["202"]
+    schedule_type: scheduled
+    max_gap_minutes: 90
+    max_runtime_minutes: 45
+    severity: CRITICAL
+
+  - job_name: orders_publish_production
+    workspace_id: "2222222222222222"
+    job_ids: ["203"]
+    schedule_type: triggered
+    max_runtime_minutes: 30
+    severity: CRITICAL
+
+dependencies:
+  - job_name: orders_transform_lower
+    depends_on: orders_ingest_lower
+    dependency_type: job
+  - job_name: orders_publish_lower
+    depends_on: orders_transform_lower
+    dependency_type: child_job
+  - job_name: orders_ingest_lower
+    depends_on: kafka_lower
+    dependency_type: service
+  - job_name: orders_transform_production
+    depends_on: orders_ingest_production
+    dependency_type: job
+  - job_name: orders_publish_production
+    depends_on: orders_transform_production
+    dependency_type: child_job
+  - job_name: orders_ingest_production
+    depends_on: kafka_production
+    dependency_type: service
+
+# service declares an impact dependency; it does not configure a network probe.
+# API access still depends on auth_mode and permissions. Adding a workspace ID
+# does not grant the collector access to another workspace.

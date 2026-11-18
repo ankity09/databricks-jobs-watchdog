@@ -23,6 +23,14 @@ function renderMatches(pattern: string, exclude: string, answer: (call: QueryCal
 describe("PatternMatches", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("passes workspace scope to the warehouse before it counts and limits matches", async () => {
+    const calls = renderMatches("^workspace_scope_preview_", "", (call) => ({
+      rows: call.params.workspace_id === "1234" ? matchRows(["workspace_scope_preview_a"]) : matchRows(["workspace_scope_preview_a", "workspace_scope_preview_b"]),
+    }), { workspaceId: "1234", jobIds: [], environments: {} });
+    expect(await screen.findByText("Matches 1 job")).toBeInTheDocument();
+    expect(calls[0].params.workspace_id).toBe("1234");
+  });
+
   // Each test below has its own pattern: AppKit shares a finished request with the next test that sends the same one.
   it("says the scan finds the job by its job ID, and gives no not-found warning, when the entry has job IDs", async () => {
     // A picked job: its ID applies everywhere, and its name pattern matches nothing (a dev-mode job's name has a prefix).

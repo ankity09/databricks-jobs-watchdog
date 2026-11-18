@@ -43,9 +43,9 @@ const DEPENDENCY_TYPES = ["child_job", "job", "service"];
 const JOB_KEYS = [
   "job_name", "job_name_regex", "job_name_exclude_regex", "schedule_type", "max_gap_minutes",
   "max_runtime_minutes", "max_retries", "min_attempt_minutes", "severity", "owner", "enabled", "notes",
-  "environments", "job_ids",
+  "environments", "job_ids", "workspace_id",
 ];
-const NOT_IN_DEFAULTS = ["job_name", "job_name_regex", "environments", "job_ids"];
+const NOT_IN_DEFAULTS = ["job_name", "job_name_regex", "environments", "job_ids", "workspace_id"];
 const DEFAULT_KEYS = JOB_KEYS.filter((k) => !NOT_IN_DEFAULTS.includes(k));
 const OVERRIDE_KEYS = [
   "severity", "owner", "enabled", "max_gap_minutes", "max_runtime_minutes", "max_retries",
@@ -81,6 +81,11 @@ function isWholeNumber(value: unknown): value is number | bigint {
   return typeof value === "bigint" || (typeof value === "number" && Number.isInteger(value));
 }
 
+/** An ID's raw scalar must retain every digit; exact YAML integers arrive as bigint. */
+function isIdScalar(value: unknown): value is string | number | bigint {
+  return typeof value === "string" || typeof value === "bigint" || (typeof value === "number" && Number.isSafeInteger(value));
+}
+
 function isDigits(text: string): boolean {
   return /^[0-9]+$/.test(text);
 }
@@ -94,7 +99,8 @@ function convert(value: unknown, asId: boolean): unknown {
     return value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString();
   }
   if (value instanceof PyFloat) return value.value;
-  if (asId && typeof value === "number" && Number.isInteger(value)) return String(value);
+  // An unsafe JSON number may already have lost digits. Leave it numeric so the ID rules can refuse it.
+  if (asId && typeof value === "number" && Number.isSafeInteger(value)) return String(value);
   if (Array.isArray(value)) return value.map((item) => convert(item, asId));
   if (isMap(value)) {
     return Object.fromEntries(
@@ -249,7 +255,7 @@ function checkJobIds(c: Collector, path: string, raw: unknown, where: string): v
   }
   const seen: string[] = [];
   for (const value of raw) {
-    if (typeof value === "boolean" || (typeof value !== "string" && !isWholeNumber(value))) {
+    if (!isIdScalar(value)) {
       c.add(path, `${where}: job_ids must be whole numbers, got ${pyRepr(value)}`);
       return;
     }
@@ -312,7 +318,7 @@ function parseWorkspace(c: Collector, raw: unknown, index: number): ParsedWorksp
     return null;
   }
   let ok = true;
-  if (id !== null && !isDigits(id)) {
+  if (id !== null && (!isIdScalar(rawId) || !isDigits(id))) {
     c.add(`${at}.workspace_id`, `workspace ${label}: workspace_id must be digits, got ${pyRepr(id)}`);
     ok = false;
   }
@@ -380,6 +386,12 @@ function parseJob(c: Collector, raw: unknown, index: number, defaults: Obj, labe
   const own = raw;
   const jobIds = get(raw, "job_ids");
   if (jobIds !== null && jobIds !== undefined) checkJobIds(c, `${base}.job_ids`, jobIds, `job ${name}`);
+  const workspaceId = get(raw, "workspace_id");
+  if (workspaceId !== null && workspaceId !== undefined) {
+    if (!isIdScalar(workspaceId) || !isDigits(pyStr(workspaceId))) {
+      c.add(`${base}.workspace_id`, `job ${name}: workspace_id must be digits, got ${pyRepr(workspaceId)}`);
+    }
+  }
   const merged: Obj = { ...defaults, ...raw };
 
   const regex = merged.job_name_regex;

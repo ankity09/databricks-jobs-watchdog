@@ -15,7 +15,9 @@ For each workspace the scan visits:
 1. **Which workspace answered.** `w.get_workspace_id()`. If the ID differs from the workspace the
    scan meant to reach, it stops for that workspace (see [the workspace ID guard](#the-workspace-id-guard)).
 2. **Find the jobs.** `w.jobs.list(limit=100)` lists the jobs this identity can see, 100 per page.
-   Each monitored job switched on in this workspace's environment is matched against the listing:
+   Each monitored job whose optional `workspace_id` allows this workspace, and which is switched
+   on in its environment, is matched against the listing. A scoped entry never falls back to another
+   workspace, even when the other workspace has the same job ID or name. Within that scope it matches:
    by job ID when `job_ids` apply in that environment (its environment's list, otherwise its own),
    otherwise by searching its `job_name_regex` in every job name. A job switched off there is not
    looked for (see [Environments](#environments)). One listing serves all monitored jobs, so job

@@ -96,11 +96,12 @@ export function PatternMatches({ pattern, exclude, jobIds = NO_JOB_IDS }: Patter
   const note = idNote(use);
   const settledPattern = useDebouncedValue(pattern, DELAY_MS);
   const settledExclude = useDebouncedValue(exclude, DELAY_MS);
+  const settledWorkspaceId = useDebouncedValue(jobIds.workspaceId ?? "", DELAY_MS);
   const { refresh, bump } = useRefreshKey();
   const ready = settledPattern !== "";
   const parameters = useMemo(
-    () => ({ pattern: sql.string(settledPattern), exclude: sql.string(settledExclude), refresh: sql.int(refresh) }),
-    [settledPattern, settledExclude, refresh],
+    () => ({ pattern: sql.string(settledPattern), exclude: sql.string(settledExclude), workspace_id: sql.string(settledWorkspaceId), refresh: sql.int(refresh) }),
+    [settledPattern, settledExclude, settledWorkspaceId, refresh],
   );
   const matches = useAnalyticsQuery("pattern_matches", parameters, { autoStart: ready });
   const failure = ready && matches.error !== null ? queryFailure(matches.error, matches.errorCode) : null;
@@ -110,12 +111,12 @@ export function PatternMatches({ pattern, exclude, jobIds = NO_JOB_IDS }: Patter
 
   const parsed = useMemo(() => (matches.data === null ? null : PatternMatchRows.safeParse(matches.data)), [matches.data]);
   const answer = useMemo(
-    () => (parsed?.success ? { pattern: settledPattern, exclude: settledExclude, rows: parsed.data } : null),
-    [parsed, settledPattern, settledExclude],
+    () => (parsed?.success ? { pattern: settledPattern, exclude: settledExclude, workspaceId: settledWorkspaceId, rows: parsed.data } : null),
+    [parsed, settledPattern, settledExclude, settledWorkspaceId],
   );
   // A refresh keeps the last answer for the same pattern on screen.
   const kept = useLastGood(answer);
-  const shown = kept !== null && kept.pattern === settledPattern && kept.exclude === settledExclude ? kept : null;
+  const shown = kept !== null && kept.pattern === settledPattern && kept.exclude === settledExclude && kept.workspaceId === settledWorkspaceId ? kept : null;
 
   if (pattern === "") {
     return (

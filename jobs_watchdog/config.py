@@ -25,9 +25,9 @@ ACCELERATOR_SECTIONS = ("metadata", "target", "auth", "scan", "app", "resources"
 JOB_KEYS = {
     "job_name", "job_name_regex", "job_name_exclude_regex", "schedule_type", "max_gap_minutes",
     "max_runtime_minutes", "max_retries", "min_attempt_minutes", "severity", "owner", "enabled", "notes",
-    "environments", "job_ids",
+    "environments", "job_ids", "workspace_id",
 }
-DEFAULT_KEYS = JOB_KEYS - {"job_name", "job_name_regex", "environments", "job_ids"}
+DEFAULT_KEYS = JOB_KEYS - {"job_name", "job_name_regex", "environments", "job_ids", "workspace_id"}
 # settings an environment can override for one job
 OVERRIDE_KEYS = ("severity", "owner", "enabled", "max_gap_minutes", "max_runtime_minutes", "max_retries",
                  "min_attempt_minutes", "job_ids")
@@ -55,6 +55,12 @@ class MonitoredJob:
     environments: dict = field(default_factory=dict, hash=False)
     # job IDs to check instead of matching names; an environment can list its own
     job_ids: tuple = ()
+    # Optional exact workspace scope; absent keeps the regional matching behavior.
+    workspace_id: str | None = None
+
+    def applies_to(self, workspace_id):
+        """Whether this entry may match jobs in the given workspace."""
+        return self.workspace_id is None or (workspace_id is not None and str(workspace_id) == self.workspace_id)
 
     def settings_for(self, environment):
         """This job with the overrides for one environment label applied.
@@ -218,6 +224,11 @@ def _parse_job(raw, defaults=None, labels=()):
         raise ConfigError(f"job {name}: unknown keys {unknown}; allowed: {sorted(JOB_KEYS)}")
     environments = _parse_environments(raw.get("environments"), name, set(labels))
     own = raw
+    workspace_id = raw.get("workspace_id")
+    if workspace_id is not None:
+        if isinstance(workspace_id, bool) or not isinstance(workspace_id, (int, str)) or not re.fullmatch(r"[0-9]+", str(workspace_id)):
+            raise ConfigError(f"job {name}: workspace_id must be digits, got {workspace_id!r}")
+        workspace_id = str(workspace_id)
     job_ids = _parse_job_ids(raw["job_ids"], f"job {name}") if raw.get("job_ids") is not None else ()
     raw = {**(defaults or {}), **raw}
     regex = _compiled(raw.get("job_name_regex") or f"^{re.escape(name)}$", name, "job_name_regex")
@@ -257,6 +268,7 @@ def _parse_job(raw, defaults=None, labels=()):
         min_attempt_minutes=_optional_int(raw.get("min_attempt_minutes"), name, "min_attempt_minutes"),
         environments=environments,
         job_ids=job_ids,
+        workspace_id=workspace_id,
     )
 
 

@@ -40,7 +40,7 @@ const DocumentStructure = z.looseObject({
 type TextRule = "str" | "or-empty";
 
 const DEFAULT_TEXT: Record<string, TextRule> = { owner: "or-empty", notes: "or-empty", job_name_exclude_regex: "str" };
-const JOB_TEXT: Record<string, TextRule> = { ...DEFAULT_TEXT, job_name: "str", job_name_regex: "or-empty" };
+const JOB_TEXT: Record<string, TextRule> = { ...DEFAULT_TEXT, job_name: "str", workspace_id: "str", job_name_regex: "or-empty" };
 const OVERRIDE_TEXT: Record<string, TextRule> = { owner: "or-empty" };
 const WORKSPACE_TEXT: Record<string, TextRule> = { workspace_id: "str", workspace_name: "str", environment: "str", notes: "or-empty" };
 const DEPENDENCY_TEXT: Record<string, TextRule> = { job_name: "or-empty", depends_on: "or-empty", notes: "or-empty" };

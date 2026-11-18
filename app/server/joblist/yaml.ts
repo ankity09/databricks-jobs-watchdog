@@ -58,11 +58,11 @@ export function parseJobListYaml(text: string): JobListDocument {
 }
 
 const JOB_KEY_ORDER = [
-  "job_name", "job_name_regex", "job_name_exclude_regex", "job_ids", "schedule_type", "max_gap_minutes",
+  "job_name", "workspace_id", "job_name_regex", "job_name_exclude_regex", "job_ids", "schedule_type", "max_gap_minutes",
   "max_runtime_minutes", "max_retries", "min_attempt_minutes", "severity", "owner", "enabled", "notes",
   "environments",
 ];
-const DEFAULT_KEY_ORDER = JOB_KEY_ORDER.filter((k) => !["job_name", "job_name_regex", "job_ids", "environments"].includes(k));
+const DEFAULT_KEY_ORDER = JOB_KEY_ORDER.filter((k) => !["job_name", "workspace_id", "job_name_regex", "job_ids", "environments"].includes(k));
 const ENV_KEY_ORDER = ["severity", "owner", "enabled", "max_gap_minutes", "max_runtime_minutes", "max_retries", "min_attempt_minutes", "job_ids"];
 const WORKSPACE_KEY_ORDER = ["workspace_id", "workspace_name", "environment", "notes"];
 const DEPENDENCY_KEY_ORDER = ["job_name", "depends_on", "dependency_type", "notes"];
@@ -91,7 +91,7 @@ export function toJobListYaml(doc: JobListDocument, meta: ExportMeta): string {
   const body: Record<string, unknown> = {};
   if (doc.defaults && Object.keys(doc.defaults).length > 0) body.defaults = ordered(doc.defaults, DEFAULT_KEY_ORDER);
   if (doc.workspaces && doc.workspaces.length > 0) body.workspaces = doc.workspaces.map((w) => ordered(w, WORKSPACE_KEY_ORDER));
-  body.jobs = doc.jobs.map(orderedJob);
+  body.jobs = doc.jobs.map((job) => orderedJob({ ...job, schedule_type: job.schedule_type ?? doc.defaults?.schedule_type ?? "scheduled" }));
   if (doc.dependencies && doc.dependencies.length > 0) body.dependencies = doc.dependencies.map((d) => ordered(d, DEPENDENCY_KEY_ORDER));
   const header = `# Exported from the Watchdog app: version ${meta.version}, saved ${meta.savedAt} by ${meta.savedBy}\n`;
   return header + stringify(body, { version: "1.1", lineWidth: 0, customTags: pythonYamlWriteTags });

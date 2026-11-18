@@ -92,6 +92,7 @@ export function draftFromRegionJob(row: RegionJobRow, document: JobListDocument)
   let jobName = base;
   for (let n = 2; taken.has(jobName); n++) jobName = `${base}_${n}`;
   const draft: JobEntry = { job_name: jobName };
+  if (row.workspace_id !== null) draft.workspace_id = row.workspace_id;
   if (row.job_id !== null) draft.job_ids = [row.job_id];
   draft.schedule_type = scheduleTypeOf(row.trigger_type);
   return draft;
@@ -165,6 +166,7 @@ function nameMatches(job: JobEntry, document: JobListDocument, name: string): bo
 export function isMonitored(row: RegionJobRow, document: JobListDocument): string | null {
   const environment = environmentFor(row.workspace_id, row.workspace_name, document.workspaces ?? []);
   for (const job of document.jobs) {
+    if (job.workspace_id !== null && job.workspace_id !== undefined && job.workspace_id !== row.workspace_id) continue;
     const ids = jobIdsIn(job, environment);
     if (ids.length > 0) {
       if (row.job_id !== null && ids.includes(row.job_id)) return job.job_name;
@@ -177,6 +179,7 @@ export function isMonitored(row: RegionJobRow, document: JobListDocument): strin
 
 /** The job IDs an entry carries, for the pattern preview: its own list, and each environment's own list where it sets one, an empty one too. */
 export interface EntryJobIds {
+  workspaceId?: string;
   jobIds: string[];
   environments: Record<string, string[]>;
 }
@@ -186,7 +189,7 @@ export function entryJobIds(job: JobEntry): EntryJobIds {
   for (const [name, overrides] of Object.entries(job.environments ?? {})) {
     if (overrides.job_ids !== undefined) environments[name] = overrides.job_ids;
   }
-  return { jobIds: job.job_ids ?? [], environments };
+  return { ...(job.workspace_id ? { workspaceId: job.workspace_id } : {}), jobIds: job.job_ids ?? [], environments };
 }
 
 /**

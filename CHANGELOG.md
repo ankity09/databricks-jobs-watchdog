@@ -2,6 +2,18 @@
 
 What changed, for people who already run the Watchdog. After every pull: restart Python on any open notebook, then run notebook 01 once. It creates any new table or view, adds any new columns to your existing tables (your rows stay) and brings the views up to date. If you deployed the jobs with the bundle, deploy it again right after the pull, so the jobs run the new code; each scheduled run of `watchdog_scan` then runs notebook 01 too. Since the Watchdog app, every deploy also needs the steps in the next section.
 
+## Unreleased: job workspace scope and explicit schedules
+
+- **A real `workspace_id` on each job.** When set, both scan sources match this entry only in that workspace, by job ID or name. Missing or `null` keeps the existing regional behavior. IDs keep every digit; invalid or blank values stop the load. Scope cannot be inherited from defaults or changed per environment.
+- **The app shows and edits scope.** The Job list names the workspace scope under each entry. The full editor has a Workspace ID field; clearing it removes the restriction. Add from workspace keeps the selected workspace ID, the Monitored label respects it, and the name preview filters by workspace before counting or limiting results.
+- **Explicit `schedule_type` in new jobs, examples and YAML exports.** Exports spell out each job's effective type: its own, the file's default, then `scheduled`. Existing YAML and stored jobs may still inherit the type. Export does not rewrite the stored document. `scheduled`, `continuous` and `triggered` were already supported.
+- **New two-workspace example:** [`config/monitored_jobs.workspace-ids.example.yml`](config/monitored_jobs.workspace-ids.example.yml), with six jobs, all three schedule types and job, child-job and service dependencies. All IDs are illustrative.
+- **Notebook 02's enabled count** includes jobs enabled through environment overrides.
+
+Before using job-level `workspace_id`, install this release's engine and app together. Update bundle-managed job code too, restart open notebook Python sessions, and run notebook 01 to add the nullable `monitored_jobs.workspace_id` column without removing rows. Then load the config with notebook 02, inspect `configured_workspace_id` against the matched `workspace_id`, and run the scans and notebook 07. Older loaders reject the new YAML field and must not remain scheduled against the upgraded config table. Existing files without job-level scope still work after the upgrade. The runbook has [scope and upgrade guidance](docs/phase-1-runbook.md#scope-a-job-to-one-workspace).
+
+Workspace scope does not grant API access or change `auth_mode`. No new coverage status, alert sender, delivery receipt, service probe or batch-progress check is included.
+
 ## The Watchdog app (2026-11-11)
 
 ### What is new

@@ -646,6 +646,9 @@ function JobRow({ job, inherited, live, pending, onEdit, onDelete, onToggle }: J
         >
           {job.job_name}
         </button>
+        <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground" title={job.workspace_id ?? undefined}>
+          {job.workspace_id ? `Workspace ${job.workspace_id}` : "All regional workspaces"}
+        </span>
         <span
           className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground"
           title={ids > 0 ? job.job_ids?.join(", ") : pattern}

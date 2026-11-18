@@ -343,7 +343,8 @@ describe("the copilot page", () => {
 
       stream.push(messageResult({ conversationId: "conv-1", messageId: "msg-1", question: "What is failing right now?", text: "orders_ingest failed." }));
       await screen.findByText("orders_ingest failed.");
-      expect(writes.at(-1)).toBe(list.scrollHeight);
+      // The content can appear before the passive scroll effect has run.
+      await waitFor(() => expect(writes.at(-1)).toBe(list.scrollHeight));
       stream.close();
     });
 

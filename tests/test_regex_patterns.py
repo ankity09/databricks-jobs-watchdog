@@ -84,8 +84,8 @@ def test_the_java_check_gives_each_pattern_this_python_compiles_its_verdict(row)
     assert java_regex_problem(row["pattern"]) == row["java"]
 
 
-def test_the_changelog_says_which_patterns_now_fail_to_load_and_why():
+def test_the_regex_release_notes_say_which_patterns_fail_to_load_and_why():
     text = (Path(__file__).resolve().parents[1] / "CHANGELOG.md").read_text()
-    latest = text[text.index("\n## "):text.index("\n## ", text.index("\n## ") + 1)]
+    release = text.split("\n## The Watchdog app (2026-11-11)\n", 1)[1].split("\n## ", 1)[0]
     for words in ("(?P<name>...)", "\\N{...}", "fails to load", "regexp_like", "Java"):
-        assert words in latest, words
+        assert words in release, words

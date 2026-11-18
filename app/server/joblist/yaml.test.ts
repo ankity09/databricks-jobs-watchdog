@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { JobListDocument } from "../../shared/joblist/types";
 import { parseJobListYaml, readJobListYaml, toJobListYaml, YamlError } from "./yaml";
 
 const CORPUS = join(__dirname, "../../../tests/fixtures/job-lists");
@@ -66,17 +67,32 @@ describe("readJobListYaml", () => {
   });
 });
 
+// Export spells out an inherited schedule. Every other field, and every
+// explicit schedule, must survive unchanged; exporting must not edit storage.
+// explicit-schedule.test.ts checks each effective schedule against literal values.
+function exportAndExpectPreservedConfig(doc: JobListDocument): string {
+  const original = structuredClone(doc);
+  const text = toJobListYaml(doc, META);
+  expect(doc).toEqual(original);
+  const exported = parseJobListYaml(text);
+  for (const [index, job] of exported.jobs.entries()) {
+    expect(job.schedule_type).toMatch(/^(scheduled|continuous|triggered)$/);
+    if (original.jobs[index]?.schedule_type === undefined) delete job.schedule_type;
+  }
+  expect(exported).toEqual(original);
+  return text;
+}
+
 describe("round trip", () => {
   for (const file of readdirSync(CORPUS).filter((f) => f.startsWith("valid_"))) {
     it(file, () => {
       const doc = parseJobListYaml(readFileSync(join(CORPUS, file), "utf8"));
-      expect(parseJobListYaml(toJobListYaml(doc, META))).toEqual(doc);
+      exportAndExpectPreservedConfig(doc);
     });
   }
   it("quotes text that PyYAML would read as something else, = among it", () => {
     const doc = { jobs: [{ job_name: "a", max_gap_minutes: 5, notes: "=" }, { job_name: "20241105", max_gap_minutes: 5, notes: "1e3" }] };
-    const text = toJobListYaml(doc, META);
-    expect(parseJobListYaml(text)).toEqual(doc);
+    const text = exportAndExpectPreservedConfig(doc);
     expect(text).not.toMatch(/notes: =\n/);
   });
   it("keeps YAML 1.1 words and awkward strings as strings", () => {
@@ -87,8 +103,7 @@ describe("round trip", () => {
         { job_name: "c", max_gap_minutes: 5, notes: "yes", job_ids: ["123456789012345678"] },
       ],
     };
-    const text = toJobListYaml(doc, META);
-    expect(parseJobListYaml(text)).toEqual(doc);
+    const text = exportAndExpectPreservedConfig(doc);
     expect(text).toMatch(/notes: "?'?on/);
   });
 });

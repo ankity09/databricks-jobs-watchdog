@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { FeedbackInput, FeedbackRating } from "../../lib/copilot-api";
 
 const sendFeedback = vi.fn();
 vi.mock("../../lib/copilot-api", () => ({ sendFeedback: (input: unknown): Promise<void> => sendFeedback(input) as Promise<void> }));
@@ -44,6 +45,61 @@ describe("FeedbackButtons", () => {
 
     expect(good).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByRole("status")).toHaveTextContent("Your feedback couldn't be sent.");
+  });
+
+  it("keeps the shown rating consistent when the first write finishes after a second click", async () => {
+    let finishFirst: () => void = () => { throw new Error("feedback was not sent"); };
+    let stored: FeedbackRating = "NONE";
+    sendFeedback.mockImplementation(({ rating }: FeedbackInput) => {
+      stored = rating;
+      return Promise.resolve();
+    });
+    sendFeedback.mockImplementationOnce(({ rating }: FeedbackInput) => new Promise<void>((resolve) => {
+      finishFirst = () => { stored = rating; resolve(); };
+    }));
+    render(<FeedbackButtons conversationId="conv-1" messageId="msg-1" />);
+    const good = screen.getByRole("button", { name: "Good answer" });
+    const bad = screen.getByRole("button", { name: "Bad answer" });
+
+    await userEvent.click(good);
+    await userEvent.click(bad);
+    await act(() => Promise.resolve(finishFirst()));
+
+    expect(stored).toBe("POSITIVE");
+    expect(good).toHaveAttribute("aria-pressed", "true");
+    expect(bad).toHaveAttribute("aria-pressed", "false");
+    expect(sendFeedback).toHaveBeenCalledTimes(1);
+    await userEvent.click(bad);
+    expect(stored).toBe("NEGATIVE");
+    expect(bad).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a failed pending write cannot undo a competing successful rating", async () => {
+    let failFirst: () => void = () => { throw new Error("feedback was not sent"); };
+    let stored: FeedbackRating = "NONE";
+    sendFeedback.mockImplementation(({ rating }: FeedbackInput) => {
+      stored = rating;
+      return Promise.resolve();
+    });
+    sendFeedback.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => {
+      failFirst = () => reject(new Error("not saved"));
+    }));
+    render(<FeedbackButtons conversationId="conv-1" messageId="msg-1" />);
+    const good = screen.getByRole("button", { name: "Good answer" });
+    const bad = screen.getByRole("button", { name: "Bad answer" });
+
+    await userEvent.click(good);
+    await userEvent.click(bad);
+    await act(() => Promise.resolve(failFirst()));
+
+    expect(stored).toBe("NONE");
+    expect(good).toHaveAttribute("aria-pressed", "false");
+    expect(bad).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("status")).toHaveTextContent("Your feedback couldn't be sent.");
+    await userEvent.click(bad);
+    expect(stored).toBe("NEGATIVE");
+    expect(bad).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("no buttons before Genie names the message", () => {

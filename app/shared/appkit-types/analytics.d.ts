@@ -90,6 +90,8 @@ declare module "@databricks/appkit-ui/react" {
           pattern: SQLStringMarker;
           /** STRING - use sql.string() */
           exclude: SQLStringMarker;
+          /** STRING - use sql.string() */
+          workspace_id: SQLStringMarker;
           /** INT - use sql.int() */
           refresh: SQLNumberMarker;
         };
@@ -98,6 +100,8 @@ declare module "@databricks/appkit-ui/react" {
           pattern_matches_empty: boolean;
           /** @sqlType BOOLEAN */
           exclude_matches_empty: boolean;
+          /** @sqlType STRING */
+          configured_workspace_id: string;
           /** @sqlType INT */
           refresh: number;
         }>;
@@ -109,6 +113,8 @@ declare module "@databricks/appkit-ui/react" {
           pattern: SQLStringMarker;
           /** STRING - use sql.string() */
           exclude: SQLStringMarker;
+          /** STRING - use sql.string() */
+          workspace_id: SQLStringMarker;
           /** INT - use sql.int() */
           refresh: SQLNumberMarker;
         };

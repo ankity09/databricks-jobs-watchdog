@@ -98,7 +98,7 @@ describe("AddFromWorkspaceDialog", () => {
     const { onPick } = renderDialog(() => ({ rows: ROWS }));
     await user.type(screen.getByRole("searchbox", { name: "Search jobs by name" }), "ingest");
     await user.click(await screen.findByRole("button", { name: "Add orders_ingest_prod from example-prod" }));
-    expect(onPick).toHaveBeenCalledWith({ job_name: "orders_ingest_prod", job_ids: ["9007199254740993"], schedule_type: "scheduled" });
+    expect(onPick).toHaveBeenCalledWith({ job_name: "orders_ingest_prod", workspace_id: "1111111111111111", job_ids: ["9007199254740993"], schedule_type: "scheduled" });
   });
 
   it.each([

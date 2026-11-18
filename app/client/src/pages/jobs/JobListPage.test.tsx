@@ -145,6 +145,15 @@ describe("JobListPage", () => {
     vi.unstubAllGlobals();
   });
 
+  it("shows the configured workspace beside a job instead of hiding it in notes", async () => {
+    setClock("2026-11-16T10:00:00Z");
+    mockApi({ ...SAVED, document: { ...DOC, jobs: DOC.jobs.map((job) => job.job_name === "orders_ingest" ? { ...job, workspace_id: "1234" } : job) } });
+    renderPage();
+    await screen.findByRole("columnheader", { name: "Job" });
+    expect(within(row("orders_ingest")).getByText("Workspace 1234")).toBeInTheDocument();
+    expect(within(row("orders_enrich")).getByText("All regional workspaces")).toBeInTheDocument();
+  });
+
   it("shows each job's settings, environments and live status in its columns", async () => {
     setClock("2026-11-05T10:30:00Z");
     mockApi(SAVED);

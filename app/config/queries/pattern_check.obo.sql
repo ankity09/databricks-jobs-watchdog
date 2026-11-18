@@ -5,8 +5,10 @@
 -- with the same error code, and AppKit does not pass the message on.
 -- @param pattern STRING = ^example$
 -- @param exclude STRING = ""
+-- @param workspace_id STRING = ""
 -- @param refresh INT = 0
 SELECT
   regexp_like('', :pattern) AS pattern_matches_empty,
   regexp_like('', :exclude) AS exclude_matches_empty,
+  :workspace_id AS configured_workspace_id,
   :refresh AS refresh

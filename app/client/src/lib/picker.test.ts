@@ -77,6 +77,7 @@ describe("draftFromRegionJob", () => {
   it("fills in the name, the exact job ID and the schedule type, and leaves the gap for the form", () => {
     expect(draftFromRegionJob(row(), EMPTY)).toEqual({
       job_name: "orders_ingest_prod",
+      workspace_id: "1111111111111111",
       job_ids: ["9007199254740993"],
       schedule_type: "scheduled",
     });

@@ -4,7 +4,7 @@
 CREATE TABLE IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema || '.monitored_jobs') (
   job_name STRING NOT NULL COMMENT 'Short logical name used in findings and alerts',
   job_name_regex STRING NOT NULL COMMENT 'Matches the real job name in each workspace',
-  schedule_type STRING NOT NULL COMMENT 'continuous or scheduled',
+  schedule_type STRING NOT NULL COMMENT 'scheduled, continuous or triggered',
   max_gap_minutes INT COMMENT 'Scheduled jobs: longest allowed gap between run starts',
   max_runtime_minutes INT COMMENT 'Longest allowed run before a warning',
   max_retries INT COMMENT 'A task retried more times than this is a retry loop',
@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema || '.monitored_
   loaded_at TIMESTAMP NOT NULL COMMENT 'When this row was loaded from the YAML file',
   job_name_exclude_regex STRING COMMENT 'Job names matching this are skipped, for example test copies',
   min_attempt_minutes INT COMMENT 'A task attempt that ran shorter than this before a retry counts as a retry loop',
-  job_ids ARRAY<STRING> COMMENT 'Job IDs to check instead of matching names; empty means match by job_name_regex'
+  job_ids ARRAY<STRING> COMMENT 'Job IDs to check instead of matching names; empty means match by job_name_regex',
+  workspace_id STRING COMMENT 'Optional exact workspace scope for this entry; NULL keeps regional matching'
 )
 COMMENT 'Watchdog config: jobs to check'

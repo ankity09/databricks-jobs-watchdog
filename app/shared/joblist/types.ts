@@ -17,6 +17,8 @@ export interface EnvironmentOverrides {
 /** One entry of the jobs section, as stored. Job IDs are always strings. */
 export interface JobEntry {
   job_name: string;
+  /** Optional exact workspace scope; omitted/null keeps regional matching. */
+  workspace_id?: string | null;
   job_name_regex?: string;
   job_name_exclude_regex?: string | null;
   job_ids?: string[];
@@ -33,7 +35,7 @@ export interface JobEntry {
 }
 
 /** The defaults section: any job setting except the name, the pattern, environments and job IDs. */
-export type DefaultsEntry = Omit<JobEntry, "job_name" | "job_name_regex" | "environments" | "job_ids">;
+export type DefaultsEntry = Omit<JobEntry, "job_name" | "job_name_regex" | "environments" | "job_ids" | "workspace_id">;
 
 export interface WorkspaceEntry {
   workspace_id?: string;

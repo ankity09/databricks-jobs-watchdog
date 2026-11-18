@@ -339,7 +339,8 @@ function EditorForm({
     setProblem(null);
     let outcome: SaveOutcome;
     try {
-      outcome = await onSave(entry, openedAt);
+      const savedEntry = mode === "create" && entry.schedule_type === undefined ? { ...entry, schedule_type: inherited.schedule_type } : entry;
+      outcome = await onSave(savedEntry, openedAt);
     } catch (error) {
       outcome = { ok: false, conflict: false, issues: [], message: toApiError(error).message };
     }
@@ -441,6 +442,24 @@ function EditorForm({
           <FieldLegend variant="label" className="mb-0 text-[13px] font-semibold">
             Which jobs it matches
           </FieldLegend>
+          <FormRow
+            label="Workspace ID"
+            yamlKey="workspace_id"
+            description="Optional. Check this entry only in this workspace. Leave empty to match across the region."
+            errors={errors("workspace_id")}
+          >
+            {(control) => (
+              <Input
+                {...control}
+                value={values.workspace_id}
+                inputMode="numeric"
+                spellCheck={false}
+                className="font-mono"
+                placeholder="All regional workspaces"
+                onChange={(event) => update({ workspace_id: event.target.value })}
+              />
+            )}
+          </FormRow>
           <FormRow
             label="Name pattern"
             yamlKey="job_name_regex"

@@ -16,11 +16,14 @@ export interface FeedbackButtonsProps {
 export function FeedbackButtons({ conversationId, messageId, initial = null }: FeedbackButtonsProps) {
   const [rating, setRating] = useState<FeedbackRating>(initial ?? "NONE");
   const [failed, setFailed] = useState(false);
+  const [sending, setSending] = useState(false);
 
   if (!conversationId || !messageId || messageId.startsWith("local-")) return null;
 
   async function choose(target: "POSITIVE" | "NEGATIVE") {
-    if (!conversationId) return;
+    if (!conversationId || sending) return;
+    // A later write or rollback must not race this answer's pending rating.
+    setSending(true);
     const previous = rating;
     const next: FeedbackRating = previous === target ? "NONE" : target;
     setRating(next);
@@ -30,6 +33,8 @@ export function FeedbackButtons({ conversationId, messageId, initial = null }: F
     } catch {
       setRating(previous);
       setFailed(true);
+    } finally {
+      setSending(false);
     }
   }
 
@@ -39,6 +44,7 @@ export function FeedbackButtons({ conversationId, messageId, initial = null }: F
         type="button"
         variant="ghost"
         size="icon"
+        disabled={sending}
         aria-label="Good answer"
         aria-pressed={rating === "POSITIVE"}
         onClick={() => void choose("POSITIVE")}
@@ -50,6 +56,7 @@ export function FeedbackButtons({ conversationId, messageId, initial = null }: F
         type="button"
         variant="ghost"
         size="icon"
+        disabled={sending}
         aria-label="Bad answer"
         aria-pressed={rating === "NEGATIVE"}
         onClick={() => void choose("NEGATIVE")}

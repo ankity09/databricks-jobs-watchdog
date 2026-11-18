@@ -70,9 +70,11 @@ matches AS (
   LEFT JOIN overrides o ON o.job_name = c.job_name AND o.environment = c.environment
   WHERE (c.matched_by = 'job_id') = (coalesce(size(coalesce(o.job_ids, m.job_ids)), 0) > 0)
     AND (c.matched_by = 'name' OR array_contains(coalesce(o.job_ids, m.job_ids), c.job_id))
+    AND (m.workspace_id IS NULL OR m.workspace_id = c.workspace_id)
 )
 SELECT
   m.job_name,
+  m.workspace_id AS configured_workspace_id,
   m.enabled,
   m.job_name_regex,
   m.job_name_exclude_regex,

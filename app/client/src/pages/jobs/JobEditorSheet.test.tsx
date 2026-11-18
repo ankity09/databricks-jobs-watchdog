@@ -62,6 +62,36 @@ function renderSheet(props: Partial<JobEditorSheetProps> = {}) {
 const field = (label: string) => screen.getByLabelText(label);
 
 describe("JobEditorSheet", () => {
+  it("saves a new manually entered job with its effective schedule type explicit", async () => {
+    const { onSave } = renderSheet({ mode: "create", initial: { job_name: "" } });
+    await userEvent.type(field("Job name"), "new_daily_report");
+    await userEvent.type(field("Max gap (minutes)"), "1500");
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: "Add job" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "Add job" }));
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ job_name: "new_daily_report", schedule_type: "scheduled" }), 12));
+  });
+
+  it("does not enable a no-op save just by opening an explicit null workspace scope", () => {
+    const job = { ...ORDERS_ENRICH, workspace_id: null };
+    renderSheet({ initial: job, document: { ...DOC, jobs: DOC.jobs.map((entry) => entry.job_name === job.job_name ? job : entry) } });
+    expect(field("Workspace ID")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  });
+
+  it("edits an exact workspace scope without needing an environment workaround", async () => {
+    const { onSave } = renderSheet();
+    await userEvent.type(field("Workspace ID"), "9007199254740993");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ workspace_id: "9007199254740993" }), 12));
+  });
+
+  it("shows a workspace error next to invalid scope text", async () => {
+    renderSheet();
+    await userEvent.type(field("Workspace ID"), "not-an-id");
+    await vi.waitFor(() => expect(field("Workspace ID")).toHaveAccessibleDescription(/workspace_id must be digits/));
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  });
+
   it("links to the job's history in edit mode, and not when adding a job", () => {
     renderSheet();
     expect(screen.getByRole("link", { name: "View history" })).toHaveAttribute("href", "/jobs/changes?job=orders_enrich");

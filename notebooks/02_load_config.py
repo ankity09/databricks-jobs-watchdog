@@ -55,7 +55,7 @@ except Exception as err:
     raise
 record_config_load(spark, s.catalog, s.schema, ConfigLoad(now, scan_id, loaded.source, loaded.source_ref,
                                                           loaded.version, len(loaded.jobs), "OK", None))
-enabled = sum(job.enabled for job in loaded.jobs)
+enabled = sum(job.active for job in loaded.jobs)
 where = f"Lakebase job list version {loaded.version}" if loaded.version is not None else loaded.source_ref
 print(f"Read {len(loaded.jobs)} jobs ({enabled} enabled), {len(loaded.dependencies)} dependencies and "
       f"{len(loaded.workspaces)} workspace labels from {where}")

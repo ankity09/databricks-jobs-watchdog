@@ -131,6 +131,45 @@ jobs:
 
 A job that sets its own `job_name_exclude_regex` uses that one instead. Like `job_name_regex`, the exclusion matches anywhere in the name unless you anchor it. The pattern needs `_test` to be followed by `_` or the end of the name, so it skips `orders_ingest_test_prod` and `daily_revenue_report_test`, and keeps `daily_revenue_report_latest`. The example anchors it because a bare `test` would also match names such as `contest`. Notebook 02's match table applies the same exclusion, and the scans write no rows for excluded jobs.
 
+### Scope a job to one workspace
+
+Set `workspace_id` directly on the job to check only that workspace. Use distinct logical names for copies in different workspaces; dependencies refer to those names.
+
+```yaml
+jobs:
+  - job_name: orders_ingest_lower
+    workspace_id: "1111111111111111"
+    job_ids: ["101"]
+    schedule_type: continuous
+    max_gap_minutes: 30
+  - job_name: orders_ingest_production
+    workspace_id: "2222222222222222"
+    job_ids: ["201"]
+    schedule_type: continuous
+    max_gap_minutes: 30
+    severity: CRITICAL
+```
+
+Replace these illustrative IDs before use. [`monitored_jobs.workspace-ids.example.yml`](../config/monitored_jobs.workspace-ids.example.yml) has six jobs, both workspaces, all three schedule types and three dependency types.
+
+- The workspace filter applies to both exact job IDs and name patterns. A copy in another workspace cannot satisfy the entry.
+- A digit string is preferred. Exact YAML integers also work. Blank strings, booleans, floats and non-digits stop the load. Missing or `null` keeps the old regional behavior.
+- Scope does not need a top-level workspace label. `workspaces` is only needed for environment labels and overrides. Neither `defaults` nor an environment override can set job scope.
+- Scope does not grant access. System tables cover the scan's account and region. With `auth_mode: current_workspace`, the live API still checks only the current workspace; use the documented service-principal setup for other workspaces. Review both sources' coverage before enabling alerts.
+- **Upgrade first.** Job-level `workspace_id` needs the new native-scope release. Older loaders reject it. Update the scan code and the app, run notebook 01 to add the nullable column, then run notebook 02. Bundle-managed jobs need the updated bundle code too. Do not leave an old loader scheduled against the upgraded table.
+
+### Make the schedule type explicit
+
+Write `schedule_type` on every new job so the file is clear without reading its defaults:
+
+| Type | Use for | Gap check |
+|---|---|---|
+| `scheduled` | A batch job expected to start regularly | Set `max_gap_minutes`, the longest allowed time between starts |
+| `continuous` | A stream expected to stay running | Set `max_gap_minutes`, the longest allowed downtime; 30 minutes if omitted |
+| `triggered` | A child job or a job started only by hand | No schedule-gap check; do not set `max_gap_minutes` |
+
+These three types were already supported. Old YAML can still inherit the file's `defaults.schedule_type`, otherwise `scheduled`. New jobs saved in the app and every YAML export spell out the effective type. Exporting does not change older stored jobs that inherit defaults.
+
 ### Label workspaces by environment
 
 Add an optional top-level `workspaces` section to the same file:
@@ -163,11 +202,11 @@ defaults:
   job_name_exclude_regex: "_test(_|$)"
 ```
 
-Every job gets these unless it sets its own. `defaults` can hold any job setting except `job_name`, `job_name_regex` and `environments`. Notebook 02 shows `monitored_jobs` with the defaults filled in, so you can check what each job ends up with.
+Every job gets these unless it sets its own. `defaults` can hold any job setting except `job_name`, `workspace_id`, `job_name_regex`, `job_ids` and `environments`. Notebook 02 shows `monitored_jobs` with the defaults filled in, so you can check what each job ends up with. Its enabled count includes jobs switched on through an environment override.
 
 ### Change a job's settings per environment
 
-One entry covers a job in every workspace where it runs. To treat its copies differently by environment, add an `environments` section to the entry, keyed by the labels from the `workspaces` section:
+Without job-level `workspace_id`, one entry covers a job across the region. With it, overrides apply only within that workspace. To treat copies differently by environment, add an `environments` section to the entry, keyed by the labels from the `workspaces` section:
 
 ```yaml
   - job_name: orders_ingest
@@ -230,7 +269,7 @@ When a job fails, `affected_jobs` lists every job downstream of it, through the 
 
 ### Pin jobs by job ID
 
-A name pattern finds every copy of a job, in every workspace, without a list of IDs. To check exact jobs instead, list their IDs in `job_ids`, for the whole job or for one environment:
+A name pattern finds copies across the region, or only the configured `workspace_id` when set. To check exact jobs instead, list their IDs in `job_ids`, for the whole job or for one environment. The workspace restriction applies to IDs too:
 
 ```yaml
   - job_name: orders_enrich

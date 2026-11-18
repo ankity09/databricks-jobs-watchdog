@@ -5,6 +5,7 @@
 -- fails the query; pattern_check.obo.sql tells that apart from missing access.
 -- @param pattern STRING = ^example$
 -- @param exclude STRING = ""
+-- @param workspace_id STRING = ""
 -- @param refresh INT = 0
 WITH latest_jobs AS (
   SELECT workspace_id, job_id, name
@@ -20,6 +21,7 @@ SELECT
 FROM latest_jobs
 WHERE regexp_like(name, :pattern)
   AND (:exclude = '' OR NOT regexp_like(name, :exclude))
+  AND (:workspace_id = '' OR workspace_id = :workspace_id)
   AND :refresh >= 0
 ORDER BY name
 LIMIT 50

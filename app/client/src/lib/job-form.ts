@@ -45,6 +45,7 @@ export interface OverrideFormValues {
 
 export interface JobFormValues {
   job_name: string;
+  workspace_id: string;
   job_name_regex: string;
   job_name_exclude_regex: string;
   /** No exclusion for this job, even when the defaults set one. Stored as null. */
@@ -117,6 +118,7 @@ export function toFormValues(entry: JobEntry, labels: string[]): JobFormValues {
   const exclude: unknown = entry.job_name_exclude_regex;
   return {
     job_name: asText(entry.job_name),
+    workspace_id: asText(entry.workspace_id),
     job_name_regex: asText(entry.job_name_regex),
     job_name_exclude_regex: asText(exclude),
     exclude_off: "job_name_exclude_regex" in entry && (exclude === null || exclude === ""),
@@ -209,6 +211,8 @@ function overrides(row: OverrideFormValues, saved: unknown): EnvironmentOverride
 /** The entry the form describes, built on `base` (the entry the editor opened with). */
 export function toEntry(values: JobFormValues, base: JobEntry): JobEntry {
   const entry: JobEntry = { ...base, job_name: keptOrTrimmed(values.job_name, base.job_name) };
+  const workspaceId = values.workspace_id.trim();
+  put(entry, base, "workspace_id", workspaceId === "" ? undefined : workspaceId);
   put(entry, base, "job_name_regex", values.job_name_regex === "" ? undefined : values.job_name_regex);
   // "No exclusion" is the checkbox, so an empty pattern without it means the default applies.
   if (values.exclude_off) entry.job_name_exclude_regex = base.job_name_exclude_regex === "" ? "" : null;
