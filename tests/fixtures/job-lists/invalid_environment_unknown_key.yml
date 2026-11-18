@@ -1,0 +1,7 @@
+workspaces:
+  - workspace_name: example-staging
+    environment: lower
+jobs:
+  - job_name: orders_ingest
+    max_gap_minutes: 60
+    environments: {lower: {notes: x}}

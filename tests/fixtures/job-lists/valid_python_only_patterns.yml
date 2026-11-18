@@ -1,0 +1,14 @@
+# Patterns Python's re accepts and JavaScript's RegExp refuses: inline flags,
+# a scoped flag and a verbose pattern. The loader accepts them on every Python
+# from 3.10 (which serverless notebooks may run) to 3.14, and so does the
+# system-table scan's regexp_like, so the app must too.
+defaults:
+  max_gap_minutes: 60
+jobs:
+  - job_name: orders_ingest
+    job_name_regex: (?i)^orders_ingest$
+    job_name_exclude_regex: (?i)_TEST$
+  - job_name: orders_enrich
+    job_name_regex: (?x) ^orders _enrich $
+  - job_name: orders_report
+    job_name_regex: ^(?i:ORDERS)_report$

@@ -1,0 +1,38 @@
+# The Watchdog app. bundle deploy creates or updates it; bundle run watchdog_app
+# deploys the code and starts it. Queries and the Genie copilot run as the person
+# signed in (the sql and dashboards.genie user scopes), so user authorization
+# must allow those scopes in the workspace; Lakebase and Scan now run as the app.
+# Members of the app_users_group variable's group (users by default) may open
+# it. Each person also needs the Unity Catalog grants listed in
+# docs/multi-region.md ("Who can use the app").
+resources:
+  apps:
+    watchdog_app:
+      name: ${var.app_name}
+      description: "Watchdog: job monitoring, the monitored-jobs list and a read-only copilot"
+      source_code_path: ../app
+      user_api_scopes:
+        - sql
+        - dashboards.genie
+      permissions:
+        - group_name: ${var.app_users_group}
+          level: CAN_USE
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+        - name: postgres
+          postgres:
+            branch: ${resources.postgres_projects.watchdog_db.name}/branches/${var.lakebase_branch}
+            database: ${resources.postgres_databases.watchdog_database.name}
+            permission: CAN_CONNECT_AND_CREATE
+        - name: job
+          job:
+            id: ${resources.jobs.watchdog_scan.id}
+            permission: CAN_MANAGE_RUN
+        - name: genie-space
+          genie_space:
+            name: watchdog-copilot
+            space_id: ${resources.genie_spaces.watchdog_copilot.id}
+            permission: CAN_RUN

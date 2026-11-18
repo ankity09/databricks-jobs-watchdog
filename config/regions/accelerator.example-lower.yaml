@@ -1,0 +1,33 @@
+# Example region file: the lower-environment Watchdog.
+#
+# One file per region. It is an accelerator file (see accelerator.yaml for every
+# key) plus a deploy section. Copy it to accelerator.<region>.yaml and fill in
+# the placeholders. See docs/multi-region.md.
+
+metadata:
+  name: databricks-jobs-watchdog
+  customer: example-customer
+
+target:
+  catalog: your_catalog              # an existing catalog in this region's metastore
+  schema: watchdog
+  region: us-east-2                  # cloud region of this metastore
+  warehouse_id: your_warehouse_id    # Pro or Serverless SQL warehouse in this workspace
+
+auth:
+  mode: current_workspace
+
+scan:
+  config_source: lakebase            # the job list is edited in the Watchdog app
+  schedule_status: PAUSED            # every scan fails at load_config until the app holds a job list: import or
+                                     # add your jobs in the app first, then set UNPAUSED and deploy again
+
+app:
+  name: watchdog-app
+  lakebase_project_id: jobs-watchdog
+  users_group: users                 # the group whose members may open the app
+
+deploy:
+  workspace_host: https://your-workspace.example.com # where this region's Watchdog runs
+  profile: ""                        # optional CLI profile. Empty: DATABRICKS_HOST comes from workspace_host and the CLI
+                                     # signs in with OAuth M2M. Always deploy this region as the same identity (see docs/multi-region.md)

@@ -6,17 +6,22 @@
 #   databricks bundle run watchdog_phase_1 -t dev --profile <your-profile>
 #
 # Targets:
-#   dev   the Phase 1 job, the scan job and the daily cleanup job (default)
-#   demo  the same three jobs plus four sample jobs (one succeeds, one fails, one
+#   dev   the Phase 1 job, the scan job, the daily cleanup job, the Watchdog app and
+#         its Lakebase project (default)
+#   demo  the same resources plus four sample jobs (one succeeds, one fails, one
 #         runs long, one retries), so a fresh workspace has something to watch
+#   production  the same resources as dev, in production mode, for a real
+#         region; scripts/deploy_regions.py deploys it once per region
 #
-# Both targets use development mode, so deployed names carry a [dev <you>]
-# prefix. Schedules stay PAUSED unless you set scan_schedule_status (the scan
-# and cleanup jobs) or demo_schedule_status to UNPAUSED. Remove everything with
-# ./teardown.sh.
+# The dev and demo targets use development mode, so deployed names carry a
+# [dev <you>] prefix. Schedules stay PAUSED unless you set scan_schedule_status
+# (the scan and cleanup jobs) or demo_schedule_status to UNPAUSED. Remove
+# everything with ./teardown.sh.
 
 bundle:
   name: databricks-jobs-watchdog
+  # The app, Lakebase and Genie resources need CLI 1.23.0 or newer; an older CLI says so here, not with an unknown field.
+  databricks_cli_version: ">= 1.23.0"
 
 include:
   - resources/*.yml
@@ -25,7 +30,7 @@ variables:
   catalog:
     description: Catalog that holds the Watchdog schema (required)
   schema:
-    description: Schema for the Watchdog tables and view
+    description: Schema for the Watchdog tables and views
     default: watchdog
   region:
     description: Cloud region of this metastore, recorded on every finding (required)
@@ -62,6 +67,26 @@ variables:
   retention_days:
     description: watchdog_cleanup deletes findings scans older than this many days, keeping each source's newest scan; 0 keeps everything
     default: "30"
+  warehouse_id:
+    description: Pro or Serverless SQL warehouse the Watchdog app reads findings through (required; the copilot's Genie agent needs one)
+  config_source:
+    description: Where notebook 02 reads the job list, yaml (the monitored-jobs file) or lakebase (the Watchdog app)
+    default: yaml
+  app_name:
+    description: Name of the Watchdog app; unique in the workspace
+    default: watchdog-app
+  lakebase_project_id:
+    description: Lakebase project that holds the Watchdog app's job list; unique in the workspace
+    default: jobs-watchdog
+  app_users_group:
+    description: Workspace group whose members may open the Watchdog app (CAN USE) and ask its copilot (CAN RUN)
+    default: users
+  lakebase_branch:
+    description: Lakebase branch the scan reads the job list from
+    default: production
+  lakebase_database:
+    description: Postgres database in that branch
+    default: watchdog
   demo_schedule_status:
     description: PAUSED (default) or UNPAUSED; UNPAUSED runs the demo jobs on their schedules
     default: PAUSED
@@ -151,3 +176,15 @@ targets:
                 notebook_path: ./demo/retries.py
                 base_parameters:
                   attempt: "{{task.execution_count}}"
+
+  # One Watchdog per region (see docs/multi-region.md). The workspace host is not
+  # set here: a bundle target cannot take its host from a variable. Each region
+  # file names its workspace, and scripts/deploy_regions.py passes it as
+  # DATABRICKS_HOST (or as a CLI profile). The files go to the deploying
+  # identity's own folder, not /Workspace/Shared: production mode warns that a
+  # shared path is open to every user, and the fix it suggests (CAN_MANAGE for all
+  # users) would reach the jobs, the app and the copilot too.
+  production:
+    mode: production
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}

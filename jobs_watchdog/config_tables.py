@@ -27,6 +27,7 @@ JOB_COLUMNS = (
     ("job_name_exclude_regex", "STRING"),
     ("min_attempt_minutes", "INT"),
     ("job_ids", "ARRAY<STRING>"),
+    ("workspace_id", "STRING"),
 )
 DEPENDENCY_COLUMNS = (
     ("job_name", "STRING"),

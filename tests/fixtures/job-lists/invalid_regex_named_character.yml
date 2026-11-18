@@ -1,0 +1,9 @@
+# Python compiles a \N{...} character name such as \N{EM DASH}. Java's regex, which
+# the system-table scan's regexp_like uses, knows fewer names (none of Python's
+# aliases, no generated CJK or Hangul names, nothing newer than Unicode 13), and
+# the app cannot look names up, so the loader and the app refuse every \N{...}.
+# Write the character itself instead.
+jobs:
+  - job_name: orders_ingest
+    max_gap_minutes: 60
+    job_name_regex: '^orders\N{EM DASH}ingest$'

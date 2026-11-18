@@ -4,7 +4,7 @@
 # MAGIC
 # MAGIC **What it does.** Checks that Phase 1 is complete and prints one PASS or FAIL line per check:
 # MAGIC
-# MAGIC 1. the five tables and the `findings_latest` and `incidents` views exist;
+# MAGIC 1. the six tables and the `findings_latest` and `incidents` views exist;
 # MAGIC 2. the config has enabled jobs (switched on in at least one environment);
 # MAGIC 3. both sources (system tables and the Jobs API) wrote findings;
 # MAGIC 4. every enabled job got at least one finding from each source;

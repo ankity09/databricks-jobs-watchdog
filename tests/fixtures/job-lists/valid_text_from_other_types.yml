@@ -1,0 +1,38 @@
+# Text fields that YAML reads as numbers, booleans or dates. The Python loader
+# reads each one with str(), so all of them are valid, and the app stores each
+# as that text: job_name 20241105 is "20241105", notes: true is "True", 12:30
+# is the base-60 number 750 and so "750", and a date keeps its ISO form. A
+# false or 0 owner or notes reads as "". stored.json holds the stored form.
+defaults:
+  max_gap_minutes: 60
+  owner: 7
+workspaces:
+  - workspace_name: 2024
+    environment: 1
+    notes: 2024
+  - workspace_id: 1111111111111111
+    environment: production
+    notes: yes
+jobs:
+  - job_name: 20241105
+    owner: 42
+    notes: true
+    environments:
+      1:
+        owner: 9
+  - job_name: true
+    schedule_type: triggered
+    notes: 60.0
+    owner: false
+  - job_name: 2024-11-05
+    notes: 2024-11-05 10:30:00
+    job_name_exclude_regex: 2024
+  - job_name: 12:30
+    notes: 1e3
+dependencies:
+  - job_name: true
+    depends_on: 20241105
+    notes: 7
+  - job_name: 2024-11-05
+    depends_on: 1.5
+    dependency_type: service

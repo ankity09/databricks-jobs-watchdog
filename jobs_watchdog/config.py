@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 from jobs_watchdog.identifiers import validate_identifier
+from jobs_watchdog.java_regex import java_regex_clause, java_regex_problem
 
 # triggered: started by another job or by hand, so it has no schedule to check
 SCHEDULE_TYPES = {"continuous", "scheduled", "triggered"}
@@ -17,15 +18,16 @@ CONTINUOUS_MAX_GAP_MINUTES = 30
 SEVERITIES = {"CRITICAL", "WARNING"}
 DEPENDENCY_TYPES = {"job", "child_job", "service"}
 AUTH_MODES = {"current_workspace", "service_principal"}
-ACCELERATOR_SECTIONS = ("metadata", "target", "auth", "scan", "resources", "features")
+CONFIG_SOURCES = {"yaml", "lakebase"}
+ACCELERATOR_SECTIONS = ("metadata", "target", "auth", "scan", "app", "resources", "features")
 
 # keys a job entry may set; defaults may set any of them except the names and patterns
 JOB_KEYS = {
     "job_name", "job_name_regex", "job_name_exclude_regex", "schedule_type", "max_gap_minutes",
     "max_runtime_minutes", "max_retries", "min_attempt_minutes", "severity", "owner", "enabled", "notes",
-    "environments", "job_ids",
+    "environments", "job_ids", "workspace_id",
 }
-DEFAULT_KEYS = JOB_KEYS - {"job_name", "job_name_regex", "environments", "job_ids"}
+DEFAULT_KEYS = JOB_KEYS - {"job_name", "job_name_regex", "environments", "job_ids", "workspace_id"}
 # settings an environment can override for one job
 OVERRIDE_KEYS = ("severity", "owner", "enabled", "max_gap_minutes", "max_runtime_minutes", "max_retries",
                  "min_attempt_minutes", "job_ids")
@@ -53,6 +55,12 @@ class MonitoredJob:
     environments: dict = field(default_factory=dict, hash=False)
     # job IDs to check instead of matching names; an environment can list its own
     job_ids: tuple = ()
+    # Optional exact workspace scope; absent keeps the regional matching behavior.
+    workspace_id: str | None = None
+
+    def applies_to(self, workspace_id):
+        """Whether this entry may match jobs in the given workspace."""
+        return self.workspace_id is None or (workspace_id is not None and str(workspace_id) == self.workspace_id)
 
     def settings_for(self, environment):
         """This job with the overrides for one environment label applied.
@@ -123,6 +131,11 @@ def _compiled(raw, name, field):
         re.compile(raw)
     except re.error as err:
         raise ConfigError(f"job {name}: {field} does not compile: {err}") from err
+    # The system-table scan matches with Spark's regexp_like, which compiles patterns as Java
+    # regex; one pattern Java refuses fails that scan for every job.
+    construct = java_regex_problem(raw)
+    if construct is not None:
+        raise ConfigError(f"job {name}: {field} {raw!r} {java_regex_clause(construct)}")
     return raw
 
 
@@ -211,6 +224,11 @@ def _parse_job(raw, defaults=None, labels=()):
         raise ConfigError(f"job {name}: unknown keys {unknown}; allowed: {sorted(JOB_KEYS)}")
     environments = _parse_environments(raw.get("environments"), name, set(labels))
     own = raw
+    workspace_id = raw.get("workspace_id")
+    if workspace_id is not None:
+        if isinstance(workspace_id, bool) or not isinstance(workspace_id, (int, str)) or not re.fullmatch(r"[0-9]+", str(workspace_id)):
+            raise ConfigError(f"job {name}: workspace_id must be digits, got {workspace_id!r}")
+        workspace_id = str(workspace_id)
     job_ids = _parse_job_ids(raw["job_ids"], f"job {name}") if raw.get("job_ids") is not None else ()
     raw = {**(defaults or {}), **raw}
     regex = _compiled(raw.get("job_name_regex") or f"^{re.escape(name)}$", name, "job_name_regex")
@@ -250,6 +268,7 @@ def _parse_job(raw, defaults=None, labels=()):
         min_attempt_minutes=_optional_int(raw.get("min_attempt_minutes"), name, "min_attempt_minutes"),
         environments=environments,
         job_ids=job_ids,
+        workspace_id=workspace_id,
     )
 
 
@@ -271,23 +290,23 @@ def _parse_dependency(raw, job_names):
     return Dependency(job_name, depends_on, dependency_type, str(raw.get("notes") or ""))
 
 
-def load_monitored_jobs(path):
-    """Return (jobs, dependencies) from a monitored-jobs YAML file.
+def parse_monitored_jobs(data, source):
+    """Return (jobs, dependencies) from a monitored-jobs document already read into a dict.
 
     The optional top-level defaults section fills every key a job leaves out.
     A job's environments section overrides settings for one environment label,
-    and each label must be defined in the workspaces section.
+    and each label must be defined in the workspaces section. source names where
+    the document came from, for error messages.
     """
-    data = _read_yaml(path)
     defaults = _parse_defaults(data.get("defaults"))
     labels = {_parse_workspace(raw).environment for raw in data.get("workspaces") or []}
     jobs = [_parse_job(raw, defaults, labels) for raw in data.get("jobs") or []]
     if not jobs:
-        raise ConfigError(f"{path} lists no jobs")
+        raise ConfigError(f"{source} lists no jobs")
     seen = set()
     for job in jobs:
         if job.job_name in seen:
-            raise ConfigError(f"duplicate job_name {job.job_name!r} in {path}")
+            raise ConfigError(f"duplicate job_name {job.job_name!r} in {source}")
         seen.add(job.job_name)
     deps = [_parse_dependency(raw, seen) for raw in data.get("dependencies") or []]
     parents = {}
@@ -299,6 +318,11 @@ def load_monitored_jobs(path):
                               f"{dep.depends_on}; a job can have only one parent")
         parents[dep.job_name] = dep.depends_on
     return jobs, deps
+
+
+def load_monitored_jobs(path):
+    """Return (jobs, dependencies) from a monitored-jobs YAML file."""
+    return parse_monitored_jobs(_read_yaml(path), str(path))
 
 
 _ENVIRONMENT = re.compile(r"[A-Za-z0-9_-]+")
@@ -324,9 +348,8 @@ def _parse_workspace(raw):
     return MonitoredWorkspace(workspace_id, workspace_name, str(environment), str(raw.get("notes") or ""))
 
 
-def load_monitored_workspaces(path):
-    """The optional workspaces section of a monitored-jobs file: an environment per workspace."""
-    data = _read_yaml(path)
+def parse_monitored_workspaces(data, source):
+    """The optional workspaces section of a monitored-jobs document: an environment per workspace."""
     workspaces = [_parse_workspace(raw) for raw in data.get("workspaces") or []]
     seen = set()
     for workspace in workspaces:
@@ -335,9 +358,14 @@ def load_monitored_workspaces(path):
             if key[1] is None:
                 continue
             if key in seen:
-                raise ConfigError(f"workspace {key[1]} is listed twice in {path}")
+                raise ConfigError(f"workspace {key[1]} is listed twice in {source}")
             seen.add(key)
     return workspaces
+
+
+def load_monitored_workspaces(path):
+    """The optional workspaces section of a monitored-jobs file: an environment per workspace."""
+    return parse_monitored_workspaces(_read_yaml(path), str(path))
 
 
 def load_accelerator(path, require_complete=False):

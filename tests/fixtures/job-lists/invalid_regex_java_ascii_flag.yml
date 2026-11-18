@@ -1,0 +1,6 @@
+# Python's a flag makes \w match ASCII letters only. Java has no a flag (its \w is
+# ASCII already), so the system-table scan could not run this pattern.
+jobs:
+  - job_name: orders_ingest
+    max_gap_minutes: 60
+    job_name_regex: '(?a)^orders_\w+$'

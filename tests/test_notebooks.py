@@ -1,5 +1,6 @@
 import ast
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -65,6 +66,28 @@ def test_cleanup_notebook_runs_the_delete_file_after_checking_the_tables():
     assert text.index("require_current_tables(spark") < text.index("run_sql(spark, \"sql/maintenance/50_delete_old_findings.sql\"")
     assert "if s.retention_days == 0:" in text
     assert "Oldest observed_at left" in text
+
+
+def test_notebook_02_installs_pg8000_only_when_it_reads_lakebase_inside_the_recorded_try():
+    # A YAML load must not need PyPI, and a failed install must leave a FAILED config_loads row.
+    text = (NOTEBOOKS / "02_load_config.py").read_text()
+    assert "%pip" not in text and not re.search(r"^\s*(import|from) pg8000", text, re.MULTILINE)
+    body = text[text.index("try:"):text.index("except Exception as err:")]
+    lakebase = body[body.index('if s.config_source == "lakebase":'):body.index("else:")]
+    assert "pg8000_connect()" in lakebase
+    assert "pg8000" not in body[body.index("else:"):]
+    assert "config_source" in text and "config_loads" in text
+
+
+def test_notebook_11_installs_pg8000_with_its_own_message():
+    text = (NOTEBOOKS / "11_grant_app_access.py").read_text()
+    assert "pg8000_connect(GRANT_APP_ACCESS)" in text and "%pip" not in text
+
+
+def test_notebook_02_keeps_the_original_error_when_recording_a_failed_load_fails():
+    text = (NOTEBOOKS / "02_load_config.py").read_text()
+    handler = text[text.index("except Exception as err:"):text.index("record_config_load(spark, s.catalog, s.schema, ConfigLoad(now, scan_id, loaded.source")]
+    assert "record_config_load_safely(" in handler and handler.rstrip().endswith("raise")
 
 
 @pytest.mark.parametrize("name, source", [("05_scan_system_tables.py", "SYSTEM_TABLES"),

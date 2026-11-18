@@ -66,21 +66,28 @@ Delivered in this release:
 - **Impact.** A failure alert names the downstream jobs it affects, from `affected_jobs`.
 - **Recovery messages.** When a job is healthy again, one closing message.
 
-## Phase 4: the Watchdog app
+## Phase 4: The Watchdog app (built)
 
-A Databricks App that reads `findings_latest` for the current picture, and `findings` for history:
+A Databricks App with a Lakebase project and a Genie copilot, deployed by the bundle. [app.md](app.md) describes it. It has:
 
-- **Health:** every monitored job and its latest status, across workspaces.
-- **Incidents:** what is open, since when, and who owns it.
-- **Impact:** the dependency map, with the jobs a failure affects.
-- **Coverage:** jobs the Watchdog could not see (`not_found`, `api_unreachable`) and why.
-- **Summary:** trends over days and weeks.
-- **Genie questions** over `findings_latest`, so people can ask about the current status in plain language.
-- **Write-back:** acknowledgements and notes on incidents.
+- **Monitoring.** Counts of failed, warning, unknown and healthy jobs, one row per job and workspace with filters, a detail panel for each job (check results, error text, run and pipeline links, the jobs a failure affects), a history strip, and Scan now. Jobs the Watchdog could not find show as unknown, with the reason.
+- **The job list, in the app.** Add, edit, switch off and delete jobs, shared defaults and workspace labels, a dependency map, a job picker that searches the region's real jobs, a change log of every saved version, and YAML import and export. The scan reads the newest saved version when `scan.config_source` is `lakebase`.
+- **The copilot.** A read-only Genie agent over the Watchdog tables. Each answer shows the SQL it ran and who it ran as.
+- **One Watchdog per region.** A `production` target, region files, a deploy script and a GitLab CI example ([multi-region.md](multi-region.md)).
+
+Moved to the backlog:
+
+- Incidents: what is open, since when, and who owns it, from the `incidents` view (Phase 1.4).
+- Acknowledgements and triage notes on a failure.
+- A restore button in the change log (the server already has the call).
+- Copilot actions, such as rerunning a job, and approvals for them.
+- A scan that runs as a service principal other than the deploying identity and reads the job list from Lakebase.
+- Views across regions.
+- Alerts (Phase 3).
 
 ## Phase 5: more regions and production
 
-- One Watchdog per region, so each region's data stays in that region.
+- One Watchdog per region, so each region's data stays in that region. The bundle and a deploy script for this are built ([multi-region.md](multi-region.md)).
 - A cross-region roll-up of findings, only if your security team approves moving that data.
 - Production hardening: the job running as a service principal, alerts on the Watchdog's own failures, and a review of who can read `findings`.
 - Built-in Databricks job monitoring features, used alongside the Watchdog where they become available.
@@ -92,5 +99,6 @@ Not scheduled yet:
 - Compare `code_version` with the newest commit on the main branch. Needs access to the Git provider's API.
 - Who cancelled a run. Needs audit logs.
 - Restart on known errors, through the job's retry settings or automation.
-- One Watchdog per region, plus an optional cross-region roll-up, subject to security approval.
+- An optional cross-region roll-up, subject to security approval.
+- The app's backlog items listed under Phase 4.
 - PagerDuty routing for CRITICAL findings.

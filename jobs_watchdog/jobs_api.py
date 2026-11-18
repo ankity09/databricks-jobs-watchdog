@@ -82,7 +82,7 @@ def make_client(mode, host, client_id, client_secret):
     return WorkspaceClient(host=host, client_id=client_id, client_secret=client_secret, auth_type="oauth-m2m")
 
 
-def resolve_jobs(client, jobs):
+def resolve_jobs(client, jobs, *, workspace_id=None):
     """Match each monitored job against the jobs in a workspace.
 
     Pass jobs with their overrides for this workspace's environment applied
@@ -93,8 +93,15 @@ def resolve_jobs(client, jobs):
     The regex can match anywhere in the name, like regexp_like in the system
     table scan, so it also matches names that a bundle's development mode
     prefixes. Names matching the job's job_name_exclude_regex (for example test
-    copies) are skipped.
+    copies) are skipped. workspace_id may reuse the client's identity when the
+    caller has already verified it against the target workspace.
     """
+    jobs = list(jobs)
+    if any(job.workspace_id is not None for job in jobs):
+        actual_workspace_id = workspace_id if workspace_id is not None else client.get_workspace_id()
+        jobs = [job for job in jobs if job.applies_to(actual_workspace_id)]
+    if not jobs:
+        return []
     listed = []
     for job in client.jobs.list(limit=100):
         settings = getattr(job, "settings", None)
@@ -130,7 +137,7 @@ def collect_target(client, target, jobs, now, code_version_tag="code_version", p
     if now.tzinfo is None:
         raise ValueError("now must include a timezone")
     # each job with its overrides for this workspace's environment; switched-off jobs are not checked here
-    jobs = [job.settings_for(target.environment) for job in jobs]
+    jobs = [job.settings_for(target.environment) for job in jobs if job.applies_to(target.workspace_id)]
     jobs = [job for job in jobs if job.enabled]
     if not jobs:
         return []
@@ -140,7 +147,7 @@ def collect_target(client, target, jobs, now, code_version_tag="code_version", p
             raise WorkspaceIdMismatch(
                 f"WORKSPACE_ID_MISMATCH: the API answered as workspace {actual}, expected {target.workspace_id}"
             )
-        resolved = resolve_jobs(client, jobs)
+        resolved = resolve_jobs(client, jobs, workspace_id=actual)
     except Exception as err:
         return [_unreachable(target, job, None, err) for job in jobs]
 
@@ -168,7 +175,7 @@ def collect_target(client, target, jobs, now, code_version_tag="code_version", p
 
 def unreachable_rows(target, jobs, reason):
     """api_unreachable rows for every job switched on in this workspace's environment."""
-    jobs = [job.settings_for(target.environment) for job in jobs]
+    jobs = [job.settings_for(target.environment) for job in jobs if job.applies_to(target.workspace_id)]
     return [_row(target, job, None, "api_unreachable", "UNKNOWN", error_summary=reason) for job in jobs if job.enabled]
 
 

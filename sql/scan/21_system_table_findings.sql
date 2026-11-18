@@ -41,7 +41,7 @@
 WITH monitored AS (
   -- every configured job; whether it is checked is decided per environment below
   SELECT job_name, job_name_regex, job_name_exclude_regex, schedule_type, max_gap_minutes, max_runtime_minutes,
-         severity, owner, enabled, job_ids
+         severity, owner, enabled, job_ids, workspace_id
   FROM IDENTIFIER(:catalog || '.' || :schema || '.monitored_jobs')
 ),
 overrides AS (
@@ -122,6 +122,7 @@ all_matched AS (
   LEFT JOIN overrides o ON o.job_name = c.job_name AND o.environment = c.environment
   WHERE (c.matched_by = 'job_id') = (coalesce(size(coalesce(o.job_ids, m.job_ids)), 0) > 0)
     AND (c.matched_by = 'name' OR array_contains(coalesce(o.job_ids, m.job_ids), c.job_id))
+    AND (m.workspace_id IS NULL OR m.workspace_id = c.workspace_id)
 ),
 matched AS (
   -- the matches switched on in their environment, with that environment's settings
@@ -156,6 +157,7 @@ expected_ids AS (
     CROSS JOIN environments e
     LEFT JOIN overrides o ON o.job_name = m.job_name AND o.environment = e.environment
     WHERE coalesce(o.enabled, m.enabled)
+      AND (m.workspace_id IS NULL OR m.workspace_id = e.workspace_id)
   )
 ),
 id_check AS (

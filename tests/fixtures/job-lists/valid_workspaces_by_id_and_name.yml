@@ -1,0 +1,11 @@
+workspaces:
+  - workspace_id: "1111111111111111"
+    environment: lower
+  - workspace_name: example-prod
+    environment: production
+jobs:
+  - job_name: orders_ingest
+    max_gap_minutes: 60
+    environments:
+      lower: {severity: WARNING}
+      production: {owner: platform-team}

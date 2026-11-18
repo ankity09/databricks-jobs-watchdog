@@ -1,14 +1,15 @@
 # Data model
 
-The Watchdog keeps five Delta tables and two views in one schema, `<catalog>.<schema>` (the schema defaults to `watchdog`). Notebook 01 creates them from the files in `sql/setup` and `sql/views`. Every column has a comment, so `DESCRIBE TABLE <catalog>.<schema>.findings` shows the same descriptions as this page.
+The Watchdog keeps six Delta tables and two views in one schema, `<catalog>.<schema>` (the schema defaults to `watchdog`). Notebook 01 creates them from the files in `sql/setup` and `sql/views`. Every column has a comment, so `DESCRIBE TABLE <catalog>.<schema>.findings` shows the same descriptions as this page.
 
 | Object | What it holds | How it changes |
 |---|---|---|
-| `monitored_jobs` | the jobs to check, with their limits | replaced each time notebook 02 loads your YAML file |
-| `job_dependencies` | what each job depends on | replaced each time notebook 02 loads your YAML file |
-| `monitored_workspaces` | an environment label for each workspace | replaced each time notebook 02 loads your YAML file |
-| `monitored_job_environments` | the settings a job changes in one environment, such as a lower severity | replaced each time notebook 02 loads your YAML file |
+| `monitored_jobs` | the jobs to check, with their limits | replaced each time notebook 02 loads your job list (from the YAML file or the Watchdog app) |
+| `job_dependencies` | what each job depends on | replaced each time notebook 02 loads your job list (from the YAML file or the Watchdog app) |
+| `monitored_workspaces` | an environment label for each workspace | replaced each time notebook 02 loads your job list (from the YAML file or the Watchdog app) |
+| `monitored_job_environments` | the settings a job changes in one environment, such as a lower severity | replaced each time notebook 02 loads your job list (from the YAML file or the Watchdog app) |
 | `findings` | what every scan found, from every source | rows are added, never updated or deleted |
+| `config_loads` | one row per load of the job list: where from, which version, how many jobs, and whether it worked | a row is added by every run of notebook 02 |
 | `findings_latest` (view) | the newest scan from each source | computed from `findings` each time it is read |
 | `incidents` (view) | each problem once, from the scan that found it until it clears | computed from `findings` each time it is read |
 
@@ -18,7 +19,7 @@ The YAML file has four sections, and only `jobs` is required. `config/monitored_
 
 | Section | Loaded into | What it holds |
 |---|---|---|
-| `defaults` | no table of its own | settings every job gets unless it sets its own: any job setting except `job_name`, `job_name_regex` and `environments` |
+| `defaults` | no table of its own | settings every job gets unless it sets its own: any job setting except `job_name`, `workspace_id`, `job_name_regex`, `environments` and `job_ids` |
 | `workspaces` | `monitored_workspaces` | an environment label for each workspace |
 | `jobs` | `monitored_jobs`, and each job's `environments` section into `monitored_job_environments` | the jobs to check |
 | `dependencies` | `job_dependencies` | what each job depends on |
@@ -31,10 +32,11 @@ One row per job you want checked.
 
 | Column | Type | Meaning |
 |---|---|---|
-| `job_name` | STRING, required | Short logical name. It appears on every finding and alert. Unique in the file. |
+| `job_name` | STRING, required | Short logical name. It appears on every finding and alert. Unique in the file, including entries scoped to different workspaces. |
+| `workspace_id` | STRING | Optional exact workspace scope. Only this workspace can satisfy the entry, whether matching by job ID or name. Missing or NULL keeps regional matching. |
 | `job_name_regex` | STRING, required | Matches the job's real name in each workspace where no `job_ids` apply. Left out, it is `^<job_name>$`. |
 | `job_name_exclude_regex` | STRING | Optional. A job whose real name matches this is skipped, even when `job_name_regex` matches it. Use it for test copies. |
-| `schedule_type` | STRING, required | `scheduled`, `continuous` or `triggered`. Left out, it is `scheduled`. Scheduled and continuous jobs get the `schedule_gap` check: time between run starts for a scheduled job, time with no run in progress for a continuous one. A triggered job is started by another job (a child job) or by hand, so it has no schedule to check: leave out `max_gap_minutes`, which is rejected on a triggered job and ignored when it comes from `defaults`. `last_run_result` judges a triggered job like a scheduled one. |
+| `schedule_type` | STRING, required | `scheduled`, `continuous` or `triggered`. Write it on each new job. Legacy YAML can omit it: the file's default applies, otherwise `scheduled`. Scheduled and continuous jobs get the `schedule_gap` check: time between run starts for a scheduled job, time with no run in progress for a continuous one. A triggered job is started by another job (a child job) or by hand, so it has no schedule to check: leave out `max_gap_minutes`, which is rejected on a triggered job and ignored when it comes from `defaults`. `last_run_result` judges a triggered job like a scheduled one. |
 | `max_gap_minutes` | INT | Scheduled jobs: the longest allowed time between run starts, required. Continuous jobs: the longest a job may have no run in progress, 30 minutes when not set (a value in `defaults` does not apply to continuous jobs). Not allowed on triggered jobs. |
 | `max_runtime_minutes` | INT | The longest allowed run. Left out turns off `long_runtime` and `live_long_runtime`. |
 | `max_retries` | INT | A task retried more times than this is a retry loop. Set it below the job's own task retry limit: a job never retries past its own limit, so an equal value never fires. With `min_attempt_minutes` also left out, `retry_loop` is off. |
@@ -48,12 +50,29 @@ One row per job you want checked.
 
 A setting a job leaves out comes from the file's `defaults` section when that sets it, and otherwise from the built-in default above ("Left out, it is ...").
 
+About job-level `workspace_id`:
+
+- Write a digit string such as `"1111111111111111"`. Exact YAML integers are accepted too. Booleans, floats, blank strings and non-digits are rejected. Missing or explicit `null` means no workspace restriction.
+- Scope is checked before either ID or name matching in both scan sources. A copy in another workspace cannot satisfy this entry. The app's picker, Monitored label and name preview use the same scope.
+- Scope belongs to the job, so `defaults` and environment overrides cannot set it. The top-level `workspaces` section only supplies labels and is not required just to scope a job by ID.
+- For separate workspace copies, use distinct logical names such as `orders_ingest_lower` and `orders_ingest_production`. Dependencies still reference those logical names, not workspace/job-ID pairs. See [`monitored_jobs.workspace-ids.example.yml`](../config/monitored_jobs.workspace-ids.example.yml).
+- Scope grants no access. System tables still cover the scan's account and region; `auth_mode: current_workspace` still checks only the current workspace's live API. A missing or inaccessible scoped job is never replaced by a match elsewhere; existing `not_found` and coverage diagnostics still apply.
+- This field requires the release that introduces native workspace scope. Upgrade the engine, config table and app together before using it. Older loaders reject the new key. Old files with no scope continue to work with the upgraded code.
+
 About `job_name_regex` and `job_name_exclude_regex`:
 
 - Each can match anywhere in the name unless you anchor it with `^` and `$`. That is on purpose: a bundle deployed in development mode adds a `[dev <user>]` prefix, and an unanchored regex still matches.
 - `job_name_regex` can match several jobs, in one workspace or in many. Each match gets its own findings rows, with its workspace and job ID, so one entry covers a job in every workspace where it runs without listing job IDs. Excluded names get none.
 - When two or more jobs that a job's pattern matches in one workspace have exactly the same name, the system table scan writes a `duplicate_name` WARNING for that workspace. Different names (variants, copies in other workspaces) are normal and not flagged.
-- The system table scan matches with Spark's `regexp_like`; the Jobs API scan matches with Python's `re.search`. Simple patterns (letters, `^`, `$`, `|`, groups, character classes) behave the same in both. Avoid engine-specific syntax in either field.
+- The system table scan matches with Spark's `regexp_like`, which compiles each pattern as Java regex; the Jobs API scan matches with Python's `re.search`. A pattern one of them refuses would stop that scan for every job, so the loader and the app refuse it first: Python's `re` must compile it (the app checks Python 3.10 to 3.14, the loader the Python it runs on), and so must Java. Java refuses some patterns Python accepts:
+  - named groups `(?P<name>...)` (leave the group unnamed), conditionals `(?(1)...)`, `(?#...)` comments and the `a` flag;
+  - a `{` that is not a `{n}`, `{n,}` or `{n,m}` repeat, such as `{,2}` (write `{0,2}`) or a `{` meant as text (write `\{`), and a count above 2147483647;
+  - `\0` with no octal digit after it, `\U` escapes and `\N{...}` names (write the character itself);
+  - in a set: `\b`, octal escapes such as `\1`, an unescaped `[`, and `&&` with nothing on either side;
+  - in a verbose `(?x)` pattern, a space or `#` inside a set (Java skips them there; escape them), and a `#` comment with a line break other than `\n` in it;
+  - inside a look-behind, a back reference or a repeated group with a choice in it, such as `(?<=(?:dev|prd){1}_)`.
+
+  The error names the construct, for example `job orders_ingest: job_name_regex '^orders_(?P<env>dev|prod)$' uses a (?P<name>...) group, which the system-table scan can't run`. Simple patterns (letters, `^`, `$`, `|`, groups, character classes, `{n,m}`) compile and match the same in both. A few compile in both and match differently: `\101` is `A` in Python and a back reference in Java, and `\b{g}` is a word boundary and the text `{g}` in Python and a grapheme boundary in Java.
 - The example config sets `job_name_exclude_regex: "_test(_|$)"` in its `defaults` section, so every job skips test copies. It uses `_test(_|$)` rather than a bare `test`, because a bare `test` would also match names such as `daily_revenue_report_latest` and `contest`.
 
 About `job_ids`:
@@ -139,6 +158,54 @@ One row per dependency. A failure lists every job downstream of the failed job, 
 | `loaded_at` | TIMESTAMP, required | When notebook 02 loaded the row. |
 
 The scans fill `affected_jobs` from `job` and `child_job` rows, and `parent_job` from `child_job` rows. `service` rows are used by the custom check template (notebook 09), which lists the jobs that depend on a service it found down. Built-in service probes come in Phase 2. Notebook 02 shows what a failure of each job affects, and prints any loops between jobs.
+
+## config_loads
+
+Notebook 02 adds one row every time it loads the job list, whether the load works or not, so the Watchdog app can show which version the scans use and whether the last load failed. A failed load leaves the four config tables as they were, so the scans go on with the last list that loaded.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `loaded_at` | TIMESTAMP | when the load ran, in UTC |
+| `scan_id` | STRING | the scan the load belongs to (the job's run ID, or a new ID for a run by hand) |
+| `source` | STRING | `yaml` (the monitored-jobs file) or `lakebase` (the list saved in the Watchdog app) |
+| `source_ref` | STRING | the file's path, or the Lakebase database's path |
+| `version` | BIGINT | the app's job list version; empty for YAML |
+| `job_count` | INT | how many jobs the list holds; empty when the load failed |
+| `status` | STRING | `OK` or `FAILED` |
+| `error` | STRING | why the load failed, for example a rule the list breaks or a package that could not be installed; empty when it worked |
+
+A serverless run that retries its task writes one row per attempt, with the same `scan_id`; the newest row is the one that counts.
+
+## The job-list document
+
+The Watchdog app keeps the job list in Lakebase, not in Delta. It is one row per saved version in `watchdog_app.job_list_versions` (database `watchdog`), described in [app.md](app.md#what-the-app-stores). The row's `document` column holds the whole list as JSON, in the same shape as the YAML file: the same four sections and the keys the Python loader accepts. Imports preserve omitted, inherited settings. YAML exports spell out each job's effective schedule type without changing the stored document.
+
+```json
+{
+  "defaults": {"severity": "WARNING", "owner": "data-platform", "job_name_exclude_regex": "_test(_|$)"},
+  "workspaces": [{"workspace_name": "prod-workspace", "environment": "production"}],
+  "jobs": [
+    {
+      "job_name": "orders_ingest",
+      "job_name_regex": "^orders_ingest$",
+      "schedule_type": "scheduled",
+      "max_gap_minutes": 60,
+      "severity": "CRITICAL",
+      "environments": {"lower": {"severity": "WARNING"}}
+    }
+  ],
+  "dependencies": [{"job_name": "orders_report", "depends_on": "orders_ingest", "dependency_type": "job"}]
+}
+```
+
+- `defaults` is optional and holds any job setting except `job_name`, `workspace_id`, `job_name_regex`, `environments` and `job_ids`.
+- `workspaces` is optional. Each entry has an `environment` and a `workspace_id` or a `workspace_name`.
+- `jobs` is required. Each job's `environments` section sits inside the job, and `job_ids` is a list of strings. The optional job-level `workspace_id` is also stored as a string.
+- A new app job has an explicit `schedule_type`. Older stored jobs may still inherit it. Export writes the job's own type, then the file's default, then `scheduled`, without saving a new version or freezing inheritance in the stored job.
+- `dependencies` is optional. `dependency_type` is `job`, `child_job` or `service`.
+- Text settings are stored as the text the Python loader reads. A job named `2024` is the text `2024`, and a job ID is always a string.
+
+Notebook 02 reads the newest version, checks it with the same rules as a YAML file, fills in the defaults and writes the same four config tables. `config_loads` records which version it loaded. The sections and keys are those described in the tables above.
 
 ## findings
 

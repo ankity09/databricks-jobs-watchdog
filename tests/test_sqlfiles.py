@@ -12,10 +12,12 @@ EXPECTED_FILES = [
     "sql/setup/04_create_findings.sql",
     "sql/setup/05_create_monitored_workspaces.sql",
     "sql/setup/06_create_monitored_job_environments.sql",
+    "sql/setup/07_create_config_loads.sql",
     "sql/config/01_load_monitored_jobs.sql",
     "sql/config/02_load_job_dependencies.sql",
     "sql/config/03_load_monitored_workspaces.sql",
     "sql/config/04_load_monitored_job_environments.sql",
+    "sql/config/05_record_config_load.sql",
     "sql/explore/10_workspaces_in_region.sql",
     "sql/explore/11_workspace_names.sql",
     "sql/explore/12_job_inventory.sql",
@@ -41,7 +43,8 @@ ALL_SQL = sorted(
     for p in (repo_root() / "sql").rglob("*.sql")
     if not p.relative_to(repo_root()).as_posix().startswith("sql/views/")
 )
-WATCHDOG_TABLES = ("monitored_jobs", "job_dependencies", "findings", "monitored_workspaces", "monitored_job_environments")
+WATCHDOG_TABLES = ("monitored_jobs", "job_dependencies", "findings", "monitored_workspaces", "monitored_job_environments",
+                   "config_loads")
 
 
 class FakeSpark:

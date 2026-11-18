@@ -1,3 +1,7 @@
 pytest>=7
 pyyaml>=6
 databricks-sdk>=0.40
+pg8000>=1.31,<1.32
+cryptography>=42  # the TLS tests mint a throwaway CA
+packaging>=23
+sqlglot>=30,<31

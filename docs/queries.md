@@ -51,10 +51,11 @@ Run in order by notebook 01. Every statement is `IF NOT EXISTS`, so re-running c
 | `04_create_findings.sql` | `catalog`, `schema` | Creates `findings`, the table both scans write. It has 30 columns. |
 | `05_create_monitored_workspaces.sql` | `catalog`, `schema` | Creates `monitored_workspaces`, the environment label for each workspace. |
 | `06_create_monitored_job_environments.sql` | `catalog`, `schema` | Creates `monitored_job_environments`, the settings each job changes in one environment. |
+| `07_create_config_loads.sql` | `catalog`, `schema` | Creates `config_loads`, one row each time notebook 02 loads the job list, with its source, version, job count and result. |
 
 ## sql/config
 
-Run by notebook 02, after it reads your monitored-jobs YAML file into four temp views.
+Run by notebook 02, after it reads your job list (the YAML file, or the newest version saved in the Watchdog app) into four temp views.
 
 | File | Parameters | What it does |
 |---|---|---|
@@ -62,8 +63,9 @@ Run by notebook 02, after it reads your monitored-jobs YAML file into four temp 
 | `02_load_job_dependencies.sql` | `catalog`, `schema` | Replaces every row of `job_dependencies` with the rows of `watchdog_config_dependencies`. |
 | `03_load_monitored_workspaces.sql` | `catalog`, `schema` | Replaces every row of `monitored_workspaces` with the rows of `watchdog_config_workspaces`. |
 | `04_load_monitored_job_environments.sql` | `catalog`, `schema` | Replaces every row of `monitored_job_environments` with the rows of `watchdog_config_environments` (one per job and environment label in the `environments` sections), stamping `loaded_at`. |
+| `05_record_config_load.sql` | `catalog`, `schema` | Adds the row in the temp view `watchdog_config_load` to `config_loads`. Notebook 02 runs it for every load, failed loads too. |
 
-All four use `INSERT OVERWRITE`, which keeps the table definition and column comments.
+01 to 04 use `INSERT OVERWRITE`, which keeps the table definition and column comments. 05 only adds a row.
 
 ## sql/views
 
@@ -147,7 +149,8 @@ Which real jobs each monitored job matches. Notebook 02 shows it after loading t
 
 - **Parameters:** `catalog`, `schema`.
 - **Needs:** the temp view `watchdog_workspace_names`, which notebook 02 creates before it runs this query. Workspace labels by name need it.
-- **Columns:** `job_name`, `enabled`, `job_name_regex`, `job_name_exclude_regex`, `job_ids`, `workspace_id`, `environment`, `checked_here`, `matched_by`, `job_id`, `matched_job_name`, `same_name_jobs`, `run_as`.
+- **Columns:** `job_name`, `configured_workspace_id`, `enabled`, `job_name_regex`, `job_name_exclude_regex`, `job_ids`, `workspace_id`, `environment`, `checked_here`, `matched_by`, `job_id`, `matched_job_name`, `same_name_jobs`, `run_as`.
+- **Workspace scope:** `configured_workspace_id` is the optional restriction from the job entry; `workspace_id` is the actual match. Both ID and name matches must satisfy that restriction. An empty configured scope keeps regional matching. A top-level workspace label is not required for direct-ID scope.
 - **Read it:** one row per monitored job and matching job. In each workspace a job matches by ID where `job_ids` apply (its environment's list, otherwise its own) and by name elsewhere; `matched_by` says which. Names matching `job_name_exclude_regex` are left out of name matches, as the scans leave them out. `same_name_jobs` counts the jobs in that workspace with exactly the matched name: above 1 on a name match, the system table scan writes a `duplicate_name` warning. `environment` is the label of the match's workspace, and `checked_here` says whether the job is switched on there: its `enabled`, unless its `environments` section sets `enabled` for that label. A match with `checked_here` false gets no findings. A monitored job with empty workspace and job columns matches nothing, and the system table scan will report it as `not_found`. Fix its regex, or wait an hour if the job is new.
 
 ### 21_system_table_findings.sql
@@ -169,6 +172,7 @@ The system table checks, shaped as findings rows. Notebook 05 runs it, saves the
 
 - **Exclusions:** a job whose name matches its `job_name_exclude_regex` is skipped when matching by name, so it writes no rows. Jobs pinned by ID are not excluded.
 - **Impact:** FAILED rows take `affected_jobs` from `watchdog_affected_jobs`: every job downstream of the failed one, with `child_job` links counted both ways. Every row about a child job takes its parent from the same view, as `parent_job`.
+- **Workspace scope:** a non-NULL `monitored_jobs.workspace_id` limits matches and expected-ID checks to that workspace. A matching job in another workspace cannot satisfy the entry. NULL keeps the prior regional behavior.
 - **Job IDs:** `job_ids` from `monitored_jobs` and `monitored_job_environments`. Where IDs apply, only those jobs match. The listed IDs a job expects here are the ones that apply in at least one workspace of the region where the job is switched on; any of them not found where it applies is named in the job's `not_found` row.
 - **Environments:** `environment` comes from `monitored_workspaces`. An entry with the workspace's ID is used first. Otherwise an entry with no ID whose name matches the workspace name, ignoring case, is used.
 - **Overrides:** each match uses its environment's row in `monitored_job_environments`, when there is one: `enabled`, `max_gap_minutes`, `max_runtime_minutes`, `severity`, `owner` and `job_ids`. An empty column there keeps the job's own setting. A match in an environment where the job is switched off writes no rows. A workspace with no label uses the job's own settings.

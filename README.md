@@ -1,6 +1,6 @@
 # Watchdog: job monitoring across Databricks workspaces
 
-Watchdog checks your Databricks jobs in every workspace of a cloud region and writes what it finds into one Unity Catalog table. It is built in phases. **Phase 1.4**, in this repo today, creates the tables, loads your list of jobs to watch (by name or by job ID, with shared defaults and per-environment settings), runs the scans on a schedule (paused until you turn it on), lists each ongoing problem once until it clears, lists what a failure affects through the whole dependency chain, deletes old findings, and adds a first dashboard.
+Watchdog checks your Databricks jobs in every workspace of a cloud region and writes what it finds into one Unity Catalog table. It is built in phases. **Phase 1.4**, in this repo today, creates the tables, loads your list of jobs to watch (by name or by job ID, with shared defaults and per-environment settings), runs the scans on a schedule (paused until you turn it on), lists each ongoing problem once until it clears, lists what a failure affects through the whole dependency chain, deletes old findings, and adds a first dashboard. The Watchdog app ([below](#the-watchdog-app)) adds a web page for status, an editable job list and a copilot.
 
 > **Already running the first release?** [CHANGELOG.md](CHANGELOG.md) lists everything that changed and how to upgrade: pull, restart Python on open notebooks, then run notebook 01 once.
 
@@ -13,7 +13,7 @@ Watchdog answers that question in one place. It reads two sources:
 - **System tables**: read-only tables that Databricks keeps for you in the `system` catalog. One query covers the job and run history of every workspace in the same account and region. They run about an hour behind.
 - **The Jobs API**: the REST API of each workspace. It is live and returns the real error text of a failed task, but each call answers for one workspace.
 
-Every check writes a row to one table, `findings`. A row says which job, which check, its status (HEALTHY, WARNING, FAILED or UNKNOWN), what was found, and which downstream jobs a failure affects. Later phases add alerts and an app, and both read the same data.
+Every check writes a row to one table, `findings`. A row says which job, which check, its status (HEALTHY, WARNING, FAILED or UNKNOWN), what was found, and which downstream jobs a failure affects. The Watchdog app and the dashboard read it, and later alerts will too.
 
 ## Architecture
 
@@ -25,7 +25,7 @@ Each region has one Unity Catalog metastore, and its system tables collect job h
 
 ![Inside the Watchdog: three steps, one findings table, alerts and an app](docs/images/watchdog-inside-steps-findings-alerts.png)
 
-Inside a scan, step 1 reads the system tables, step 2 calls the Jobs API, and step 3 checks both against your config and writes findings. The schedule repeats these steps every 20 minutes by default. The dashboard (notebook 08) reads the same table now, through the view `findings_latest`; alerts (Phase 3) and the app (Phase 4) will too. [docs/architecture.md](docs/architecture.md) walks through both diagrams.
+Inside a scan, step 1 reads the system tables, step 2 calls the Jobs API, and step 3 checks both against your config and writes findings. The schedule repeats these steps every 20 minutes by default. The dashboard (notebook 08) reads the same table now, through the view `findings_latest`; the Watchdog app does too, and alerts (Phase 3) will. [docs/architecture.md](docs/architecture.md) walks through both diagrams.
 
 ### What Phase 1 checks
 
@@ -59,11 +59,22 @@ The Watchdog keeps three views of the same results:
 
 Use `findings_latest` for "what is wrong right now". The dashboard's Now and Versions and runs pages read it. Use `incidents` for "what is still broken, and since when". Use `findings` for "how often, and what exactly each scan saw". The dashboard's History page reads it, and the alerts in later phases will read `incidents` to alert once when a problem opens and once when it is resolved, instead of on every scan.
 
+## The Watchdog app
+
+The Watchdog app is a Databricks App that the bundle deploys next to the scan jobs. It has three sections in a left navigation bar.
+
+- **Monitoring** shows the current status of every monitored job, from `findings_latest`. Counts of failed, warning, unknown and healthy jobs sit on top, and clicking one filters the list. Click a job for each check's result and error text, the run and pipeline links, and the jobs a failure affects. A history strip shows each job's status over the last 24 hours, 3 days or 7 days. Scan now starts a scan.
+- **Jobs and dependencies** is where you edit the list of jobs to watch, without editing YAML. Add, edit, switch off or delete a job, set shared defaults and workspace labels, draw the dependencies on a map, and search the region's real jobs to add one. Every save is a new version in a change log, with who saved it. You can import a YAML file once and export one at any time. The list is kept in Lakebase, Databricks' managed Postgres. When `scan.config_source` is `lakebase`, each scan reads the newest version.
+- **Copilot** answers questions about failures in plain language. It is a Genie agent over the Watchdog tables. It runs its SQL as the person asking, shows that SQL with each answer, and only reads: it cannot change or rerun anything.
+
+To install it, set `target.warehouse_id`, deploy, run the app, import your YAML file, then switch `scan.config_source` to `lakebase`. [DEPLOY.md](DEPLOY.md#step-6-install-the-app) has the steps and the prerequisites, and [docs/app.md](docs/app.md) explains the app, who each call runs as, and what is not built yet.
+
 ## What this deploys
 
 In the catalog and schema you choose (schema `watchdog` by default):
 
-- `monitored_jobs`, `job_dependencies`, `monitored_workspaces` and `monitored_job_environments`: your config, loaded from a YAML file.
+- `monitored_jobs`, `job_dependencies`, `monitored_workspaces` and `monitored_job_environments`: your config, loaded from a YAML file or from the Watchdog app.
+- `config_loads`: one row per load of that config, with its source and version.
 - `findings`: the history, every scan, one row per job, check and source. Re-running a scan never adds duplicate rows. Scans older than `scan.retention_days` (30 by default) are deleted once a day, except each source's newest.
 - `findings_latest`: a view of the newest scan from each source, the current status (see [History and current status](#history-and-current-status-findings-and-findings_latest)).
 - `incidents`: a view that lists each problem once, from the scan that found it until it clears ([data-model.md](docs/data-model.md#the-incidents-view)).
@@ -73,7 +84,7 @@ Notebook `01_create_tables` creates these, and upgrades existing tables and the 
 With the bundle (`databricks.yml`):
 
 - `watchdog_phase_1`: an on-demand job (no schedule) that runs notebooks 00, 01, 02, 05, 06 and 07 as serverless tasks. Use it for setup and validation.
-- `watchdog_scan`: the scheduled scan. Every 20 minutes in UTC, it brings the tables and the view up to date (notebook 01), reloads your config (notebook 02), then runs both scans (notebooks 05 and 06). It is deployed paused.
+- `watchdog_scan`: the scheduled scan. Every 20 minutes in UTC, it brings the tables and the views up to date (notebook 01), reloads your config (notebook 02), then runs both scans (notebooks 05 and 06). It is deployed paused.
 - `watchdog_cleanup`: once a day at 03:30 UTC, it deletes findings scans older than `scan.retention_days` days (notebook 10), keeping each source's newest scan. It is paused and unpaused with the scan (`scan.schedule_status`).
 - With `-t demo`, four sample jobs as well: `watchdog_demo_succeeds`, `watchdog_demo_fails` (its `load` task fails on purpose), `watchdog_demo_slow` and `watchdog_demo_retries`. Their schedules are paused too.
 
@@ -104,6 +115,8 @@ Phase 1 creates no clusters, apps, alerts or secrets. The dashboard uses a SQL w
 
 Both paths use the same notebooks. Settings come from `accelerator.yaml`: copy it to `accelerator.local.yaml` (git-ignored) and fill in `target.catalog` and `target.region`. Copy `config/monitored_jobs.example.yml` somewhere outside the repo, list your own jobs, and point `scan.monitored_jobs_path` at it. One entry covers a job in every workspace where it runs, each copy with its own job ID, so you do not have to list job IDs; `job_ids` pins exact jobs when you want to. Use `defaults` for settings most jobs share, `job_name_exclude_regex` to skip test copies, the optional `workspaces` section to label each workspace with an environment, and a job's `environments` section to change its settings in one environment, for example `WARNING` instead of `CRITICAL` in lower environments, or not checked there at all. The example file works as is with the demo jobs.
 
+To give workspace copies their own entries, set `workspace_id` on each job and keep its logical `job_name` unique. The scan enforces that scope for both names and exact job IDs. [`config/monitored_jobs.workspace-ids.example.yml`](config/monitored_jobs.workspace-ids.example.yml) shows two workspaces, six jobs and their dependencies with illustrative IDs. Write `schedule_type` explicitly on each new job; the app's YAML export does that too. Old files can still inherit schedules and omit workspace scope. Job-level scope requires the new native-scope release; follow the [upgrade and scope guidance](docs/phase-1-runbook.md#scope-a-job-to-one-workspace) before using it with an existing install.
+
 ### By hand, in a Git folder
 
 The runbook's [First run, step by step](docs/phase-1-runbook.md#first-run-step-by-step) has the order, and what to check at each step.
@@ -114,7 +127,7 @@ The runbook's [First run, step by step](docs/phase-1-runbook.md#first-run-step-b
 | Notebook | Does |
 |---|---|
 | `00_check_access` | confirms system table and Jobs API access, and lists the workspaces this region covers; changes nothing |
-| `01_create_tables` | creates the schema, the tables and the view, and upgrades existing tables. **Run it after every pull.** |
+| `01_create_tables` | creates the schema, the tables and the views, and upgrades existing tables. **Run it after every pull.** |
 | `02_load_config` | loads your monitored-jobs file and shows which real jobs each entry matches |
 | `05_scan_system_tables` | writes the system table findings |
 | `06_scan_jobs_api` | writes the Jobs API findings |
@@ -122,6 +135,7 @@ The runbook's [First run, step by step](docs/phase-1-runbook.md#first-run-step-b
 | `08_create_dashboard` | optional: creates or updates the "Watchdog findings" dashboard and publishes it |
 | `09_custom_check_example` | optional: a template for your own checks, such as service connectivity |
 | `10_delete_old_findings` | deletes findings scans older than `retention_days`, keeping each source's newest; the `watchdog_cleanup` job runs it daily |
+| `11_grant_app_access` | after a teardown and a new deploy, gives the app's new service principal access to the job list kept in Lakebase; the `watchdog_app_access` job runs it |
 
 To look at the raw data behind a finding, two read-only notebooks in `notebooks/explore` help: `03_explore_system_tables` runs each query in `sql/explore`, with notes, and `04_explore_jobs_api` walks one job through the three Jobs API calls. They are not part of the main path.
 
@@ -129,15 +143,19 @@ Each notebook takes its inputs from widgets (input boxes) at the top, with defau
 
 ### As a job, with the bundle
 
-From a laptop with the [Databricks CLI](https://docs.databricks.com/dev-tools/cli/) and Python 3.10 or later with PyYAML (`pip install pyyaml`):
+From a laptop with the [Databricks CLI](https://docs.databricks.com/dev-tools/cli/) 1.23.0 or newer and Python 3.10 or later with PyYAML (`pip install pyyaml`):
 
 ```bash
-cp accelerator.yaml accelerator.local.yaml        # then fill in catalog and region
+cp accelerator.yaml accelerator.local.yaml        # then fill in catalog, region and warehouse_id
+python3 scripts/ensure_tables.py accelerator.local.yaml --profile <your-profile>
 eval "$(python3 scripts/bundle_vars.py --export accelerator.local.yaml)"
 databricks bundle validate -t dev --profile <your-profile>
 databricks bundle deploy -t dev --profile <your-profile>
+databricks bundle run watchdog_app -t dev --profile <your-profile>
 databricks bundle run watchdog_phase_1 -t dev --profile <your-profile>
 ```
+
+Every target also deploys the Watchdog app, its Lakebase project and the copilot's Genie agent. So the workspace needs Databricks Apps, Lakebase and Genie turned on, and user authorization for apps, and `target.warehouse_id` must name a Pro or Serverless SQL warehouse you can use: the copilot's Genie agent cannot run on a Classic one, and the first deploy fails at the agent. `scripts/ensure_tables.py` creates the schema, the tables and the views through that warehouse before the first deploy, because the Genie agent cannot be created over a schema that does not exist yet; it is safe to run again. `bundle run watchdog_app` deploys the app's code and starts it; run it again after a pull. The people who use the app need the grants in [Who can use the app](docs/multi-region.md#who-can-use-the-app).
 
 `scripts/bundle_vars.py` turns `accelerator.local.yaml` into `BUNDLE_VAR_*` environment variables, which the CLI reads as bundle variables. Each job passes its run ID as `scan_id`, so both scans in one run share one scan.
 
@@ -156,16 +174,16 @@ databricks bundle run watchdog_demo_retries -t demo --profile <your-profile>
 databricks bundle run watchdog_phase_1 -t demo --profile <your-profile>
 ```
 
-Both targets use development mode, so deployed names start with `[dev <your name>]`. Every schedule starts paused, so nothing runs on a timer until you unpause it. To run the demo jobs on their schedules, set `BUNDLE_VAR_demo_schedule_status=UNPAUSED` before you deploy the demo target. The example config's patterns match the sample jobs with that prefix.
+The `dev` and `demo` targets use development mode, so deployed job names start with `[dev <your name>]`. The app and the Lakebase project keep the names you set (`app.name`, `app.lakebase_project_id`), so each must be unique in the workspace. The `production` target does not use development mode, so its job names have no prefix. Every schedule starts paused, so nothing runs on a timer until you unpause it. To run the demo jobs on their schedules, set `BUNDLE_VAR_demo_schedule_status=UNPAUSED` before you deploy the demo target. The example config's patterns match the sample jobs with that prefix.
 
 ### Remove it
 
 ```bash
-./teardown.sh -t dev --profile <your-profile>                 # the bundle's jobs and files
+./teardown.sh -t dev --profile <your-profile>                 # the jobs, the app, the Genie agent and the bundle's files
 ./teardown.sh -t demo --drop-schema --profile <your-profile>  # also the sample jobs and the Watchdog schema
 ```
 
-`--drop-schema` asks you to type the schema name first. It drops the schema with its five tables and its two views, `findings_latest` and `incidents`. It stops before changing anything if the schema holds any other table. The script does not delete the dashboard: move it to the trash in the workspace yourself. Any service principal, secret scope or grants you created are yours to remove.
+A plain teardown deletes the jobs, the Watchdog app, the copilot's Genie agent with everyone's copilot conversations, and the bundle's files. It keeps the Lakebase project with the job list, and the Watchdog schema with the findings history. At the end it prints how to deploy again with the list kept; [Deploy again after a teardown](docs/multi-region.md#deploy-again-after-a-teardown) explains the steps. `--drop-lakebase` also deletes the project; Lakebase keeps it for 7 days, and `databricks postgres undelete-project` can bring it back in that time (`delete-project --purge` deletes it for good). `--drop-schema` drops the schema with its six tables and its two views, `findings_latest` and `incidents`, and stops before changing anything if the schema holds any other table. Each asks you to type a name first. The script does not delete the dashboard: move it to the trash in the workspace yourself. Any service principal, secret scope or grants you created are yours to remove. The app's own service principal goes with the app, and leaves an empty home folder, `/Workspace/Users/<old client ID>`, that you can delete.
 
 ## Phases
 
@@ -175,11 +193,11 @@ Both targets use development mode, so deployed names start with `[dev <your name
 | 1.1 | A scan every 20 minutes (paused until you unpause it), the `findings_latest` view, a first dashboard, environment labels, run timing, trigger and code version on each finding, and a template for your own checks | Built |
 | 1.2 | Shared `defaults` and per-environment settings in the job list, a retry rule for tasks that fail fast and restart, and the CI pipeline link on each finding | Built |
 | 1.3 | Jobs pinned by job ID, a duplicate-name check, child jobs read with their parent, impact through the whole dependency chain, and a daily job that deletes old findings | Built |
-| 1.4 | The `incidents` view: each problem once, from the scan that found it until it clears, and plainer scan output | Built: this repo |
+| 1.4 | The `incidents` view: each problem once, from the scan that found it until it clears, and plainer scan output | Built |
 | 2 | Escalation of incidents that stay open or get worse, and more checks such as stuck batches and service probes | Planned |
 | 3 | Databricks SQL alerts on `findings`, sent to Slack, email, Microsoft Teams, PagerDuty or a webhook, with severity routing, alerts on change and recovery, and routing by environment | Planned |
-| 4 | The Watchdog app, a Databricks App reading `findings` and `findings_latest`: health, incidents, impact, coverage, and Genie questions | Planned |
-| 5 | Other regions and production, and a cross-region roll-up if your security team approves | Planned |
+| 4 | The Watchdog app: Monitoring, the job list kept in Lakebase with a change log, and a Genie copilot | Built: this repo |
+| 5 | Other regions and production, and a cross-region roll-up if your security team approves | One Watchdog per region is built ([docs/multi-region.md](docs/multi-region.md)); the roll-up is planned |
 
 [docs/roadmap.md](docs/roadmap.md) has the detail.
 
@@ -194,12 +212,14 @@ Both targets use development mode, so deployed names start with `[dev <your name
 ```
 accelerator.yaml       the settings you review; copy to accelerator.local.yaml
 DEPLOY.md              Genie Code playbook
-databricks.yml         bundle: dev and demo targets
-resources/             watchdog_phase_1 (on demand), watchdog_scan and watchdog_cleanup (scheduled)
-teardown.sh            bundle destroy, plus an optional schema drop
-config/                example monitored-jobs file
+databricks.yml         bundle: dev, demo and production targets
+resources/             watchdog_phase_1 and watchdog_app_access (on demand), watchdog_scan and watchdog_cleanup
+                       (scheduled), the Watchdog app, its Lakebase project and the copilot's Genie agent
+teardown.sh            bundle destroy that keeps the Lakebase project, plus optional project and schema drops
+config/                example monitored-jobs file; config/regions holds example region files
+ci/                    a GitLab CI example for deploying every region
 dashboards/            the dashboard template that notebook 08 publishes
-notebooks/             00 to 02 and 05 to 10, plus _setup (shared widgets and paths)
+notebooks/             00 to 02 and 05 to 11, plus _setup (shared widgets and paths)
 notebooks/explore/     03 and 04, read-only exploration, run by hand
 sql/setup/             schema and table DDL
 sql/config/            loads the config tables
@@ -210,18 +230,21 @@ sql/maintenance/       deletes old findings scans (notebook 10)
 sql/views/             the findings_latest and incidents views, created by notebook 01
 jobs_watchdog/         Python package the notebooks use
 demo/                  the four sample job notebooks
-scripts/               bundle_vars.py
+app/                   the Watchdog app (AppKit: a Node server and a React page); see app/README.md
+scripts/               bundle_vars.py, ensure_tables.py, deploy_regions.py, region_host.py (teardown's host check), probe_java_regex.py (checks the Java pattern rules against a SQL warehouse)
 tests/                 pytest, no network: python -m pytest
 docs/                  guides and diagrams
 ```
 
 ## Docs
 
+- [The Watchdog app](docs/app.md): the sections, who each call runs as, the Lakebase table, job-list versions, the copilot, and the known gaps.
 - [Architecture](docs/architecture.md): both diagrams, explained, plus the scheduled scan and the region rule.
-- [Data model](docs/data-model.md): the tables, the view, and every findings column.
+- [Data model](docs/data-model.md): the tables, the views, and every findings column.
 - [Queries](docs/queries.md): every SQL file, what it answers and how to read it.
 - [Jobs API](docs/jobs-api.md): every Jobs API field the Watchdog reads.
 - [Phase 1 runbook](docs/phase-1-runbook.md): step by step, by role.
+- [One Watchdog per region](docs/multi-region.md): region files, the deploy script, a GitLab CI example, the first deploy of a fresh region, who can use the app, teardown per region, and deploying again after a teardown.
 - [Git folder setup](docs/git-folder-setup.md): cloning this repo into a workspace and pulling updates.
 - [Roadmap](docs/roadmap.md): Phases 2 to 5, and the backlog.
 - [Changelog](CHANGELOG.md): what changed in each release, and how to upgrade.

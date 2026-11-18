@@ -1,0 +1,8 @@
+# Python's (?P<name>...) group compiles in the loader, but Java's regex, which the
+# system-table scan's regexp_like uses, refuses it, and one such pattern fails that
+# scan for every job. Java's own name syntax, (?<name>...), Python refuses, so leave
+# the group unnamed: ^orders_(dev|prod)$.
+jobs:
+  - job_name: orders_ingest
+    max_gap_minutes: 60
+    job_name_regex: '^orders_(?P<env>dev|prod)$'

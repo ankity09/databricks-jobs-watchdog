@@ -16,7 +16,7 @@ Decide five things:
 
 1. **The region.** System tables are regional: they cover the workspaces in one account and one cloud region. Run one Watchdog per region.
 2. **The Watchdog workspace.** One Unity Catalog workspace in that region, with serverless notebooks and jobs. The Watchdog runs there.
-3. **The catalog and schema.** Where the five tables and the view go, for example `<catalog>.watchdog`.
+3. **The catalog and schema.** Where the six tables and the views go, for example `<catalog>.watchdog`.
 4. **The mode.**
    - `current_workspace`: checks only the Watchdog workspace, with the identity running the notebooks. Nothing extra to set up. Start here.
    - `service_principal`: checks every workspace in the region that has jobs, signing in to each as a service principal. Needs the workspace admin steps below.
@@ -114,7 +114,7 @@ After every pull, restart Python on any notebook you have open, so it loads the 
 
    The file is git-ignored, so it stays out of commits and pulls. Every notebook widget takes its default from it, and you can still override any widget by hand.
 
-To write `job_name_regex` values, look at your real job names in `notebooks/explore/03_explore_system_tables` (query 12) or the Jobs page. A regex matches anywhere in the name unless you anchor it with `^` and `$`.
+To write `job_name_regex` values, look at your real job names in `notebooks/explore/03_explore_system_tables` (query 12) or the Jobs page. A regex matches anywhere in the name unless you anchor it with `^` and `$`. Both scans must be able to run it: the Jobs API scan uses Python's `re`, and the system table scan uses Spark's `regexp_like`, which is Java regex. The loader and the app refuse a pattern either one cannot compile, and name the part to change, such as a `(?P<name>...)` group or `{,2}`. `docs/data-model.md` lists what Java refuses.
 
 ### Exclude test copies
 
@@ -130,6 +130,45 @@ jobs:
 ```
 
 A job that sets its own `job_name_exclude_regex` uses that one instead. Like `job_name_regex`, the exclusion matches anywhere in the name unless you anchor it. The pattern needs `_test` to be followed by `_` or the end of the name, so it skips `orders_ingest_test_prod` and `daily_revenue_report_test`, and keeps `daily_revenue_report_latest`. The example anchors it because a bare `test` would also match names such as `contest`. Notebook 02's match table applies the same exclusion, and the scans write no rows for excluded jobs.
+
+### Scope a job to one workspace
+
+Set `workspace_id` directly on the job to check only that workspace. Use distinct logical names for copies in different workspaces; dependencies refer to those names.
+
+```yaml
+jobs:
+  - job_name: orders_ingest_lower
+    workspace_id: "1111111111111111"
+    job_ids: ["101"]
+    schedule_type: continuous
+    max_gap_minutes: 30
+  - job_name: orders_ingest_production
+    workspace_id: "2222222222222222"
+    job_ids: ["201"]
+    schedule_type: continuous
+    max_gap_minutes: 30
+    severity: CRITICAL
+```
+
+Replace these illustrative IDs before use. [`monitored_jobs.workspace-ids.example.yml`](../config/monitored_jobs.workspace-ids.example.yml) has six jobs, both workspaces, all three schedule types and three dependency types.
+
+- The workspace filter applies to both exact job IDs and name patterns. A copy in another workspace cannot satisfy the entry.
+- A digit string is preferred. Exact YAML integers also work. Blank strings, booleans, floats and non-digits stop the load. Missing or `null` keeps the old regional behavior.
+- Scope does not need a top-level workspace label. `workspaces` is only needed for environment labels and overrides. Neither `defaults` nor an environment override can set job scope.
+- Scope does not grant access. System tables cover the scan's account and region. With `auth_mode: current_workspace`, the live API still checks only the current workspace; use the documented service-principal setup for other workspaces. Review both sources' coverage before enabling alerts.
+- **Upgrade first.** Job-level `workspace_id` needs the new native-scope release. Older loaders reject it. Update the scan code and the app, run notebook 01 to add the nullable column, then run notebook 02. Bundle-managed jobs need the updated bundle code too. Do not leave an old loader scheduled against the upgraded table.
+
+### Make the schedule type explicit
+
+Write `schedule_type` on every new job so the file is clear without reading its defaults:
+
+| Type | Use for | Gap check |
+|---|---|---|
+| `scheduled` | A batch job expected to start regularly | Set `max_gap_minutes`, the longest allowed time between starts |
+| `continuous` | A stream expected to stay running | Set `max_gap_minutes`, the longest allowed downtime; 30 minutes if omitted |
+| `triggered` | A child job or a job started only by hand | No schedule-gap check; do not set `max_gap_minutes` |
+
+These three types were already supported. Old YAML can still inherit the file's `defaults.schedule_type`, otherwise `scheduled`. New jobs saved in the app and every YAML export spell out the effective type. Exporting does not change older stored jobs that inherit defaults.
 
 ### Label workspaces by environment
 
@@ -163,11 +202,11 @@ defaults:
   job_name_exclude_regex: "_test(_|$)"
 ```
 
-Every job gets these unless it sets its own. `defaults` can hold any job setting except `job_name`, `job_name_regex` and `environments`. Notebook 02 shows `monitored_jobs` with the defaults filled in, so you can check what each job ends up with.
+Every job gets these unless it sets its own. `defaults` can hold any job setting except `job_name`, `workspace_id`, `job_name_regex`, `job_ids` and `environments`. Notebook 02 shows `monitored_jobs` with the defaults filled in, so you can check what each job ends up with. Its enabled count includes jobs switched on through an environment override.
 
 ### Change a job's settings per environment
 
-One entry covers a job in every workspace where it runs. To treat its copies differently by environment, add an `environments` section to the entry, keyed by the labels from the `workspaces` section:
+Without job-level `workspace_id`, one entry covers a job across the region. With it, overrides apply only within that workspace. To treat copies differently by environment, add an `environments` section to the entry, keyed by the labels from the `workspaces` section:
 
 ```yaml
   - job_name: orders_ingest
@@ -230,7 +269,7 @@ When a job fails, `affected_jobs` lists every job downstream of it, through the 
 
 ### Pin jobs by job ID
 
-A name pattern finds every copy of a job, in every workspace, without a list of IDs. To check exact jobs instead, list their IDs in `job_ids`, for the whole job or for one environment:
+A name pattern finds copies across the region, or only the configured `workspace_id` when set. To check exact jobs instead, list their IDs in `job_ids`, for the whole job or for one environment. The workspace restriction applies to IDs too:
 
 ```yaml
   - job_name: orders_enrich
@@ -250,7 +289,7 @@ A name pattern finds every copy of a job, in every workspace, without a list of 
 The order a new operator follows, and what to check at each step:
 
 1. **Pull, then restart Python.** If Pull reports a conflict in a notebook you have run, keep the incoming version: Databricks saves the serverless environment into a notebook when it runs it, and that is the only local change.
-2. **Notebook 01.** Fill in `catalog` and `schema`, then run it. A Pull resets the input boxes to their defaults (the `schema` box then says `watchdog`), so check them first, or keep your values in `accelerator.local.yaml`. Expect seven `exists: True` lines.
+2. **Notebook 01.** Fill in `catalog` and `schema`, then run it. A Pull resets the input boxes to their defaults (the `schema` box then says `watchdog`), so check them first, or keep your values in `accelerator.local.yaml`. Expect eight `exists: True` lines.
 3. **Notebook 00.** Every line says PASS, and section 3 lists the workspaces this Watchdog covers. Note the `Workspace ID` line for your job list. A workspace's name is not proof of its region: `SELECT current_metastore()` returns the metastore's cloud and region, for example `aws:us-east-2:...`.
 4. **The job list.** Create `monitored_jobs.yml` outside the Git folder (Create, then File) and start with one job you know runs. In the workspace browser, the file's menu has Copy full path, for the `monitored_jobs_path` box.
 5. **Notebook 02.** The match table shows the job's real name and job ID, with `checked_here` true. An empty row means the pattern found nothing.
@@ -263,14 +302,26 @@ Open each notebook in `notebooks/`, attach it to serverless compute, run its fir
 | Notebook | What it does | Look for |
 |---|---|---|
 | `00_check_access` | checks system table access, the region's workspaces and the Jobs API | every line PASS, and the workspace names you expect in section 3 |
-| `01_create_tables` | creates or upgrades the schema, the five tables and the views `findings_latest` and `incidents` | seven `exists: True` lines, a `view findings_latest:` and a `view incidents:` line that say created, replaced or current, and the columns it added, if any |
-| `02_load_config` | loads your YAML file into the config tables, shows what each job matches | every job matches a real job where you expect it, with `checked_here` true where it should be checked |
+| `01_create_tables` | creates or upgrades the schema, the six tables and the views `findings_latest` and `incidents` | eight `exists: True` lines, a `view findings_latest:` and a `view incidents:` line that say created, replaced or current, and the columns it added, if any |
+| `02_load_config` | loads your job list (the YAML file, or the newest version saved in the Watchdog app) into the config tables, records the load in `config_loads`, and shows what each job matches | every job matches a real job where you expect it, with `checked_here` true where it should be checked |
 | `05_scan_system_tables` | writes the system table findings | one row per check for each matched job, and two lines: the rows the scan holds, and the problems that are new, still open and resolved |
 | `06_scan_jobs_api` | writes the Jobs API findings | rows for each matched job, and the same two lines for the Jobs API |
 | `07_validate_phase_1` | checks the result | six PASS lines |
 | `08_create_dashboard` (optional) | creates or updates the "Watchdog findings" dashboard and publishes it | a `Dashboard ready` line with its link |
 | `09_custom_check_example` (optional) | probes the services in its list and writes `CUSTOM` rows | one row per service, or a skip line for each placeholder host |
 | `10_delete_old_findings` (optional) | deletes scans older than `retention_days`, keeping each source's newest; the `watchdog_cleanup` job runs it daily | a `Deleted N rows` line, then the scans left per source |
+| `11_grant_app_access` (optional) | after a teardown and a new deploy, gives the app's new service principal access to the job list kept in Lakebase; the `watchdog_app_access` job runs it | one line that says what it did ([Deploy again after a teardown](multi-region.md#deploy-again-after-a-teardown)) |
+
+**Notebook 02's input boxes.** Besides `catalog`, `schema` and `scan_id`, it has `monitored_jobs_path` and four boxes that choose where the job list comes from:
+
+| Box | Default | Meaning |
+|---|---|---|
+| `config_source` | `yaml` | `yaml` reads the file at `monitored_jobs_path`. `lakebase` reads the newest version saved in the Watchdog app. Any other value stops the notebook. |
+| `lakebase_project_id` | `jobs-watchdog` | the Lakebase project that holds the app's job list (`app.lakebase_project_id`) |
+| `lakebase_branch` | `production` | the project's branch |
+| `lakebase_database` | `watchdog` | the Postgres database in that branch |
+
+The three Lakebase boxes matter only when `config_source` is `lakebase`. In that mode the notebook connects as the identity that runs it, so that identity needs access to the app's Lakebase schema (the identity that deployed the bundle has it), and it installs `pg8000`, a pure-Python Postgres driver, from PyPI or your package mirror if the compute lacks it. Its TLS checks the Lakebase server's certificate and host name against the compute's CA certificates. A list that is empty, breaks a rule, or cannot be read fails the load. The failure is a `FAILED` row in `config_loads`, the config tables keep their last good rows, and the scans go on with those. The scheduled `watchdog_scan` takes `config_source` and the project from `accelerator.local.yaml` (`scan.config_source` and `app.lakebase_project_id`), and the branch and database from the bundle's defaults.
 
 Two read-only notebooks in `notebooks/explore` show the raw data behind a finding. They are not part of the main path, and no job runs them; run them by hand when you want to look:
 
@@ -286,12 +337,14 @@ Notebooks 05 and 06 each make their own `scan_id` when the widget is empty. Note
 From a machine with the Databricks CLI, in a clone of the repo with your `accelerator.local.yaml`:
 
 ```bash
+python3 scripts/ensure_tables.py accelerator.local.yaml --profile <profile>
 eval "$(python3 scripts/bundle_vars.py --export accelerator.local.yaml)"
 databricks bundle deploy -t dev --profile <profile>
+databricks bundle run watchdog_app -t dev --profile <profile>
 databricks bundle run watchdog_phase_1 -t dev --profile <profile>
 ```
 
-The job runs notebooks 00, 01, 02, 05, 06 and 07 on serverless compute, with one `scan_id` (the job's run ID) for both scans. In development mode the job runs as the person who deployed it.
+The bundle also deploys the Watchdog app, its Lakebase project and the copilot's Genie agent, so `target.warehouse_id` must be set, and the first `scripts/ensure_tables.py` creates the tables the Genie agent needs before `bundle deploy`. The job runs notebooks 00, 01, 02, 05, 06 and 07 on serverless compute, with one `scan_id` (the job's run ID) for both scans. In development mode the job runs as the person who deployed it.
 
 To try it in a workspace with no jobs worth watching, use the `demo` target. It adds four sample jobs: one that succeeds, one whose `load` task fails on purpose, one that runs about three minutes, and one whose task fails twice and then succeeds. The example config lists all four, with limits that make the slow job warn for long runtime and the retrying job warn for a retry loop. Their schedules start paused. Set `BUNDLE_VAR_demo_schedule_status=UNPAUSED` in your shell to unpause them.
 
@@ -311,7 +364,7 @@ The sample jobs tag themselves with `code_version: <branch>@<commit>`, using `bu
 `watchdog_scan` is the scheduled scan. Every 20 minutes, in UTC, it runs four tasks in order:
 
 1. `create_tables` (notebook 01) creates what is missing, adds new columns after an upgrade, and makes the views `findings_latest` and `incidents` current. Tables and views that are already current are left alone.
-2. `load_config` (notebook 02) reloads your monitored-jobs file into the config tables.
+2. `load_config` (notebook 02) reloads your job list, from the YAML file or the Watchdog app, into the config tables.
 3. `scan_system_tables` (notebook 05) writes the system table findings.
 4. `scan_jobs_api` (notebook 06) writes the Jobs API findings.
 
@@ -369,7 +422,7 @@ To add your own checks, build rows with the keys `job_name`, `check_id`, `status
 ## What success looks like
 
 - Notebook 00 prints only PASS lines (and WARN lines in service principal mode, for workspaces the service principal cannot reach).
-- Notebook 07 prints six PASS lines: the five tables and the two views exist, config has enabled jobs, both sources wrote findings, every enabled job has findings, no duplicate keys, and open incidents match the newest scans. A job counts as enabled when it is switched on in at least one environment.
+- Notebook 07 prints six PASS lines: the six tables and the two views exist, config has enabled jobs, both sources wrote findings, every enabled job has findings, no duplicate keys, and open incidents match the newest scans. A job counts as enabled when it is switched on in at least one environment.
 - `findings` has rows with `source = SYSTEM_TABLES` and `source = JOBS_API` for the same `scan_id` (job runs) or for each source's newest scan (by hand).
 - `findings_latest` returns the newest scan of each source, judged by when each scan first wrote.
 - `incidents` lists each problem once. After a second scan with nothing changed, the scans print `0 new` and the same problems as still open, and those incidents show `scans_seen` 2.
@@ -446,6 +499,7 @@ ORDER BY source, job_name, check_id
 | `catalog is empty: type it in the catalog box at the top of the notebook, or set target.catalog in accelerator.local.yaml` | no catalog configured | type it in the `catalog` box, or fill in `accelerator.local.yaml` |
 | `catalog must be letters, digits or underscores` (or `schema`) | the name has a hyphen, space or quote | use a name with only letters, digits and underscores |
 | `job <name>: scheduled jobs need max_gap_minutes` (or another config error) | the YAML file has a mistake | fix the file; the message names the job and the field |
+| `job <name>: job_name_regex '<pattern>' uses <construct>, which the system-table scan can't run` (or `job_name_exclude_regex`) | Python compiles the pattern and Java's regex, which the system table scan's `regexp_like` uses, does not | rewrite that part, for example `(?P<env>...)` as `(...)` or `{,2}` as `{0,2}`; `docs/data-model.md` lists what Java refuses |
 | `job <name>: enabled must be true or false` | `enabled` was quoted, for example `"false"`, or has another value | write `enabled: false` without quotes |
 | `job <name>: unknown keys [...]; allowed: [...]` (or `defaults has unknown keys`, or `environments.<label> has unknown keys`) | a misspelled or unsupported setting | fix the key; the message lists the allowed ones |
 | `defaults cannot set <key>: set it on each job` | `defaults` holds `job_name`, `job_name_regex` or `environments` | move that key to the job entries |
@@ -503,14 +557,14 @@ The Jobs API scan calls each workspace's public API from serverless compute in t
 ## Cleanup
 
 ```bash
-./teardown.sh -t dev --profile <profile>                 # the Watchdog jobs and the bundle's files
+./teardown.sh -t dev --profile <profile>                 # the jobs, the app, the Genie agent and the bundle's files
 ./teardown.sh -t demo --profile <profile>                # also the four demo jobs
 ./teardown.sh -t dev --drop-schema --profile <profile>   # also the schema, its tables and the views
 ```
 
-`--drop-schema` asks you to type the schema name first. Without it, the schema and its history stay.
+A plain teardown keeps the Lakebase project with the app's job list, and prints how to deploy again with it ([Deploy again after a teardown](multi-region.md#deploy-again-after-a-teardown)); `--drop-lakebase` deletes it, and Lakebase keeps the deleted project for 7 days (`databricks postgres undelete-project` brings it back; `delete-project --purge` deletes it for good). `--drop-schema` asks you to type the schema name first. Without it, the schema and its history stay.
 
-It drops the five Watchdog tables and the two views, `findings_latest` and `incidents`. If the schema holds any other table or view, the script stops before changing anything. If the script refuses, check that the schema holds only Watchdog objects, then drop it by hand in the SQL editor. This deletes the findings history:
+It drops the six Watchdog tables and the two views, `findings_latest` and `incidents`. If the schema holds any other table or view, the script stops before changing anything. If the script refuses, check that the schema holds only Watchdog objects, then drop it by hand in the SQL editor. This deletes the findings history:
 
 ```sql
 DROP SCHEMA <catalog>.<schema> CASCADE

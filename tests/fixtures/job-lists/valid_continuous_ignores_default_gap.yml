@@ -1,0 +1,5 @@
+defaults:
+  max_gap_minutes: 90
+jobs:
+  - job_name: orders_ingest
+    schedule_type: continuous

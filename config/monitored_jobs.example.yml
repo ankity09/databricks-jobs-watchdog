@@ -4,16 +4,19 @@
 # a Unity Catalog volume), replace the examples with your own jobs, and point
 # scan.monitored_jobs_path (or the notebook's monitored_jobs_path widget) at it.
 #
-# One entry covers one job everywhere it runs. When the same job is deployed to
-# several workspaces, each copy with its own job ID, job_name_regex finds the
-# copy in each workspace, and every finding says which workspace and job ID it
-# is about. You do not have to list job IDs, but you can: job_ids checks exact
-# jobs by ID instead of matching names.
+# By default, one entry covers a job across the region. job_name_regex finds
+# each workspace's copy, and findings identify its workspace and job ID.
+# job_ids checks exact jobs instead of matching names. Add workspace_id to a
+# job to restrict either matching method to that one workspace. See
+# monitored_jobs.workspace-ids.example.yml for separate per-workspace entries.
+# Job-level workspace_id requires the release that introduces native scope;
+# do not send that new field to an older Watchdog loader.
 #
 # The file has four sections. Only jobs is required.
 #
 # defaults:      settings every job gets unless it sets its own: any job setting
-#                except job_name, job_name_regex and environments.
+#                except job_name, workspace_id, job_name_regex, job_ids and
+#                environments.
 #
 # workspaces:    an environment label for each workspace, such as production or
 #                lower, by workspace_id or workspace_name, with optional notes.
@@ -26,8 +29,15 @@
 #
 # jobs:          one entry per job to watch, with these settings:
 #   job_name          a short logical name used in findings and alerts; unique
+#                     across the file, even for separate workspace copies
+#   workspace_id      optional exact workspace ID, preferably a quoted digit
+#                     string. Missing/null keeps regional matching. A top-level
+#                     workspace label is not required just to enforce this scope.
 #   job_name_regex    matches the job's real name in each workspace. It matches
 #                     anywhere in the name unless anchored with ^ and $.
+#                     Python's re and Java's regex (the system table scan's
+#                     regexp_like) must both compile it; docs/data-model.md
+#                     lists what Java refuses, such as (?P<name>...).
 #   job_name_exclude_regex  real names matching this are skipped, for example
 #                     test copies with "_test(_|$)". A bare "test" would also skip
 #                     names such as daily_revenue_report_latest.
@@ -91,6 +101,7 @@ jobs:
   # shows a healthy job, a failing job, a slow job and a retrying job at once.
   - job_name: watchdog_demo_succeeds
     job_name_regex: "watchdog_demo_succeeds"
+    schedule_type: scheduled
     max_gap_minutes: 1440
     max_runtime_minutes: 30
     max_retries: 1
@@ -98,6 +109,7 @@ jobs:
 
   - job_name: watchdog_demo_fails
     job_name_regex: "watchdog_demo_fails"
+    schedule_type: scheduled
     max_gap_minutes: 1440
     max_runtime_minutes: 30
     max_retries: 1
@@ -106,6 +118,7 @@ jobs:
 
   - job_name: watchdog_demo_slow
     job_name_regex: "watchdog_demo_slow"
+    schedule_type: scheduled
     max_gap_minutes: 300
     max_runtime_minutes: 1
     max_retries: 1
@@ -113,6 +126,7 @@ jobs:
 
   - job_name: watchdog_demo_retries
     job_name_regex: "watchdog_demo_retries"
+    schedule_type: scheduled
     max_gap_minutes: 420
     max_runtime_minutes: 30
     max_retries: 1
@@ -145,6 +159,7 @@ jobs:
     # One entry covers both variants, orders_enrich_web_* and orders_enrich_mobile_*,
     # because they share settings. Give a variant its own entry when it needs other settings.
     job_name_regex: "^orders_enrich_(web|mobile)(_(eu|us))?_(prod|dev)$"
+    schedule_type: scheduled
     max_gap_minutes: 90
     max_runtime_minutes: 45
     max_retries: 2
@@ -158,6 +173,7 @@ jobs:
 
   - job_name: daily_revenue_report
     job_name_regex: "^daily_revenue_report(_(eu|us))?_(prod|dev)$"
+    schedule_type: scheduled
     max_gap_minutes: 1500
     max_runtime_minutes: 120
     max_retries: 1

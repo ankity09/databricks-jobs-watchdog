@@ -1,0 +1,13 @@
+# Patterns close to ones the system-table scan refuses, which Python's re and Java's
+# regex (the scan's regexp_like) both compile: {n,} rather than {,n}, an unnamed group,
+# a choice in a look-behind with no repeat around it, the u flag, \x and \u escapes.
+defaults:
+  max_gap_minutes: 60
+jobs:
+  - job_name: orders_ingest
+    job_name_regex: '^orders_ingest_\d{2,}$'
+    job_name_exclude_regex: '(?<=_)(copy|test)$'
+  - job_name: orders_enrich
+    job_name_regex: '(?<=^(?:dev|prd)_)orders_enrich$'
+  - job_name: billing_report
+    job_name_regex: '(?u)^billing\x5freport_\u00e9t\u00e9$'

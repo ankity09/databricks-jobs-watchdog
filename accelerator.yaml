@@ -12,9 +12,10 @@ metadata:
 
 target:
   catalog: ""                   # required: catalog that will hold the Watchdog schema
-  schema: watchdog              # schema created for the Watchdog tables and view
+  schema: watchdog              # schema created for the Watchdog tables and views
   region: ""                    # required: cloud region of this metastore, for example us-east-2
-  warehouse_id: ""              # optional: SQL warehouse for the dashboard (notebook 08)
+  warehouse_id: ""              # required for the Watchdog app: the SQL warehouse it reads findings through;
+                                # Pro or Serverless, as the copilot's Genie agent needs one
 
 auth:
   mode: current_workspace       # current_workspace: check only this workspace, as you
@@ -24,6 +25,7 @@ auth:
   client_secret_key: client_secret  # key in that scope holding its OAuth secret
 
 scan:
+  config_source: yaml           # yaml: the monitored-jobs file; lakebase: the list you edit in the Watchdog app
   lookback_hours: 48            # how far back the system-table checks look
   monitored_jobs_path: config/monitored_jobs.example.yml
                                 # relative paths start at the repo root; point this at your
@@ -38,6 +40,11 @@ scan:
   retention_days: 30            # watchdog_cleanup deletes scans older than this many days, keeping
                                 # each source's newest scan; 0 keeps everything
 
+app:
+  name: watchdog-app                       # the Watchdog app's name, unique in the workspace
+  lakebase_project_id: jobs-watchdog       # Lakebase project for the app's job list, unique in the workspace
+  users_group: users                       # workspace group whose members may open the app and ask its copilot
+
 resources: {}                   # nothing extra is needed in Phase 1
 
 features:
@@ -46,5 +53,8 @@ features:
     - system_tables
     - jobs
     - serverless
+    - apps
+    - lakebase
+    - genie                     # the copilot is a Genie agent the bundle creates
   optional:
     - service_principal_oauth   # needed only for the every-workspace mode

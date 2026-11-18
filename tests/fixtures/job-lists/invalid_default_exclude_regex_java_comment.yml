@@ -1,0 +1,9 @@
+# A default pattern reaches every job that does not set its own. Java's regex has no
+# (?#...) comment, so the system-table scan could not run this one, and the first job
+# that uses the default gets the error.
+defaults:
+  max_gap_minutes: 60
+  job_name_exclude_regex: '(?#test copies)_test$'
+jobs:
+  - job_name: orders_ingest
+  - job_name: orders_enrich

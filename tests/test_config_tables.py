@@ -73,7 +73,7 @@ def test_write_config_loads_the_views_then_the_tables():
     spark = FakeSpark()
     write_config(spark, [JOB], [DEP], "main", "watchdog", [WS])
     assert spark.views[JOBS_VIEW].data == [("orders", "^orders$", "scheduled", 90, 60, 1, "CRITICAL", "data-team",
-                                            True, "hourly", "test", 10, None)]
+                                            True, "hourly", "test", 10, None, None)]
     assert spark.views[ENVIRONMENTS_VIEW].data == [("orders", "lower", "WARNING", None, False, None, None, None, None,
                                                     None)]
     assert spark.views[JOBS_VIEW].schema.startswith("job_name STRING, job_name_regex STRING")
@@ -122,7 +122,8 @@ PINNED = MonitoredJob("orders", "^orders$", "scheduled", 90, None, None, "WARNIN
 def test_write_config_stores_job_ids_as_lists():
     spark = FakeSpark()
     write_config(spark, [PINNED], [], "main", "watchdog")
-    assert spark.views[JOBS_VIEW].data[0][-1] == ["111", "222"]
+    stored = dict(zip((name for name, _ in JOB_COLUMNS), spark.views[JOBS_VIEW].data[0]))
+    assert stored["job_ids"] == ["111", "222"]
     assert spark.views[ENVIRONMENTS_VIEW].data == [("orders", "lower", None, None, None, None, None, None, None,
                                                     ["333"])]
     assert "job_ids ARRAY<STRING>" in spark.views[JOBS_VIEW].schema

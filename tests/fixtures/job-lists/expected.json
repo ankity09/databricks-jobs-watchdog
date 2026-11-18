@@ -1,0 +1,189 @@
+{
+  "invalid_bool_as_number.yml": {
+    "ok": false,
+    "error_contains": "max_retries must be a whole number of zero or more"
+  },
+  "invalid_child_with_two_parents.yml": {
+    "ok": false,
+    "error_contains": "a job can have only one parent"
+  },
+  "invalid_default_exclude_regex_java_comment.yml": {
+    "ok": false,
+    "error_contains": "job orders_ingest: job_name_exclude_regex '(?#test copies)_test$' uses a (?#...) comment, which the system-table scan can't run"
+  },
+  "invalid_defaults_not_mapping.yml": {
+    "ok": false,
+    "error_contains": "defaults must be a mapping of job settings, got ['a']"
+  },
+  "invalid_defaults_sets_a_pattern.yml": {
+    "ok": false,
+    "error_contains": "defaults cannot set job_name_regex"
+  },
+  "invalid_dependency_type.yml": {
+    "ok": false,
+    "error_contains": "dependency_type must be one of"
+  },
+  "invalid_dependency_unknown_job.yml": {
+    "ok": false,
+    "error_contains": "missing_job is not a configured job"
+  },
+  "invalid_duplicate_job_name.yml": {
+    "ok": false,
+    "error_contains": "duplicate job_name 'orders_ingest'"
+  },
+  "invalid_enabled_text.yml": {
+    "ok": false,
+    "error_contains": "enabled must be true or false"
+  },
+  "invalid_environment_not_a_label.yml": {
+    "ok": false,
+    "error_contains": "is not a label in the workspaces section"
+  },
+  "invalid_environment_unknown_key.yml": {
+    "ok": false,
+    "error_contains": "has unknown keys ['notes']"
+  },
+  "invalid_exclude_regex_java_brace.yml": {
+    "ok": false,
+    "error_contains": "job orders_ingest: job_name_exclude_regex '_copy\\\\d{,2}$' uses a { that is not a {n}, {n,} or {n,m} repeat, which the system-table scan can't run"
+  },
+  "invalid_exclude_regex_named_group.yml": {
+    "ok": false,
+    "error_contains": "job_name_exclude_regex does not compile: unknown extension ?<c at position 1"
+  },
+  "invalid_float_gap.yml": {
+    "ok": false,
+    "error_contains": "max_gap_minutes must be a whole number of zero or more, got 60.0"
+  },
+  "invalid_float_job_id.yml": {
+    "ok": false,
+    "error_contains": "job_ids must be whole numbers, got 123.0"
+  },
+  "invalid_job_ids_not_digits.yml": {
+    "ok": false,
+    "error_contains": "job_ids must be whole numbers"
+  },
+  "invalid_job_ids_twice.yml": {
+    "ok": false,
+    "error_contains": "job ID 111 is listed twice"
+  },
+  "invalid_missing_job_name.yml": {
+    "ok": false,
+    "error_contains": "every job needs a job_name"
+  },
+  "invalid_negative_number.yml": {
+    "ok": false,
+    "error_contains": "max_runtime_minutes must be a whole number of zero or more"
+  },
+  "invalid_no_jobs.yml": {
+    "ok": false,
+    "error_contains": "lists no jobs"
+  },
+  "invalid_regex.yml": {
+    "ok": false,
+    "error_contains": "job_name_regex does not compile"
+  },
+  "invalid_regex_java_ascii_flag.yml": {
+    "ok": false,
+    "error_contains": "job orders_ingest: job_name_regex '(?a)^orders_\\\\w+$' uses the a flag, which the system-table scan can't run"
+  },
+  "invalid_regex_java_lookbehind_choice.yml": {
+    "ok": false,
+    "error_contains": "job orders_ingest: job_name_regex '(?<=^(?:dev|prd){1}_)orders$' uses a repeated group with a choice in it, such as (?:a|b){2}, inside a look-behind, which the system-table scan can't run"
+  },
+  "invalid_regex_java_named_group.yml": {
+    "ok": false,
+    "error_contains": "job orders_ingest: job_name_regex '^orders_(?P<env>dev|prod)$' uses a (?P<name>...) group, which the system-table scan can't run"
+  },
+  "invalid_regex_named_character.yml": {
+    "ok": false,
+    "error_contains": "job orders_ingest: job_name_regex '^orders\\\\N{EM DASH}ingest$' uses a \\N{...} character name, which the system-table scan may not know; write the character itself"
+  },
+  "invalid_regex_unicode_class.yml": {
+    "ok": false,
+    "error_contains": "job_name_regex does not compile: bad escape \\p at position 8"
+  },
+  "invalid_regex_variable_lookbehind.yml": {
+    "ok": false,
+    "error_contains": "job_name_regex does not compile: look-behind requires fixed-width pattern"
+  },
+  "invalid_schedule_type.yml": {
+    "ok": false,
+    "error_contains": "schedule_type must be one of ['continuous', 'scheduled', 'triggered']"
+  },
+  "invalid_scheduled_without_gap.yml": {
+    "ok": false,
+    "error_contains": "scheduled jobs need max_gap_minutes"
+  },
+  "invalid_severity.yml": {
+    "ok": false,
+    "error_contains": "severity must be one of ['CRITICAL', 'WARNING']"
+  },
+  "invalid_triggered_with_gap.yml": {
+    "ok": false,
+    "error_contains": "triggered jobs have no schedule check, so remove max_gap_minutes"
+  },
+  "invalid_unknown_job_after_two_parents.yml": {
+    "ok": false,
+    "error_contains": "dependency orders_report -> missing_job: missing_job is not a configured job"
+  },
+  "invalid_unknown_job_key.yml": {
+    "ok": false,
+    "error_contains": "unknown keys ['max_gap']"
+  },
+  "invalid_workspace_id_not_digits.yml": {
+    "ok": false,
+    "error_contains": "workspace_id must be digits"
+  },
+  "invalid_workspace_listed_twice.yml": {
+    "ok": false,
+    "error_contains": "workspace 222 is listed twice"
+  },
+  "invalid_workspace_name_twice.yml": {
+    "ok": false,
+    "error_contains": "workspace example-prod is listed twice"
+  },
+  "invalid_workspace_without_environment.yml": {
+    "ok": false,
+    "error_contains": "environment is required"
+  },
+  "valid_anchors_merge_keys.yml": {
+    "ok": true
+  },
+  "valid_continuous_ignores_default_gap.yml": {
+    "ok": true
+  },
+  "valid_example.yml": {
+    "ok": true
+  },
+  "valid_explicit_values.yml": {
+    "ok": true
+  },
+  "valid_java_compatible_patterns.yml": {
+    "ok": true
+  },
+  "valid_job_ids_numbers_and_strings.yml": {
+    "ok": true
+  },
+  "valid_minimal.yml": {
+    "ok": true
+  },
+  "valid_python_only_patterns.yml": {
+    "ok": true
+  },
+  "valid_service_dependency.yml": {
+    "ok": true
+  },
+  "valid_text_from_other_types.yml": {
+    "ok": true
+  },
+  "valid_triggered_child.yml": {
+    "ok": true
+  },
+  "valid_workspaces_by_id_and_name.yml": {
+    "ok": true
+  },
+  "valid_yaml11_booleans.yml": {
+    "ok": true
+  }
+}

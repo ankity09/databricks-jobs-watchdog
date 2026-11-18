@@ -315,4 +315,4 @@ def test_watchdog_objects_lists_every_table_and_view():
     from jobs_watchdog.upgrade import watchdog_objects
 
     assert watchdog_objects() == ("monitored_jobs", "job_dependencies", "findings", "monitored_workspaces",
-                                  "monitored_job_environments", "findings_latest", "incidents")
+                                  "monitored_job_environments", "config_loads", "findings_latest", "incidents")

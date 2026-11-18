@@ -1,3 +1,5 @@
+import json
+import re
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,9 @@ SCAN_FILE = repo_root() / "resources" / "watchdog_scan.job.yml"
 CLEANUP_FILE = repo_root() / "resources" / "watchdog_cleanup.job.yml"
 EXAMPLE_CONFIG = repo_root() / "config" / "monitored_jobs.example.yml"
 CUSTOM_CHECK = repo_root() / "notebooks" / "09_custom_check_example.py"
+APP_FILE = repo_root() / "resources" / "watchdog_app.app.yml"
+LAKEBASE_FILE = repo_root() / "resources" / "watchdog_lakebase.yml"
+GENIE_FILE = repo_root() / "resources" / "watchdog_copilot.genie.yml"
 
 # Demo job schedules as Quartz cron expressions, in UTC.
 DEMO_SCHEDULES = {
@@ -59,8 +64,8 @@ def test_every_task_notebook_exists():
 
 def test_job_parameters_match_the_notebook_widgets():
     names = {parameter["name"] for parameter in load_job()["parameters"]}
-    # retention_days is only for the cleanup job
-    assert names == set(WIDGETS) - {"retention_days"}
+    # retention_days is only for the cleanup job, app_name only for the app access job
+    assert names == set(WIDGETS) - {"retention_days", "app_name"}
 
 
 def test_phase_1_runs_the_setup_scan_and_validation_notebooks_but_not_the_explore_ones():
@@ -361,3 +366,343 @@ def test_example_config_pins_one_environment_by_job_id():
     assert enrich.settings_for("lower").job_ids == ()
     assert "job_ids" in EXAMPLE_CONFIG.read_text().split("\ndefaults:")[0]  # documented in the header
 
+
+
+def load_app():
+    return yaml.safe_load(APP_FILE.read_text())["resources"]["apps"]["watchdog_app"]
+
+
+def test_the_app_uses_the_variables_and_the_sql_and_genie_user_scopes():
+    app = load_app()
+    assert app["name"] == "${var.app_name}"
+    assert app["source_code_path"] == "../app"
+    assert app["user_api_scopes"] == ["sql", "dashboards.genie"]
+
+
+def test_the_app_resources_carry_the_appkit_keys_and_permissions():
+    resources = {r["name"]: r for r in load_app()["resources"]}
+    assert set(resources) == {"sql-warehouse", "postgres", "job", "genie-space"}
+    assert resources["sql-warehouse"]["sql_warehouse"] == {"id": "${var.warehouse_id}", "permission": "CAN_USE"}
+    assert resources["job"]["job"] == {"id": "${resources.jobs.watchdog_scan.id}", "permission": "CAN_MANAGE_RUN"}
+    assert resources["genie-space"]["genie_space"]["space_id"] == "${resources.genie_spaces.watchdog_copilot.id}"
+    assert resources["genie-space"]["genie_space"]["permission"] == "CAN_RUN"
+    assert resources["postgres"]["postgres"]["permission"] == "CAN_CONNECT_AND_CREATE"
+
+
+def test_the_lakebase_project_and_database_are_protected_and_use_the_variables():
+    resources = yaml.safe_load(LAKEBASE_FILE.read_text())["resources"]
+    project = resources["postgres_projects"]["watchdog_db"]
+    database = resources["postgres_databases"]["watchdog_database"]
+    assert project["project_id"] == "${var.lakebase_project_id}"
+    role = resources["postgres_roles"]["watchdog_owner"]
+    assert database["database_id"] == "${var.lakebase_database}"
+    assert "auth_method" not in role
+    assert project["enable_pg_native_login"] is False
+    for resource in (project, database, role):
+        assert resource["lifecycle"]["prevent_destroy"] is True
+
+
+def test_every_app_variable_is_declared_with_the_spec_defaults():
+    variables = load_bundle()["variables"]
+    assert "default" not in variables["warehouse_id"]
+    assert variables["config_source"]["default"] == "yaml"
+    assert variables["app_name"]["default"] == "watchdog-app"
+    assert variables["lakebase_project_id"]["default"] == "jobs-watchdog"
+    assert variables["lakebase_branch"]["default"] == "production"
+    assert variables["lakebase_database"]["default"] == "watchdog"
+    assert "copilot_model" not in variables
+
+
+def test_accelerator_yaml_app_settings_match_the_bundle_defaults():
+    data = yaml.safe_load((repo_root() / "accelerator.yaml").read_text())
+    variables = load_bundle()["variables"]
+    assert data["scan"]["config_source"] == variables["config_source"]["default"]
+    assert data["app"]["name"] == variables["app_name"]["default"]
+    assert data["app"]["lakebase_project_id"] == variables["lakebase_project_id"]["default"]
+    assert "copilot_model" not in data["app"]
+
+
+def load_genie():
+    return yaml.safe_load(GENIE_FILE.read_text())["resources"]["genie_spaces"]["watchdog_copilot"]
+
+
+def genie_space():
+    return load_genie()["serialized_space"]
+
+
+def test_the_genie_agent_runs_on_the_warehouse_variable():
+    assert load_genie()["warehouse_id"] == "${var.warehouse_id}"
+    assert not EXPERIMENT_GONE.exists()
+
+
+EXPERIMENT_GONE = repo_root() / "resources" / "watchdog_copilot.experiment.yml"
+
+
+def test_every_genie_table_is_in_the_catalog_and_schema_variables_and_sorted():
+    identifiers = [t["identifier"] for t in genie_space()["data_sources"]["tables"]]
+    assert identifiers
+    assert all(i.startswith("${var.catalog}.${var.schema}.") for i in identifiers)
+    assert identifiers == sorted(identifiers)
+
+
+def test_genie_ids_are_32_hex_characters_and_each_list_is_sorted_by_id():
+    space = genie_space()
+    lists = [space["config"]["sample_questions"], space["instructions"]["text_instructions"]]
+    lists += [space["instructions"]["example_question_sqls"], space["benchmarks"]["questions"]]
+    for items in lists:
+        ids = [item["id"] for item in items]
+        assert all(re.fullmatch(r"[0-9a-f]{32}", i) for i in ids)
+        assert ids == sorted(ids) and len(set(ids)) == len(ids)
+
+
+def test_genie_ids_are_unique_across_questions_and_across_instructions():
+    # Genie rejects a question ID used by both a sample question and a benchmark,
+    # and an instruction ID used by both a text instruction and an example SQL
+    space = genie_space()
+    questions = [q["id"] for q in space["config"]["sample_questions"] + space["benchmarks"]["questions"]]
+    instructions = space["instructions"]["text_instructions"] + space["instructions"]["example_question_sqls"]
+    assert len(set(questions)) == len(questions)
+    assert len({i["id"] for i in instructions}) == len(instructions)
+
+
+def test_genie_has_at_most_one_text_instruction_and_version_2():
+    assert len(genie_space()["instructions"]["text_instructions"]) <= 1
+    assert genie_space()["version"] == 2
+
+
+def test_genie_has_at_least_eight_example_sqls_and_six_benchmarks_with_sql():
+    space = genie_space()
+    examples = space["instructions"]["example_question_sqls"]
+    benchmarks = space["benchmarks"]["questions"]
+    assert len(examples) >= 8 and len(benchmarks) >= 6
+    for example in examples:
+        assert example["question"] and example["sql"]
+    for benchmark in benchmarks:
+        assert benchmark["question"]
+        assert [a["format"] for a in benchmark["answer"]] == ["SQL"]
+        assert benchmark["answer"][0]["content"]
+
+
+def genie_text_fields():
+    """Every array-of-strings field Genie reads, with where it came from."""
+    space = genie_space()
+    fields = [("sample question", q["question"]) for q in space["config"]["sample_questions"]]
+    fields += [("text instruction", t["content"]) for t in space["instructions"]["text_instructions"]]
+    for example in space["instructions"]["example_question_sqls"]:
+        fields += [("example question", example["question"]), ("example SQL", example["sql"])]
+        fields += [("usage guidance", example.get("usage_guidance", ["-"]))]
+    for benchmark in space["benchmarks"]["questions"]:
+        fields += [("benchmark question", benchmark["question"]), ("benchmark SQL", benchmark["answer"][0]["content"])]
+        fields += [("evaluation note", benchmark.get("evaluation_note", ["-"]))]
+    for table in space["data_sources"]["tables"]:
+        for column in table.get("column_configs", []):
+            fields += [("column description", column.get("description", ["-"]))]
+    return fields
+
+
+def test_genie_text_fields_are_arrays_of_strings_that_never_run_together():
+    # Genie joins the strings of an array with nothing in between, so every
+    # string but the last must end with a newline
+    for where, value in genie_text_fields():
+        assert isinstance(value, list) and all(isinstance(s, str) and s.strip() for s in value), where
+        assert all(s.endswith("\n") for s in value[:-1]), where
+
+
+def genie_sql():
+    space = genie_space()
+    sql = ["".join(e["sql"]) for e in space["instructions"]["example_question_sqls"]]
+    return sql + ["".join(b["answer"][0]["content"]) for b in space["benchmarks"]["questions"]]
+
+
+def test_genie_sql_only_reads_the_agent_s_own_tables():
+    tables = {t["identifier"] for t in genie_space()["data_sources"]["tables"]}
+    for sql in genie_sql():
+        assert re.match(r"\s*(SELECT|WITH)\b", sql), sql
+        assert not re.search(r"\b(INSERT|UPDATE|DELETE|MERGE|DROP|CREATE|ALTER|TRUNCATE)\b", sql, re.I), sql
+        named = set(re.findall(r"\$\{var\.catalog\}\.\$\{var\.schema\}\.\w+", sql))
+        assert named and named <= tables, sql
+
+
+def test_genie_examples_cover_each_question_shape():
+    sql = "\n".join("".join(e["sql"]) for e in genie_space()["instructions"]["example_question_sqls"])
+    for shape in ("schedule_gap", "SLA_EXCEEDED", "retry_loop", "not_found", "environment",
+                  "INTERVAL 7 DAYS", "affected_jobs", "WITH RECURSIVE", "INTERVAL 24 HOURS"):
+        assert shape.lower() in sql.lower(), shape
+
+
+def column_configs(table):
+    for t in genie_space()["data_sources"]["tables"]:
+        if t["identifier"] == "${var.catalog}.${var.schema}." + table:
+            return {c["column_name"]: c for c in t.get("column_configs", [])}
+    raise AssertionError(table)
+
+
+def test_genie_describes_the_six_finding_columns_with_synonyms():
+    for table in ("findings", "findings_latest"):
+        columns = column_configs(table)
+        for name in ("status", "severity", "check_id", "failure_category", "environment", "error_summary"):
+            assert columns[name]["description"] and columns[name]["synonyms"], (table, name)
+
+
+def test_genie_matches_entities_only_on_job_name_owner_and_environment():
+    for table in genie_space()["data_sources"]["tables"]:
+        names = [c["column_name"] for c in table.get("column_configs", [])]
+        assert names == sorted(names), table["identifier"]
+        matched = {c["column_name"] for c in table.get("column_configs", []) if c.get("enable_entity_matching")}
+        assert matched <= {"job_name", "owner", "environment"}, table["identifier"]
+    for table in ("findings", "findings_latest"):
+        assert {n for n, c in column_configs(table).items() if c.get("enable_entity_matching")} == {
+            "job_name", "owner", "environment"}
+
+
+def test_genie_reads_the_incidents_view_and_says_when_to_use_it():
+    space = genie_space()
+    columns = column_configs("incidents")
+    for name in ("is_new", "opened_at", "resolved_at", "scans_seen", "state"):
+        assert columns[name]["description"], name
+    instruction = "".join(space["instructions"]["text_instructions"][0]["content"])
+    assert "use incidents" in instruction and "is_new" in instruction and "OPEN" in instruction
+    examples = [e for e in space["instructions"]["example_question_sqls"] if "incidents" in "".join(e["sql"])]
+    assert any("is_new" in "".join(e["sql"]) and "'OPEN'" in "".join(e["sql"]) for e in examples)
+
+
+def test_genie_sample_questions_are_the_app_s_suggested_questions():
+    prompts = (repo_root() / "app" / "client" / "src" / "pages" / "copilot" / "SuggestedPrompts.tsx").read_text()
+    for sample in genie_space()["config"]["sample_questions"]:
+        assert f'"{"".join(sample["question"])}"' in prompts
+
+
+def assert_catalog_comes_from_the_bundle_variable(text):
+    """Every table read is a CTE (no dots) or ${var.catalog}.${var.schema}.<table>; the schema never stands alone."""
+    tables = re.findall(r"\b(?:FROM|JOIN)\s+([^\s(),;]+)", text, flags=re.IGNORECASE)
+    tables += re.findall(r"identifier:\s*(\S+)", text)
+    assert tables
+    for name in tables:
+        assert "." not in name or name.startswith("${var.catalog}.${var.schema}."), name
+    assert text.count("${var.schema}") == text.count("${var.catalog}.${var.schema}")
+
+
+def test_the_genie_file_takes_its_catalog_from_the_bundle_variable():
+    assert_catalog_comes_from_the_bundle_variable(GENIE_FILE.read_text())
+
+
+@pytest.mark.parametrize("before, after", [
+    ("FROM ${var.catalog}.${var.schema}.findings f", "FROM example_catalog.${var.schema}.findings f"),
+    ("FROM ${var.catalog}.${var.schema}.findings f", "FROM example_catalog.watchdog.findings f"),
+    ("identifier: ${var.catalog}.${var.schema}.findings\n", "identifier: example_catalog.${var.schema}.findings\n"),
+])
+def test_the_catalog_check_refuses_a_literal_catalog(before, after):
+    text = GENIE_FILE.read_text()
+    assert before in text
+    with pytest.raises(AssertionError):
+        assert_catalog_comes_from_the_bundle_variable(text.replace(before, after, 1))
+
+
+def production_target():
+    return load_bundle()["targets"]["production"]
+
+
+def test_production_target_uses_production_mode():
+    assert production_target()["mode"] == "production"
+
+
+def test_production_target_deploys_to_the_deploying_identitys_folder_not_the_shared_path():
+    # a shared root path makes strict validation demand CAN_MANAGE for all users
+    root = production_target()["workspace"]["root_path"]
+    assert root == "/Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}"
+    assert not root.startswith("/Workspace/Shared")
+
+
+def test_production_target_sets_no_permissions_and_no_run_as():
+    target = production_target()
+    assert "permissions" not in target and "run_as" not in target
+
+
+def test_production_target_has_no_demo_jobs():
+    assert not set(production_target().get("resources", {}).get("jobs", {})) & set(DEMO_SCHEDULES)
+    assert "watchdog_phase_1" in included_jobs()
+
+
+def test_production_target_takes_no_host_from_a_variable():
+    assert "host" not in production_target().get("workspace", {})
+
+
+def test_production_target_is_not_the_default():
+    assert not production_target().get("default")
+    assert load_bundle()["targets"]["dev"]["default"] is True
+
+
+def test_gitignore_keeps_local_region_files_out():
+    lines = (repo_root() / ".gitignore").read_text().splitlines()
+    assert "accelerator.*.local.yaml" in lines
+
+
+def test_genie_resource_header_says_tables_must_exist_first():
+    header = "".join(line for line in GENIE_FILE.read_text().splitlines(True) if line.startswith("#"))
+    assert "scripts/deploy_regions.py" in header
+    assert "must exist before the first deploy" in header
+
+
+ACCESS_FILE = repo_root() / "resources" / "watchdog_app_access.job.yml"
+
+
+def load_access_job():
+    return yaml.safe_load(ACCESS_FILE.read_text())["resources"]["jobs"]["watchdog_app_access"]
+
+
+def test_the_app_access_job_runs_notebook_11_on_demand_on_serverless():
+    job = load_access_job()
+    assert "schedule" not in job and job["max_concurrent_runs"] == 1
+    (task,) = job["tasks"]
+    assert task["notebook_task"]["notebook_path"] == "../notebooks/11_grant_app_access.py"
+    assert (ACCESS_FILE.parent / task["notebook_task"]["notebook_path"]).resolve().is_file()
+    assert not {"job_cluster_key", "existing_cluster_id", "new_cluster"} & set(task)
+    assert "watchdog_app_access" in included_jobs()
+
+
+def test_the_app_access_job_takes_the_app_and_lakebase_names_from_the_bundle_variables():
+    parameters = {p["name"]: p["default"] for p in load_access_job()["parameters"]}
+    names = ("app_name", "lakebase_project_id", "lakebase_branch", "lakebase_database")
+    assert parameters == {name: f"${{var.{name}}}" for name in names}
+    assert set(parameters) <= set(WIDGETS) and set(parameters) <= set(load_bundle()["variables"])
+
+
+def test_people_in_the_users_group_variable_may_open_the_app_and_ask_the_copilot():
+    assert load_app()["permissions"] == [{"group_name": "${var.app_users_group}", "level": "CAN_USE"}]
+    assert load_genie()["permissions"] == [{"group_name": "${var.app_users_group}", "level": "CAN_RUN"}]
+    assert load_bundle()["variables"]["app_users_group"]["default"] == "users"
+    data = yaml.safe_load((repo_root() / "accelerator.yaml").read_text())
+    assert data["app"]["users_group"] == "users"
+
+
+def test_the_bundle_asks_for_the_cli_version_its_resources_need():
+    assert load_bundle()["bundle"]["databricks_cli_version"] == ">= 1.23.0"
+
+
+def test_accelerator_yaml_lists_every_feature_the_bundle_creates():
+    required = yaml.safe_load((repo_root() / "accelerator.yaml").read_text())["features"]["required"]
+    assert {"apps", "lakebase", "genie"} <= set(required)
+
+
+@pytest.mark.parametrize("path", sorted((repo_root() / "config" / "regions").glob("accelerator.*.yaml")), ids=lambda p: p.name)
+def test_example_region_files_ship_paused_until_the_job_list_is_imported(path):
+    # with config_source lakebase every scan fails at load_config until the app holds a job list
+    data = yaml.safe_load(path.read_text())
+    assert data["scan"]["config_source"] == "lakebase"
+    assert data["scan"]["schedule_status"] == "PAUSED"
+    assert "import" in path.read_text()
+
+
+def test_the_app_package_declares_the_repo_license():
+    # The repo is Apache 2.0 (LICENSE); npm and license scanners read the app's own package files.
+    assert "Apache License" in (repo_root() / "LICENSE").read_text()
+    package = json.loads((repo_root() / "app" / "package.json").read_text())
+    lock = json.loads((repo_root() / "app" / "package-lock.json").read_text())
+    assert package["license"] == lock["packages"][""]["license"] == "Apache-2.0"
+
+
+def test_every_place_that_asks_for_the_warehouse_says_the_genie_agent_needs_pro_or_serverless():
+    # Genie agents refuse a Classic SQL warehouse, so the first deploy would fail at the copilot's agent.
+    for name in ("README.md", "DEPLOY.md", "accelerator.yaml", "databricks.yml", "docs/multi-region.md",
+                 "config/regions/accelerator.example-lower.yaml", "config/regions/accelerator.example-prod-eu.yaml"):
+        assert "Pro or Serverless" in (repo_root() / name).read_text(), name
